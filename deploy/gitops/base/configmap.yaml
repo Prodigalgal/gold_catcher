@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gold-catcher-config
+data:
+  GOLD_APPLICATION_MODE: DESIGN_PROTOTYPE
+  GOLD_SOURCE_COMMIT: development
+  GOLD_ANY2API_BASE_URL: http://any2api-server.any2api.svc.cluster.local:8080
+  GOLD_DB_URL: jdbc:postgresql://gold-catcher-postgres:5432/gold_catcher
+  TZ: UTC

@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/**', 'web/**', 'deploy/**', 'scripts/**', '.github/workflows/**']
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Promote digests to the pre-activated production GitOps application
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gold-catcher-release
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    if: vars.RELEASE_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/ci.yml
+  build:
+    needs: quality
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [server, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push immutable component
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.component == 'server' && './backend' || './web' }}
+          platforms: linux/arm64
+          push: true
+          build-args: SOURCE_COMMIT=${{ github.sha }}
+          tags: docker.io/speedproxy/gold-catcher-${{ matrix.component }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=gold-catcher-${{ matrix.component }}
+          cache-to: type=gha,mode=min,scope=gold-catcher-${{ matrix.component }}
+          provenance: mode=max
+          sbom: true
+      - name: Record component digest
+        env:
+          COMPONENT: ${{ matrix.component }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: python3 scripts/component_record.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.component }}
+          path: component-*.json
+          retention-days: 30
+  promote:
+    if: vars.RELEASE_ENABLED == 'true' && (github.event_name == 'push' || inputs.deploy)
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: release-input
+      - run: python3 -m pip install -r scripts/requirements.txt
+      - name: Configure repository-scoped GitOps SSH key
+        env:
+          DEPLOY_KEY: ${{ secrets.GITOPS_DEPLOY_KEY }}
+        run: |
+          test -n "$DEPLOY_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          curl --fail --silent https://api.github.com/meta | python3 -c 'import json,sys; print("\n".join("github.com " + key for key in json.load(sys.stdin)["ssh_keys"]))' > ~/.ssh/known_hosts
+      - name: Promote both digests in one GitOps commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          test "$(gh api repos/Prodigalgal/gold_catcher/commits/main --jq .sha)" = "$SOURCE_COMMIT"
+          git clone --depth 1 git@github.com:Prodigalgal/ircs-prod-config.git gitops
+          python3 scripts/promote.py --gitops gitops --inputs release-input --commit "$SOURCE_COMMIT"
+          kubectl kustomize gitops/gold-catcher/oracle > rendered.yaml
+          python3 scripts/check_manifests.py rendered.yaml --active
+          git -C gitops config user.name gold-catcher-ci
+          git -C gitops config user.email gold-catcher-ci@users.noreply.github.com
+          git -C gitops add gold-catcher/oracle/kustomization.yaml gold-catcher/oracle/release.json
+          git -C gitops diff --cached --quiet || git -C gitops commit -m "gold-catcher: release $SOURCE_COMMIT"
+          # Reapply only the same release mutation after unrelated GitOps pushes.
+          for attempt in 1 2 3; do
+            if git -C gitops push origin HEAD:main; then exit 0; fi
+            test "$(gh api repos/Prodigalgal/gold_catcher/commits/main --jq .sha)" = "$SOURCE_COMMIT"
+            git -C gitops fetch origin main
+            git -C gitops reset --hard origin/main
+            python3 scripts/promote.py --gitops gitops --inputs release-input --commit "$SOURCE_COMMIT"
+            git -C gitops add gold-catcher/oracle/kustomization.yaml gold-catcher/oracle/release.json
+            git -C gitops diff --cached --quiet || git -C gitops commit -m "gold-catcher: release $SOURCE_COMMIT"
+          done
+          exit 1
+      - name: Verify Argo revision, digests and authenticated HTTP release
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          ARGOCD_READ_TOKEN: ${{ secrets.ARGOCD_READ_TOKEN }}
+          GOLD_SMOKE_USERNAME: ${{ secrets.GOLD_SMOKE_USERNAME }}
+          GOLD_SMOKE_PASSWORD: ${{ secrets.GOLD_SMOKE_PASSWORD }}
+        run: python3 scripts/verify_deployment.py

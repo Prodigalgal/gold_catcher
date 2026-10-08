@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gold-catcher-server
+spec:
+  selector: {app: gold-catcher-server}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gold-catcher-web
+spec:
+  selector: {app: gold-catcher-web}
+  ports: [{port: 8080, targetPort: 8080}]

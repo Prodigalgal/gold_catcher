@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gold-catcher
+resources:
+  - ../base
+  - routes.yaml
+images:
+  - name: gold-catcher-server
+    newName: docker.io/speedproxy/gold-catcher-server
+    newTag: unreleased
+  - name: gold-catcher-web
+    newName: docker.io/speedproxy/gold-catcher-web
+    newTag: unreleased

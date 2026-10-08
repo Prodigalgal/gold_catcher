@@ -1,0 +1,28 @@
+# Copy into ircs-prod-config/apps and register in that directory's kustomization only when activating.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gold-catcher
+  namespace: argocd
+spec:
+  project: default
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      namespace: gold-catcher
+      jsonPointers: [/spec/volumeClaimTemplates/0/status]
+  source:
+    repoURL: git@github.com:Prodigalgal/ircs-prod-config.git
+    targetRevision: main
+    path: gold-catcher/oracle
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gold-catcher
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true

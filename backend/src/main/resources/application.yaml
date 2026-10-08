@@ -1,0 +1,23 @@
+server:
+  port: 8080
+  shutdown: graceful
+spring:
+  application:
+    name: gold-catcher
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+gold:
+  source-commit: ${GOLD_SOURCE_COMMIT:development}
+  auth:
+    username: ${GOLD_AUTH_USERNAME:}
+    password: ${GOLD_AUTH_PASSWORD:}
