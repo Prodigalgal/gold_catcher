@@ -21,4 +21,15 @@ class Any2ApiClientTest {
         assertThatThrownBy(()->client.parseOutput("Some explanation then {\"ok\":true}"));
         assertThatThrownBy(()->client.parseOutput("[1,2]"));
     }
+    @Test void allowsEveryReferenceInTheFourNewsSixCalendarAndFourAnchorPacket() {
+        var f=new TestSupport();var client=new Any2ApiClient(f.settings,new RemoteHttp(),f.mapper,f.clock);
+        var output=f.mapper.createObjectNode();output.put("title","等待确认");output.put("output","根据冻结证据等待");
+        output.put("shortDirection","UNKNOWN");output.put("longDirection","UNKNOWN");
+        var refs=output.putArray("evidenceRefs");
+        for(String id:java.util.List.of("market:quote","market:rules","account","indicators"))refs.add(id);
+        for(int i=0;i<4;i++)refs.add("news-"+i);
+        for(int i=0;i<6;i++)refs.add("calendar-"+i);
+        assertThatCode(()->client.validate(output)).doesNotThrowAnyException();
+        refs.add("extra");assertThatThrownBy(()->client.validate(output)).hasMessage("INVALID_EVIDENCE_ARRAY");
+    }
 }

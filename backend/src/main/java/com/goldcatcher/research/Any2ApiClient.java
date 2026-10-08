@@ -132,7 +132,7 @@ public class Any2ApiClient {
         JsonNode output=mapper.readTree(content);
         if(!output.isObject())throw new IllegalStateException("INVALID_STRUCTURED_OUTPUT");return output;
     }
-    private void validate(JsonNode output) {
+    void validate(JsonNode output) {
         if(output.path("title").asText().isBlank()||output.path("output").asText().isBlank())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT");
         if(output.path("title").asText().length()>160||output.path("analysisSummary").asText().length()>1800
             ||output.path("output").asText().length()>2400)throw new IllegalStateException("OUTPUT_FIELDS_TOO_LONG");
@@ -140,7 +140,8 @@ public class Any2ApiClient {
             if(!List.of("BULLISH","BEARISH","UNKNOWN","MIXED").contains(output.path(field).asText()))throw new IllegalStateException("INVALID_DIRECTION");
         for(String field:List.of("quotedMessages","evidenceRefs","impacts")) {
             JsonNode values=output.path(field);
-            if(!values.isMissingNode()&&(!values.isArray()||values.size()>(field.equals("impacts")?4:12)))throw new IllegalStateException("INVALID_EVIDENCE_ARRAY");
+            int maximum=field.equals("impacts")?4:field.equals("quotedMessages")?6:14;
+            if(!values.isMissingNode()&&(!values.isArray()||values.size()>maximum))throw new IllegalStateException("INVALID_EVIDENCE_ARRAY");
         }
         if(output.path("changes").asText().length()>800)throw new IllegalStateException("OUTPUT_FIELDS_TOO_LONG");
         for(var impact:output.path("impacts"))if(!List.of("SHORT","LONG").contains(impact.path("horizon").asText())

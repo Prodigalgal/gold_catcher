@@ -53,6 +53,7 @@ public class ResearchService {
         impacts 最多4项，引用只用提供的证据 id，quotedMessages 最多6项；changes 最多200字。
         impacts.newsId 只引用 evidence.news 中的新闻 id。指标、规则、账户和日历只能列入 evidenceRefs，不得冒充新闻。
         evidenceRefs 只能逐字复制 evidence.evidenceIds、evidence.news[*].id 或 evidence.calendar[*].id。
+        evidenceRefs 最多14项，允许引用四条新闻、六项日历和四个公共证据标识。
         禁止添加 calendar: 或 news: 前缀、改写或截短 id；不要把新收到但发布日期未知的历史材料当作当前新闻。
         没有报价、费用或必要执行规则时选择 WAIT。模型估计不是已校准概率。
         """;
