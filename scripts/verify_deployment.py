@@ -34,6 +34,13 @@ while time.monotonic() < deadline:
 else:
     raise SystemExit("Argo sync/health/digest acceptance timed out")
 client = SessionClient("https://gold.mnnu.eu.org")
+try:
+    read('https://gold.mnnu.eu.org/api/system/status', {})
+except urllib.error.HTTPError as error:
+    if error.code != 401:
+        raise SystemExit('unexpected unauthenticated API response')
+else:
+    raise SystemExit('API unexpectedly accessible without authentication')
 client.login(username, password)
 api = client.request('/api/system/status')
 if api.get("sourceCommit") != commit or api.get("mode") != "INTERNAL_SIMULATION_ALPHA" or api.get('venue') != 'GATE' or api.get('authentication') != 'SESSION_CSRF_SHA256_POW':
@@ -48,7 +55,8 @@ while time.monotonic() < deadline:
             and perpetual['market']['quote']['source'] == 'GATE_WS_BOOK_TICKER'
             and perpetual['market']['rules']['quantityMultiplier'] is not None
             and cfd['market']['state'] in {'LIVE', 'MARKET_CLOSED'}
-            and len(cfd['market']['indicators']) == 6 and cfd['market']['quote']['source'] == 'GATE_REST_CFD'):
+            and len(cfd['market']['indicators']) == 6 and cfd['market']['quote']['source'] == 'GATE_REST_CFD'
+            and cfd['marketProvenance']['rulesState'] == 'SPEC_AND_COMMISSION_VERIFIED'):
         break
     time.sleep(5)
 else:
