@@ -44,7 +44,7 @@ public class Any2ApiClient {
             Map<String,Object> request=new LinkedHashMap<>();request.put("model",route.model());
             request.put("messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",mapper.writeValueAsString(packet))));
             var parameters=capabilities.path("supported_parameters").path("chat_completions");
-            boolean structuredTool=capabilities.path("tools").path("function_calling").asBoolean(false)
+            boolean structuredTool=!settings.preferJsonText(route)&&capabilities.path("tools").path("function_calling").asBoolean(false)
                 &&capabilities.path("tools").path("strict").asBoolean(false);
             if(structuredTool) {
                 int format=instruction.indexOf("格式："),wait=instruction.indexOf("WAIT 时");

@@ -36,7 +36,8 @@ public class RuntimeApi {
         data.put("funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));
         data.put("costConfiguration",market.costConfiguration(symbol));
         data.put("budgets",settings.routes().stream().map(route->Map.of("id",route.id(),"inputEstimateLimit",route.inputEstimateLimit(),"characterLimit",route.characterLimit(),
-            "byteLimit",route.byteLimit(),"outputReserve",route.outputReserve(),"timeoutSeconds",route.timeoutSeconds(),"judge",route.judge())).toList());
+            "byteLimit",route.byteLimit(),"outputReserve",route.outputReserve(),"timeoutSeconds",route.timeoutSeconds(),"judge",route.judge(),
+            "submissionMode",settings.preferJsonText(route)?"JSON_TEXT":"CATALOG_AUTO")).toList());
         data.put("research",research.latest(symbol));
         data.put("researchHistory",research.history().stream().filter(run->run.symbol.equals(symbol)).map(run->Map.of("id",run.id,"horizon",run.horizon,"status",run.status,"startedAt",run.startedAt,"stage",run.stage)).toList());
         data.put("scheduling",research.scheduling());data.put("review",review(symbol));data.put("clock",clock instanceof ExchangeClock exchange?exchange.status():Map.of("state","TEST_CLOCK"));return data;

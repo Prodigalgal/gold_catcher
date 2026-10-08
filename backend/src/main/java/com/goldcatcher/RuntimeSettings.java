@@ -28,6 +28,10 @@ public class RuntimeSettings {
         return routes;
     }
     public String secret(AiRoute route) { return text(route.apiKeyEnv(), ""); }
+    public boolean preferJsonText(AiRoute route) {
+        return java.util.Arrays.stream(text("GOLD_AI_JSON_TEXT_PROVIDERS","mimo,glm").split(","))
+            .map(String::strip).anyMatch(route.provider()::equals);
+    }
     public record AiRoute(String id, String provider, String model, String baseUrl, String apiKeyEnv,
         int inputEstimateLimit, int characterLimit, int byteLimit, int messageLimit,
         int outputReserve, int timeoutSeconds, boolean judge) {

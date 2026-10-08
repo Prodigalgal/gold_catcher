@@ -36,6 +36,8 @@ Gate 凭据保存在“服务器管理”的私密目录，权限限制为当前
 
 研究默认手动启动。默认路线为 `config/ai-routes.balanced.example.json`；可用 `-RoutesFile` 选择路线。预算参考 any2api 实测报告，但不当作已证明的最大上下文容量。PoW 在 Web Worker 中计算，浏览器不保存密码到 localStorage/sessionStorage。
 
+MiMo、GLM 默认按 JSON 文本提交，避免已观察到的 Any2API 函数转换失败；Java 同样验证格式、引用和计划。`GOLD_AI_JSON_TEXT_PROVIDERS` 可配置覆盖，其他通道按目录能力选择函数提交。行情和新闻采集继续独立运行，研究结果不足时不生成内部订单。
+
 直接启动 Java 时需要配置 `GOLD_AUTH_USERNAME` 和 `GOLD_AUTH_PASSWORD`；生产 HTTPS 配置 `GOLD_AUTH_COOKIE_SECURE=true`。Basic 不提供登录旁路，修改操作必须使用 CSRF。健康探针不代表行情或研究有效。
 
 离线设计原型仍可通过 `npm run build:prototype` 独立构建，示例数据不进入运行界面。
