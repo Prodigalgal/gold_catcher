@@ -5,7 +5,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from auth_client import SessionClient
+from auth_client import SessionClient, USER_AGENT
 
 commit = os.environ["SOURCE_COMMIT"]
 token = os.environ["ARGOCD_READ_TOKEN"]
@@ -17,6 +17,7 @@ images = {f'{r["image"]}@{r["digest"]}' for r in release["components"]}
 
 
 def read(url, headers):
+    headers = {'User-Agent': USER_AGENT, **headers}
     with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as response:
         return response.read().decode("utf-8")
 

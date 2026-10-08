@@ -5,6 +5,8 @@ import json
 import time
 import urllib.request
 
+USER_AGENT = 'GoldCatcher-release-check/0.3'
+
 
 class SessionClient:
     def __init__(self, base_url):
@@ -14,7 +16,7 @@ class SessionClient:
         self.csrf = {}
 
     def request(self, path, body=None, token=None):
-        headers = {'Accept': 'application/json'}
+        headers = {'Accept': 'application/json', 'User-Agent': USER_AGENT}
         data = None
         if body is not None:
             headers['Content-Type'] = 'application/json'

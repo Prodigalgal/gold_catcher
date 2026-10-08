@@ -13,7 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.*;
 
-/** Public Gate TradFi observations. No authenticated or trading endpoint is called. */
+/** Gate TradFi observations and two signed read-only product endpoints; no trading calls. */
 @Service
 public class GateCfdFeed {
     public static final String PRODUCT="GATE:XAUUSD";
@@ -31,6 +31,7 @@ public class GateCfdFeed {
     private volatile Instant lastSymbolSuccess;
     private int failures;
     private long lastKlineRequest;
+    private long nextRulesAttempt;
     public GateCfdFeed(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,IndicatorEngine engine,
         DocumentStore store,EventHub events,Clock clock) {
         this.settings=settings;this.http=http;this.mapper=mapper;this.engine=engine;this.store=store;this.events=events;this.clock=clock;
@@ -59,11 +60,12 @@ public class GateCfdFeed {
             "source",commissionPerLot==null?"PRODUCT_SPECIFIC_COSTS_REQUIRED":"GATE_AUTHENTICATED_COMMISSION_PER_LOT",
             "reference","https://www.gate.com/docs/developers/apiv4/en/cfd/","feeUnit","USD_PER_LOT","swapStatus","CONVENTION_UNVERIFIED");
     }
-    @Scheduled(fixedDelay=300000,initialDelay=3500)
+    @Scheduled(fixedDelay=10000,initialDelay=3500)
     void refreshAuthenticatedRules() {
         if(!enabled())return;
         if(settings.text("GOLD_GATE_API_KEY","").isBlank()||settings.text("GOLD_GATE_API_SECRET","").isBlank())return;
         if(clock instanceof ExchangeClock exchange&&!exchange.verified()){ruleState="CLOCK_UNVERIFIED";return;}
+        if(nextRulesAttempt!=0&&System.nanoTime()-nextRulesAttempt<0)return;
         try {
             JsonNode detail=null,commission=null;
             for(var item:getAuthenticated("detail").path("data").path("list"))if(item.path("symbol").asText().equals("XAUUSD"))detail=item;
@@ -78,7 +80,9 @@ public class GateCfdFeed {
             selected.put("executionConvention","UNVERIFIED_NO_DEPTH_OR_TICK_TIMESTAMP");
             cfdRules=selected;commissionPerLot=fee;rulesReceivedAt=clock.instant();ruleState="SPEC_AND_COMMISSION_VERIFIED";ruleError=null;
             store.save("instrument-observation",PRODUCT,Map.of("rules",selected,"receivedAt",rulesReceivedAt,"source","GATE_AUTHENTICATED_GET"));events.changed();
-        }catch(Exception failure){ruleState="RULE_QUERY_FAILED";ruleError=safe(failure);events.changed();}
+            nextRulesAttempt=System.nanoTime()+Duration.ofMinutes(5).toNanos();
+        }catch(Exception failure){ruleState="RULE_QUERY_FAILED";ruleError=safe(failure);events.changed();
+            nextRulesAttempt=System.nanoTime()+Duration.ofSeconds(30).toNanos();}
     }
     private JsonNode getAuthenticated(String resource) throws Exception {
         if(!Set.of("detail","commissions").contains(resource))throw new IllegalArgumentException("READ_ONLY_ENDPOINT_REQUIRED");

@@ -20,8 +20,11 @@ public class ExchangeClock extends Clock {
         &&Duration.between(current.calibratedAt(),instant()).compareTo(Duration.ofMinutes(6))<0;}
     public Map<String,Object> status(){var current=anchor;return Map.of("state",verified()?current.state():"CLOCK_UNVERIFIED","source","GATE_API_V4_TIME",
         "offsetMillis",current.offsetMs(),"uncertaintyMillis",current.uncertaintyMs(),"calibratedAt",current.calibratedAt()==null?"":current.calibratedAt(),"hostTime",Instant.now(),"error",current.error()==null?"":current.error());}
-    @Scheduled(fixedDelay=180000,initialDelay=180000) public synchronized void calibrate() {
+    @Scheduled(fixedDelay=15000,initialDelay=15000) public synchronized void calibrate() {
         if(!settings.enabled("GOLD_MARKET_ENABLED"))return;
+        var previous=anchor;
+        if(previous.calibratedAt()!=null&&verified()
+            &&Duration.between(previous.calibratedAt(),instant()).compareTo(Duration.ofMinutes(3))<0)return;
         try {
             long start=System.nanoTime();Instant hostStart=Instant.now();
             var response=http.send(HttpRequest.newBuilder(URI.create(settings.text("GOLD_GATE_HTTP_URL","https://api.gateio.ws/api/v4")+"/spot/time"))

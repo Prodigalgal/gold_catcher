@@ -53,12 +53,15 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: database
         annotations:
           argocd.argoproj.io/sync-options: Prune=false,Delete=false
       spec:
         accessModes: [ReadWriteOnce]
+        volumeMode: Filesystem
         storageClassName: longhorn
         resources:
           requests: {storage: 10Gi}

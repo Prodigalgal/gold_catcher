@@ -44,6 +44,8 @@ Gate 凭据保存在“服务器管理”的私密目录，权限限制为当前
 
 源码仓库：https://github.com/Prodigalgal/gold_catcher 。GitOps 配置使用独立的 `Prodigalgal/ircs-prod-config`，目录 `gold-catcher/oracle`，域名 `gold.mnnu.eu.org`。
 
+生产入口：[Gold Catcher](https://gold.mnnu.eu.org)。2026 年 10 月 8 日已激活 Java、React 和 PostgreSQL，完成 PoW 登录、Gate 行情与 CFD 签名读取验收。研究默认手动启动，CFD 完整模拟仍待完善；发布版本和两个镜像摘要以生产 GitOps 的 `release.json` 为准。
+
 CI 验证 Java、React、清单及发布变更；Release 构建 ARM64 镜像，按 digest 提升 GitOps，Argo CD 同步后以 PoW Session 核验 API、Web 源码版本和 Gate 行情。验收模式明确为 INTERNAL_SIMULATION_ALPHA，不将 CFD 完整模拟、全 tick 回放或盈利能力列为已完成能力。
 
 源码中的部署模板保持零副本。生产激活记录与实时验证分开记录，不能把 CI 通过当作已经部署。
