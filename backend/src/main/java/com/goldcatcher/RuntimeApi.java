@@ -1,6 +1,7 @@
 package com.goldcatcher;
 
 import com.goldcatcher.information.NewsService;
+import com.goldcatcher.network.SourceProxyPool;
 import com.goldcatcher.market.MarketFeed;
 import com.goldcatcher.persistence.DocumentStore;
 import com.goldcatcher.research.*;
@@ -21,10 +22,11 @@ public class RuntimeApi {
     private final MarketFeed market;private final NewsService news;private final SimulationLedger ledger;private final ResearchService research;
     private final Any2ApiClient ai;private final RuntimeSettings settings;private final EventHub events;private final DocumentStore store;private final Clock clock;
     private final FundingService funding;
+    private final SourceProxyPool proxy;
     public RuntimeApi(MarketFeed market,NewsService news,SimulationLedger ledger,ResearchService research,Any2ApiClient ai,
-        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding) {
+        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy) {
         this.market=market;this.news=news;this.ledger=ledger;this.research=research;this.ai=ai;this.settings=settings;this.events=events;this.store=store;this.clock=clock;
-        this.funding=funding;
+        this.funding=funding;this.proxy=proxy;
     }
     @GetMapping("/session") public Map<String,String> session(Principal principal,CsrfToken token) {
         return Map.of("username",principal.getName(),"csrfHeader",token.getHeaderName(),"csrfToken",token.getToken());
@@ -33,6 +35,7 @@ public class RuntimeApi {
         product(symbol);Map<String,Object> data=new LinkedHashMap<>();
         data.put("serverTime",clock.instant());data.put("market",market.snapshot(symbol));data.put("marketProvenance",market.provenance(symbol));data.put("account",ledger.view(symbol));
         data.put("news",news.news());data.put("calendar",news.calendar());data.put("sources",news.sources());data.put("models",ai.states());
+        data.put("sourceProxy",proxy.status());
         data.put("funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));
         data.put("costConfiguration",market.costConfiguration(symbol));
         data.put("budgets",settings.routes().stream().map(route->Map.ofEntries(Map.entry("id",route.id()),Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("characterLimit",route.characterLimit()),
@@ -42,6 +45,7 @@ public class RuntimeApi {
         data.put("researchHistory",research.history().stream().filter(run->run.symbol.equals(symbol)).map(run->Map.of("id",run.id,"horizon",run.horizon,"status",run.status,"startedAt",run.startedAt,"stage",run.stage)).toList());
         data.put("scheduling",research.scheduling());data.put("review",review(symbol));data.put("clock",clock instanceof ExchangeClock exchange?exchange.status():Map.of("state","TEST_CLOCK"));return data;
     }
+    @GetMapping("/news/{id}") public Map<String,Object> article(@PathVariable String id){return news.detail(id);}
     public record ResearchRequest(String symbol,String horizon) {}
     @PostMapping("/research") public ResponseEntity<ResearchService.Run> start(@RequestBody ResearchRequest request) {
         product(request.symbol());return ResponseEntity.accepted().body(research.start(request.symbol(),request.horizon()));

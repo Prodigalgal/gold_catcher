@@ -62,8 +62,26 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Gate data acceptance timed out')
+expected_sources = {'FED_PRESS', 'FED_SPEECH', 'ECB_PRESS', 'BEA_NEWS', 'BEA_CALENDAR',
+                    'BLS_CPI', 'BLS_EMPLOYMENT', 'BLS_PPI', 'BLS_JOLTS', 'BLS_CALENDAR', 'FOMC_CALENDAR'}
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    sources = client.request('/api/dashboard?symbol=XAU_USDT')
+    states = {source['id']: source for source in sources['sources']}
+    if (set(states) == expected_sources
+            and all(states[key]['state'] == 'CURRENT' and states[key].get('quality') for key in expected_sources)
+            and any(item['source'] == 'BEA_NEWS' and item.get('publishedAt') and not item.get('archived') for item in sources['news'])
+            and any(item['source'].startswith('BLS_') and item.get('publishedPrecision') == 'DECLARED_RELEASE_TIME'
+                    and item.get('contentCharacters', 0) > 80 for item in sources['news'])
+            and any(event['source'] == 'BLS_CALENDAR' for event in sources['calendar'])
+            and any(event['source'] == 'FOMC_CALENDAR' and event['scheduledAt'] is None
+                    and event.get('timePrecision') == 'DATE_RANGE' for event in sources['calendar'])):
+        break
+    time.sleep(5)
+else:
+    raise SystemExit('Official feed, article body or calendar acceptance timed out')
 client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:
     raise SystemExit("web source commit mismatch")
-print("Argo digests, PoW session, Gate feeds and authenticated API/web Alpha release verified.")
+print("Argo digests, PoW session, Gate feeds, eleven official channels, verified BLS article time and API/web Alpha release verified.")
