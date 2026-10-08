@@ -7,7 +7,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("output", type=Path)
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
-assets = root / "web/dist/assets"
+assets = root / "web/prototype-dist/assets"
 scripts = list(assets.glob("*.js"))
 styles = list(assets.glob("*.css"))
 if len(scripts) != 1 or len(styles) != 1:

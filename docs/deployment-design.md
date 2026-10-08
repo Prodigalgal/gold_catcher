@@ -56,7 +56,7 @@ ARM64 构建采用 `ubuntu-24.04-arm`；这一 runner 可用于私仓。[GitHub 
 
 发布同一时间只运行一个，不取消正在进行的生产回写。回写前校验源 main；较新提交已出现时旧候选不再提升。遇到其他应用更新 GitOps 时，重新获取远端并仅重做 Gold Catcher 的镜像更新；最多三次，不覆盖远端提交。
 
-Argo 验收核对 Healthy、Synced 和两个预期 image digest，然后核对受保护 API 的 source commit、`INTERNAL_SIMULATION` 模式和前端 commit。当前 API 固定报告 `DESIGN_PROTOTYPE`，因此无法被当作正式业务通过验收。HTTP 验收重试需要在实际启动时间与 Cloudflare 条件下补充验证。
+Argo 验收核对 Healthy、Synced 和两个预期 image digest，然后核对受保护 API 的 source commit、`INTERNAL_SIMULATION` 模式和前端 commit。0.2.0 API 报告 `INTERNAL_SIMULATION_ALPHA`，资金费、CFD 和完整回放仍待实现，仍无法被当作正式业务通过该验收。HTTP 验收重试需要在实际启动时间与 Cloudflare 条件下补充验证。
 
 ## 一次性激活
 

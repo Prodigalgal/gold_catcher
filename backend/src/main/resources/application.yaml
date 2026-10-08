@@ -4,6 +4,18 @@ server:
 spring:
   application:
     name: gold-catcher
+  datasource:
+    url: ${GOLD_DB_URL:jdbc:h2:file:./data/gold-catcher;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH}
+    username: ${GOLD_DB_USERNAME:sa}
+    password: ${GOLD_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 6
+  flyway:
+    enabled: true
+  task:
+    scheduling:
+      pool:
+        size: 6
   lifecycle:
     timeout-per-shutdown-phase: 30s
 management:

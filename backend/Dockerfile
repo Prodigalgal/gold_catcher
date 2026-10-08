@@ -10,6 +10,7 @@ LABEL org.opencontainers.image.source="https://github.com/Prodigalgal/gold_catch
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 WORKDIR /app
 RUN useradd --system --uid 10001 --create-home goldcatcher
+RUN mkdir -p /app/data && chown goldcatcher /app/data
 COPY --from=build /workspace/build/libs/*.jar /app/app.jar
 USER 10001
 EXPOSE 8080

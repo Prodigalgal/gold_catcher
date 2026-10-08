@@ -38,7 +38,7 @@ jobs:
       - working-directory: web
         env:
           VITE_SOURCE_COMMIT: ${{ github.sha }}
-        run: npm ci && npm run build
+        run: npm ci && npm run build && npm run build:prototype
   delivery:
     runs-on: ubuntu-24.04
     steps:

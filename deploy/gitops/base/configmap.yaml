@@ -3,8 +3,14 @@ kind: ConfigMap
 metadata:
   name: gold-catcher-config
 data:
-  GOLD_APPLICATION_MODE: DESIGN_PROTOTYPE
+  GOLD_APPLICATION_MODE: INTERNAL_SIMULATION_ALPHA
   GOLD_SOURCE_COMMIT: development
   GOLD_ANY2API_BASE_URL: http://any2api-server.any2api.svc.cluster.local:8080
   GOLD_DB_URL: jdbc:postgresql://gold-catcher-postgres:5432/gold_catcher
+  GOLD_DB_USERNAME: gold_catcher
+  GOLD_MARKET_ENABLED: "true"
+  GOLD_NEWS_ENABLED: "true"
+  GOLD_RESEARCH_AUTOMATIC: "false"
+  GOLD_NEWS_POLL_SECONDS: "30"
+  GOLD_EXECUTION_DELAY_MS: "250"
   TZ: UTC

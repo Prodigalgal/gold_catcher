@@ -1,0 +1,19 @@
+{
+  "report":"any2api/docs/reports/PROVIDER_LIMITS_AND_TURNS_BENCHMARK_2026-10-08.md",
+  "reportDate":"2026-10-08",
+  "data":"any2api/scripts/benchmark_results_*.json",
+  "verifiedMaximumTokens":null,
+  "reportedUsageProvenance":"NOT_PRESERVED_IN_BENCHMARK_RESULTS",
+  "gatewayEstimate":"ceil(serialized_request_utf8_bytes / 3); an estimate, not model tokenization",
+  "presetPurpose":"Conservative operating budgets, not advertised model capacities",
+  "samples":[
+    {"model":"mimo/mimo-v2.6-pro","successfulScale":8000,"knownFillerCharacters":16320,"knownFillerUtf8Bytes":41920,"reportedPromptUsage":13126,"failureScale":32000,"failureHttpStatus":413},
+    {"model":"minmax/MiniMax-M3","successfulScale":16000,"knownFillerCharacters":32640,"knownFillerUtf8Bytes":83840,"reportedPromptUsage":21160,"failureScale":32000,"failureHttpStatus":413},
+    {"model":"grok_web/grok-3","successfulScale":16000,"knownFillerCharacters":32640,"knownFillerUtf8Bytes":83840,"reportedPromptUsage":21160,"failureScale":null},
+    {"model":"arena/claude-sonnet-5","successfulScale":16000,"knownFillerCharacters":32640,"knownFillerUtf8Bytes":83840,"reportedPromptUsage":21161,"failureScale":null},
+    {"model":"glm/GLM-5-Turbo","successfulScale":16000,"knownFillerCharacters":32640,"knownFillerUtf8Bytes":83840,"reportedPromptUsage":17941,"failureScale":null},
+    {"model":"longcat/longcat-pro","successfulScale":8000,"knownFillerCharacters":16320,"knownFillerUtf8Bytes":41920,"reportedPromptUsage":10989,"failureScale":null},
+    {"model":"deepseek/default","successfulScale":8000,"knownFillerCharacters":16320,"knownFillerUtf8Bytes":41920,"reportedPromptUsage":10600,"failureScale":null}
+  ],
+  "limitations":["Filler sizes exclude instruction and JSON framing","Successful length does not establish a maximum or inference quality","HTTP 413 does not establish a token boundary","Output reserve is enforced only where the current catalog declares a mapped parameter","Catalog availability is not evidence of a completed inference"]
+}
