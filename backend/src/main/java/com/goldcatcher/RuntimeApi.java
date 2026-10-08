@@ -35,9 +35,9 @@ public class RuntimeApi {
         data.put("news",news.news());data.put("calendar",news.calendar());data.put("sources",news.sources());data.put("models",ai.states());
         data.put("funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));
         data.put("costConfiguration",market.costConfiguration(symbol));
-        data.put("budgets",settings.routes().stream().map(route->Map.of("id",route.id(),"inputEstimateLimit",route.inputEstimateLimit(),"characterLimit",route.characterLimit(),
-            "byteLimit",route.byteLimit(),"outputReserve",route.outputReserve(),"timeoutSeconds",route.timeoutSeconds(),"judge",route.judge(),
-            "submissionMode",settings.preferJsonText(route)?"JSON_TEXT":"CATALOG_AUTO")).toList());
+        data.put("budgets",settings.routes().stream().map(route->Map.ofEntries(Map.entry("id",route.id()),Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("characterLimit",route.characterLimit()),
+            Map.entry("byteLimit",route.byteLimit()),Map.entry("messageLimit",route.messageLimit()),Map.entry("outputReserve",route.outputReserve()),Map.entry("timeoutSeconds",route.timeoutSeconds()),Map.entry("judge",route.judge()),
+            Map.entry("headroomPercent",10),Map.entry("safetyTokens",512),Map.entry("submissionMode",settings.preferJsonText(route)?"JSON_TEXT":"CATALOG_AUTO"))).toList());
         data.put("research",research.latest(symbol));
         data.put("researchHistory",research.history().stream().filter(run->run.symbol.equals(symbol)).map(run->Map.of("id",run.id,"horizon",run.horizon,"status",run.status,"startedAt",run.startedAt,"stage",run.stage)).toList());
         data.put("scheduling",research.scheduling());data.put("review",review(symbol));data.put("clock",clock instanceof ExchangeClock exchange?exchange.status():Map.of("state","TEST_CLOCK"));return data;

@@ -16,22 +16,35 @@ import tools.jackson.databind.*;
 @Service
 public class Any2ApiClient {
     public record Budget(int bytes,int characters,long gatewayInputEstimate,int messages,int outputReserve,
-        String inputHash,String limitSource,String outputEnforcement) {}
+        String inputHash,String limitSource,String outputEnforcement,ContextWindow.Limits limits,String preparation,
+        Integer utilizationPercent,Integer originalBytes,Integer originalCharacters,List<ContextWindow.Change> changes,
+        String sourcePacketHash,String sentPacketHash) {
+        public Budget {
+            if(preparation==null)preparation="LEGACY_NOT_RECORDED";
+            if(changes==null)changes=List.of();
+        }
+        public Budget(int bytes,int characters,long gatewayInputEstimate,int messages,int outputReserve,
+            String inputHash,String limitSource,String outputEnforcement) {
+            this(bytes,characters,gatewayInputEstimate,messages,outputReserve,inputHash,limitSource,outputEnforcement,
+                null,"LEGACY_NOT_RECORDED",0,bytes,characters,List.of(),null,null);
+        }
+    }
     public record Answer(String model,String analysis,String analysisSource,String raw,JsonNode output,
         JsonNode usage,String usageSource,String finishReason,Budget budget,long durationMs) {}
     public record ModelState(String routeId,String provider,String model,boolean credentialConfigured,
-        JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError) {}
+        JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError,Budget lastBudget,Instant lastBudgetAt) {}
     private record Cached(JsonNode catalog,Instant at) {}
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
     private final Map<String,Cached> catalogs=new ConcurrentHashMap<>();
     private final Map<String,Semaphore> leases=new ConcurrentHashMap<>();
     private final Map<String,String> inference=new ConcurrentHashMap<>(),failures=new ConcurrentHashMap<>();
+    private final Map<String,Budget> budgets=new ConcurrentHashMap<>();private final Map<String,Instant> budgetTimes=new ConcurrentHashMap<>();
     public Any2ApiClient(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,Clock clock) {
         this.settings=settings;this.http=http;this.mapper=mapper;this.clock=clock;
     }
     public List<ModelState> states() {return settings.routes().stream().map(route->{var cached=catalogs.get(route.id());
         return new ModelState(route.id(),route.provider(),route.model(),!settings.secret(route).isBlank(),cached==null?null:cached.catalog(),
-            cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()));}).toList();}
+            cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()),budgets.get(route.id()),budgetTimes.get(route.id()));}).toList();}
     public Answer complete(AiRoute route,String instruction,Object packet) throws Exception {
         long started=System.nanoTime();
         Semaphore lease=leases.computeIfAbsent(route.provider(),key->new Semaphore(1));
@@ -58,8 +71,13 @@ public class Any2ApiClient {
                 for(JsonNode parameter:parameters)if(parameter.asText().equals(candidate)
                     &&capabilities.path("parameter_adaptation").path(candidate).path("mode").asText().equals("mapped")){outputParameter=candidate;break;}
             if(outputParameter!=null)request.put(outputParameter,route.outputReserve());
-            String body=mapper.writeValueAsString(request);
-            Budget budget=verify(route,body,catalog,outputParameter!=null);
+            var limits=ContextWindow.limits(route,catalog);
+            var prepared=ContextWindow.prepare(mapper,request,packet,limits);String body=prepared.body();
+            Budget budget=budget(route,body,catalog,outputParameter!=null,prepared,
+                NewsService.hash(mapper.writeValueAsString(packet)),NewsService.hash(mapper.writeValueAsString(prepared.packet())));
+            budgets.put(route.id(),budget);budgetTimes.put(route.id(),clock.instant());
+            if(!ContextWindow.fits(prepared.sent(),limits,true)||(limits.declaredOutput()>0&&route.outputReserve()>limits.declaredOutput()))
+                throw new InferenceFailure("CONTEXT_INSUFFICIENT",new Answer(route.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_SENT",budget,0));
             captured=new Answer(route.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_RECEIVED",budget,0);
             var response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("chat/completions")))
                 .timeout(Duration.ofSeconds(route.timeoutSeconds())).header("Authorization","Bearer "+settings.secret(route))
@@ -107,24 +125,22 @@ public class Any2ApiClient {
         JsonNode body=mapper.readTree(response.body());catalogs.put(route.id(),new Cached(body,clock.instant()));return body;
     }
     public Budget verify(AiRoute route,String body,JsonNode catalog,boolean outputRequested) {
-        int bytes=body.getBytes(StandardCharsets.UTF_8).length,characters=body.codePointCount(0,body.length());
-        long estimate=(bytes+2L)/3L;JsonNode capabilities=catalog.path("capabilities");
-        long declaredInput=positive(capabilities,"max_input_tokens"),declaredContext=positive(capabilities,"max_context_tokens"),
-            declaredOutput=positive(capabilities,"max_output_tokens");
-        long channelCharacters=characterLimit(catalog);
-        Budget budget=new Budget(bytes,characters,estimate,2,route.outputReserve(),NewsService.hash(body),
-            declaredInput>0||declaredContext>0?"CATALOG_AND_CONFIG":"CONFIG_CONSERVATIVE_UNKNOWN_CAPACITY",
-            outputRequested?"REQUESTED_NOT_ASSUMED_ENFORCED":"NOT_SUPPORTED");
-        if(bytes>route.byteLimit()||characters>Math.min(route.characterLimit(),channelCharacters)||estimate>route.inputEstimateLimit()
-            ||(declaredInput>0&&estimate>declaredInput)||(declaredOutput>0&&route.outputReserve()>declaredOutput)
-            ||(declaredContext>0&&estimate+route.outputReserve()+512>declaredContext)||route.messageLimit()<2)
+        var limits=ContextWindow.limits(route,catalog);var size=ContextWindow.size(body,2);
+        var prepared=new ContextWindow.Prepared(body,null,size,size,List.of());
+        Budget budget=budget(route,body,catalog,outputRequested,prepared,null,null);
+        if(!ContextWindow.fits(size,limits,true)||(limits.declaredOutput()>0&&route.outputReserve()>limits.declaredOutput()))
             throw new InferenceFailure("CONTEXT_INSUFFICIENT",new Answer(route.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_SENT",budget,0));
         return budget;
     }
-    private long positive(JsonNode node,String field){long value=node.path(field).asLong(0);return Math.max(value,0);}
-    private long characterLimit(JsonNode node){long own=positive(node,"input_character_limit"),limit=own>0?own:Long.MAX_VALUE;
-        if(node.path("mode").asText().equals("declared_character_limit")&&positive(node,"limit")>0)limit=Math.min(limit,positive(node,"limit"));
-        if(node.isObject()||node.isArray())for(JsonNode child:node)if(child.isObject()||child.isArray())limit=Math.min(limit,characterLimit(child));return limit;}
+    private Budget budget(AiRoute route,String body,JsonNode catalog,boolean outputRequested,ContextWindow.Prepared prepared,String originalHash,String sentHash) {
+        var limits=ContextWindow.limits(route,catalog);var size=prepared.sent();boolean fits=ContextWindow.fits(size,limits,true)
+            &&(limits.declaredOutput()==0||route.outputReserve()<=limits.declaredOutput());
+        return new Budget(size.bytes(),size.characters(),size.inputEstimate(),size.messages(),route.outputReserve(),NewsService.hash(body),
+            limits.declaredInput()>0||limits.declaredContext()>0?"CATALOG_AND_CONFIG":"CONFIG_CONSERVATIVE_UNKNOWN_CAPACITY",
+            outputRequested?"REQUESTED_NOT_ASSUMED_ENFORCED":"NOT_SUPPORTED",limits,
+            !fits?"BLOCKED_BY_BUDGET":prepared.changes().isEmpty()?"WITHIN_BUDGET":"COMPACTED_WITH_ARCHIVE",
+            ContextWindow.utilization(size,limits),prepared.original().bytes(),prepared.original().characters(),prepared.changes(),originalHash,sentHash);
+    }
     JsonNode parseOutput(String raw) {
         String content=raw.strip();
         if(content.startsWith("```")){int newline=content.indexOf('\n');int end=content.lastIndexOf("```");

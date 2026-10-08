@@ -55,7 +55,9 @@ public final class MarketTypes {
                 && Duration.between(exchangeTime,now).compareTo(Duration.ofSeconds(3))<=0;
         }
     }
-    public record Indicators(String frame,int samples,Instant closedThrough,String state,Map<String,String> values) {}
+    public record IndicatorReading(String code,String label,String detail) {}
+    public record Indicators(String frame,int samples,Instant closedThrough,String state,Map<String,String> values,
+        Instant calculatedAt,String freshness,Map<String,IndicatorReading> readings) {}
     public record Snapshot(String symbol,String state,Quote quote,Instrument rules,
         Map<String,Indicators> indicators,List<Candle> candles,Instant retrievedAt,String error) {}
 }

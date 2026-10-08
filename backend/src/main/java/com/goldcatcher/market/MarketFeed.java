@@ -55,7 +55,8 @@ public class MarketFeed {
         if(!PRODUCT.equals(symbol))throw new IllegalArgumentException("UNKNOWN_PRODUCT");
         String state=!settings.enabled("GOLD_MARKET_ENABLED")?"DISABLED":clock instanceof ExchangeClock exchange&&!exchange.verified()?"CLOCK_UNVERIFIED":
             quote!=null&&quote.fresh(clock.instant())?"LIVE":"STALE_OR_CONNECTING";
-        return new Snapshot(symbol,state,quote,rules,Map.copyOf(calculated),candles.getOrDefault("5",List.of()),clock.instant(),error);
+        var presented=new LinkedHashMap<String,Indicators>();calculated.forEach((frame,indicator)->presented.put(frame,engine.present(indicator,clock.instant(),false)));
+        return new Snapshot(symbol,state,quote,rules,Map.copyOf(presented),candles.getOrDefault("5",List.of()),clock.instant(),error);
     }
     public Map<String,Object> provenance(String symbol) {
         if(GateCfdFeed.PRODUCT.equals(symbol))return gate.provenance();

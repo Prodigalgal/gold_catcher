@@ -40,7 +40,8 @@ public class GateCfdFeed {
     public Snapshot snapshot() {
         String state=!enabled()?"DISABLED":clock instanceof ExchangeClock exchange&&!exchange.verified()?"CLOCK_UNVERIFIED":
             !marketStatus.equals("open")&&quote!=null?"MARKET_CLOSED":quote!=null&&quote.priceFresh(clock.instant())?"LIVE":"STALE_OR_CONNECTING";
-        return new Snapshot(PRODUCT,state,quote,null,Map.copyOf(calculated),candles.getOrDefault("5",List.of()),clock.instant(),quoteError);
+        var presented=new LinkedHashMap<String,Indicators>();calculated.forEach((frame,indicator)->presented.put(frame,engine.present(indicator,clock.instant(),state.equals("MARKET_CLOSED"))));
+        return new Snapshot(PRODUCT,state,quote,null,Map.copyOf(presented),candles.getOrDefault("5",List.of()),clock.instant(),quoteError);
     }
     public Map<String,Object> provenance() {
         Map<String,Object> info=new LinkedHashMap<>();

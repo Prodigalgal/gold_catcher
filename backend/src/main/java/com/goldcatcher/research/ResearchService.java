@@ -34,6 +34,7 @@ public class ResearchService {
         只依据冻结证据，不自行补出未提供的行情、费用、预期、时间或来源。分别判断短线和未来两天。
         不设置固定盈利涨跌幅、止损比例、盈亏比或最低利润；由你评估风险。没有可执行机会可以 WAIT。
         各阶段独立请求：首轮看不到同伴稿；后续只引用 packet.peers 中已解封的上一阶段消息。
+        文本可能因通道预算带有摘录或省略标记；价格、账户、规则、计划数值和引用保留。不得补造被省略的论据，引用受限时说明证据不足。
         根据 phase 给出独立判断、质疑与反驳、接受/拒绝后的修订，或综合裁决。裁决必须说明采纳与未采纳理由，保留分歧。
         明确成交、费用、杠杆和资金风险。触价不等于成交；资金费尚未结算的净结果不能称为已知盈利。
         quantity 使用 evidence.quantityUnit；市价 entryPrice 是买入最高/卖出最低可接受价格，其他价格为限价、触发、止损和止盈。
@@ -92,8 +93,12 @@ public class ResearchService {
             Map<String,Object> core=new LinkedHashMap<>();core.put("symbol",symbol);core.put("horizon",horizon);
             core.put("evidenceCutoff",run.evidenceCutoff);core.put("quote",snapshot.quote());
             var compactIndicators=mapper.valueToTree(snapshot.indicators());
-            for(var indicator:compactIndicators)for(var field:indicator.path("values").properties())if(!field.getValue().isNull())
-                ((tools.jackson.databind.node.ObjectNode)indicator.path("values")).put(field.getKey(),new java.math.BigDecimal(field.getValue().asText()).setScale(8,java.math.RoundingMode.HALF_EVEN).stripTrailingZeros().toPlainString());
+            for(var indicator:compactIndicators) {
+                ((tools.jackson.databind.node.ObjectNode)indicator).remove("readings"); // UI explanations are derived from these same numeric facts.
+                ((tools.jackson.databind.node.ObjectNode)indicator.path("values")).remove(List.of("ema20DistancePct","vwap20","volumeRatio20","bbWidthPct","bbPercentB"));
+                for(var field:indicator.path("values").properties())if(!field.getValue().isNull())
+                    ((tools.jackson.databind.node.ObjectNode)indicator.path("values")).put(field.getKey(),new java.math.BigDecimal(field.getValue().asText()).setScale(8,java.math.RoundingMode.HALF_EVEN).stripTrailingZeros().toPlainString());
+            }
             core.put("indicators",compactIndicators);core.put("indicatorPrecision","LLM view rounded to 8 decimals by Java; calculation retains DECIMAL128 precision.");
             if(snapshot.rules()!=null) {
                 var compactRules=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(snapshot.rules());
@@ -114,7 +119,7 @@ public class ResearchService {
             core.put("marginReference","约100 USDT保证金/笔，属于用户习惯参考，不是固定仓位；实际数量与风险由模型评估。接受单笔保证金全部亏损。");
             core.put("costLimitations","Public taker fees are assumptions. Funding: historical rate + near-boundary mark; missing marks unknown. Liquidation simplified. CFD swap/execution conventions unverified.");
             core.put("news",news.evidence(run.evidenceCutoff).stream().limit(4).map(article->Map.of("id",article.id(),"title",article.title(),
-                "excerpt",article.excerpt().length()>180?article.excerpt().substring(0,180)+" [选取前180字符，原文可追溯]":article.excerpt(),"source",article.source(),
+                "excerpt",excerpt(article.excerpt(),180),"source",article.source(),
                 "publishedAt",article.publishedAt()==null?"UNKNOWN":article.publishedAt().toString(),"receivedAt",article.receivedAt().toString(),"version",article.version())).toList());
             core.put("calendar",news.calendar().stream().filter(event->event.receivedAt()!=null&&!event.receivedAt().isAfter(run.evidenceCutoff)).limit(6)
                 .map(event->Map.of("id",event.id(),"title",event.title(),"source",event.source(),"scheduledAt",event.scheduledAt())).toList());
@@ -206,8 +211,11 @@ public class ResearchService {
             if(original.path("plan").path("invalidate").isTextual())plan.set("invalidate",original.path("plan").path("invalidate"));
         }else if(original.has("plan"))compact.set("plan",original.path("plan"));
         compact.put("selectionNote","Text excerpt; full output archived. Numeric plan fields and references retained.");
-        for(String field:List.of("output","changes")){String value=original.path(field).asText();int limit=field.equals("output")?400:120;compact.put(field,value.length()>limit?value.substring(0,limit)+" [摘录，全文已归档]":value);}
+        for(String field:List.of("output","changes")){String value=original.path(field).asText();int limit=field.equals("output")?400:120;compact.put(field,excerpt(value,limit));}
         return compact;
+    }
+    private String excerpt(String value,int limit) {
+        return value.codePointCount(0,value.length())>limit?value.substring(0,value.offsetByCodePoints(0,limit))+" [摘录，全文已归档]":value;
     }
     public Map<String,Object> scheduling(){var queued=pendingNews.get();return Map.of("automatic",settings.enabled("GOLD_RESEARCH_AUTOMATIC"),"running",running.availablePermits()==0,
         "lastAutomatic",lastAutomatic,"queuedNews",queued==null?"":queued.id(),"error",automaticError==null?"":automaticError);}
