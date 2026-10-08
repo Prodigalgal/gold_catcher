@@ -51,7 +51,9 @@ public class NewsService {
     public List<SourceState> sources(){return FEEDS.entrySet().stream().map(feed->states.getOrDefault(feed.getKey(),
         new SourceState(feed.getKey(),feed.getValue(),"DISABLED",30,null,null,null,0))).toList();}
     public List<News> evidence(Instant cutoff){return news().stream().filter(n->!n.receivedAt().isAfter(cutoff))
-        .filter(n->n.publishedAt()==null||!n.publishedAt().isAfter(cutoff)).limit(12).toList();}
+        .filter(n->n.publishedAt()==null||!n.publishedAt().isAfter(cutoff))
+        .sorted(Comparator.comparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
+            .thenComparing(News::receivedAt,Comparator.reverseOrder())).limit(12).toList();}
     @Scheduled(fixedDelay=5000,initialDelay=1500)
     void collect() {
         if(!settings.enabled("GOLD_NEWS_ENABLED"))return;

@@ -18,6 +18,18 @@ class NewsServiceTest {
         assertThatThrownBy(()->news.parseRss("x",bytes("<!DOCTYPE rss [<!ENTITY x SYSTEM 'file:///secret'>]><rss>&x;</rss>")));
         assertThat(news.parseRss("x",bytes("<rss><item><title>x</title><link>javascript:alert(1)</link></item></rss>"))).isZero();
     }
+    @Test void evidencePrioritizesKnownPublicationAndExcludesFutureReceiptsAndReleases() throws Exception {
+        var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
+        String template="<rss><channel><item><guid>%s</guid><title>%s</title><link>https://www.bea.gov/news/%s</link>%s</item></channel></rss>";
+        news.parseRss("BEA_NEWS",bytes(template.formatted("dated","Current release","dated","<pubDate>Thu, 08 Oct 2026 00:00:00 GMT</pubDate>")));
+        f.clock.advance(5000);
+        news.parseRss("BEA_NEWS",bytes(template.formatted("archive","2007 archive","archive","")));
+        news.parseRss("BEA_NEWS",bytes(template.formatted("future","Future release","future","<pubDate>Fri, 09 Oct 2026 00:00:00 GMT</pubDate>")));
+        var cutoff=f.clock.instant();f.clock.advance(5000);
+        news.parseRss("BEA_NEWS",bytes(template.formatted("late","Received later","late","")));
+        assertThat(news.evidence(cutoff)).extracting(NewsService.News::title).containsExactly("Current release","2007 archive");
+        assertThat(news.evidence(cutoff).get(1).publishedAt()).isNull();
+    }
     @Test void calendarUsesDeclaredZoneAcrossDaylightSavingAndUnfoldsSummary() {
         var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
         String ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:summer\r\nSUMMARY:Employment\r\n Situation\r\nDTSTART;TZID=America/New_York:20261009T083000\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:winter\r\nSUMMARY:CPI\r\nDTSTART;TZID=America/New_York:20261112T083000\r\nEND:VEVENT\r\nEND:VCALENDAR";
