@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type Impact = '偏多' | '偏空' | '待判断' | '存在分歧';
 type Evidence = {
@@ -29,32 +29,56 @@ const evidence: Evidence[] = [
 ];
 
 export default function InformationBoard({ product, onResearch }: { product: string; onResearch: () => void }) {
-  const [view, setView] = useState('影响看板');
-  const [horizon, setHorizon] = useState<'short' | 'long'>('short');
-  const [filter, setFilter] = useState('全部');
-  const [selected, setSelected] = useState<string | null>(null);
+  type Preferences = {view?: string; horizon?: 'short' | 'long'; filter?: string; selected?: string | null};
+  const restored = window.openai?.widgetState?.privateContent?.information as Preferences | undefined;
+  const views = ['影响看板', '消息流', '经济日历'];
+  const filters = ['全部', '偏多', '偏空', '待判断', '存在分歧'];
+  const [view, setView] = useState(restored?.view && views.includes(restored.view) ? restored.view : '影响看板');
+  const [horizon, setHorizon] = useState<'short' | 'long'>(restored?.horizon === 'long' ? 'long' : 'short');
+  const [filter, setFilter] = useState(restored?.filter && filters.includes(restored.filter) ? restored.filter : '全部');
+  const [selected, setSelected] = useState<string | null>(evidence.some(item => item.id === restored?.selected) ? restored!.selected! : null);
+  const remember = (changes: Preferences) => {
+    const saved = window.openai?.widgetState;
+    const preferences = {view,horizon,filter,selected,...changes};
+    window.openai?.setWidgetState?.({modelContent: {...saved?.modelContent, page:'sources', product,
+      informationView: preferences.view, impactHorizon: preferences.horizon, impactFilter: preferences.filter,
+      selectedEvidence: preferences.selected, demoData:true}, privateContent: {...saved?.privateContent,
+      page:'sources', product, information: preferences}}).catch(() => {});
+  };
+  useEffect(() => {
+    const apply = (event: Event) => {
+      const preferences = (event as CustomEvent<{globals?: {widgetState?: {privateContent?: {information?: Preferences}}}}>).detail?.globals?.widgetState?.privateContent?.information;
+      if (!preferences) return;
+      if (preferences.view && views.includes(preferences.view)) setView(preferences.view);
+      if (preferences.horizon === 'short' || preferences.horizon === 'long') setHorizon(preferences.horizon);
+      if (preferences.filter && filters.includes(preferences.filter)) setFilter(preferences.filter);
+      if (preferences.selected === null || evidence.some(item => item.id === preferences.selected)) setSelected(preferences.selected ?? null);
+    };
+    window.addEventListener('openai:set_globals', apply);
+    return () => window.removeEventListener('openai:set_globals', apply);
+  }, []);
   const direction = (item: Evidence) => item[horizon];
   const visible = evidence.filter(item => filter === '全部' || direction(item) === filter);
   const active = evidence.find(item => item.id === selected);
   const tone = (impact: Impact) => impact === '偏多' ? 'gc-bull' : impact === '偏空' ? 'gc-bear' : impact === '存在分歧' ? 'gc-conflict' : 'gc-neutral';
   return <>
-    <div className="gc-tabs" aria-label="信息集合视图">{['影响看板', '消息流', '经济日历'].map(name => <button type="button" key={name} aria-pressed={view === name} onClick={() => { setView(name); setSelected(null); }}>{name}</button>)}</div>
+    <div className="gc-tabs" aria-label="信息集合视图">{views.map(name => <button type="button" key={name} aria-pressed={view === name} onClick={() => { setView(name); setSelected(null); remember({view:name,selected:null}); }}>{name}</button>)}</div>
     {view === '影响看板' && <>
     <section className="gc-panel gc-information-summary">
       <div><span className="gc-eyebrow">{product} · 信息影响看板</span><h2>哪些信息支持上涨，哪些形成压力</h2><p>事实、AI 解读与市场已发生的反应分别展示。</p></div>
-      <label className="gc-horizon-label">影响周期<select value={horizon} onChange={e => setHorizon(e.target.value as 'short' | 'long')}><option value="short">短线 · 15m – 1h</option><option value="long">形势 · 4h – 2d</option></select></label>
+      <label className="gc-horizon-label">影响周期<select value={horizon} onChange={e => { const next=e.target.value as 'short' | 'long'; setHorizon(next); remember({horizon:next}); }}><option value="short">短线 · 15m – 1h</option><option value="long">形势 · 4h – 2d</option></select></label>
     </section>
     <div className="gc-impact-summary" aria-live="polite">
       <div><span className="gc-impact-arrow gc-bull">↑</span><div><b>{evidence.filter(item => direction(item) === '偏多').length} 条支持因素</b><span>当前周期的偏多解读</span></div></div>
       <div><span className="gc-impact-arrow gc-bear">↓</span><div><b>{evidence.filter(item => direction(item) === '偏空').length} 条压制因素</b><span>当前周期的偏空解读</span></div></div>
       <div><span className="gc-impact-arrow gc-neutral">?</span><div><b>{evidence.filter(item => !['偏多', '偏空'].includes(direction(item))).length} 条待判断 / 分歧</b><span>保留反证与缺失信息</span></div></div>
     </div>
-    <div className="gc-impact-toolbar"><div className="gc-tabs" aria-label="影响方向筛选">{['全部', '偏多', '偏空', '待判断', '存在分歧'].map(value => <button type="button" key={value} aria-pressed={filter === value} onClick={() => { setFilter(value); setSelected(null); }}>{value}</button>)}</div><span className="gc-small">去重事件 · 条目数不代表综合强度</span></div>
+    <div className="gc-impact-toolbar"><div className="gc-tabs" aria-label="影响方向筛选">{filters.map(value => <button type="button" key={value} aria-pressed={filter === value} onClick={() => { setFilter(value); setSelected(null); remember({filter:value,selected:null}); }}>{value}</button>)}</div><span className="gc-small">去重事件 · 条目数不代表综合强度</span></div>
     <div className="gc-evidence-grid">{visible.map(item => <section className="gc-panel gc-evidence-card" key={item.id}>
       <div className="gc-panel-head"><span className="gc-badge gc-muted-badge">{item.category}</span><span className={`gc-impact-badge ${tone(direction(item))}`}>{direction(item) === '偏多' ? '↑ ' : direction(item) === '偏空' ? '↓ ' : ''}{direction(item)}{item.target ? ' · 价格' : ''}</span></div>
       <h3>{item.id === 'cost' ? product === 'XAUUSDT' ? '资金费与交易成本变化' : 'CFD 点差与隔夜成本变化' : item.title}</h3><p className="gc-evidence-fact">{item.fact}</p>
       <div className="gc-evidence-reason"><span>对黄金的解读</span><p>{item.reason}</p></div>
-      <div className="gc-evidence-footer"><div><span>{item.source}</span><span>{item.freshness}</span></div><button className="gc-text-button" type="button" onClick={() => setSelected(selected === item.id ? null : item.id)} aria-expanded={selected === item.id}>{selected === item.id ? '收起依据' : '依据与反证'} ↗</button></div>
+      <div className="gc-evidence-footer"><div><span>{item.source}</span><span>{item.freshness}</span></div><button className="gc-text-button" type="button" onClick={() => { const next=selected === item.id ? null : item.id; setSelected(next); remember({selected:next}); }} aria-expanded={selected === item.id}>{selected === item.id ? '收起依据' : '依据与反证'} ↗</button></div>
     </section>)}</div>
     {visible.length === 0 && <div className="gc-panel"><p>当前周期没有这个方向的示例信息。</p></div>}
     {active && <section className="gc-panel gc-evidence-detail"><div className="gc-panel-head"><h3>{active.title} · 影响依据</h3><span className={`gc-impact-badge ${tone(direction(active))}`}>{direction(active)}</span></div><div className="gc-field-list"><div><span>判断依据</span><b>{active.reason}</b></div><div><span>反证与失效条件</span><b>{active.counter}</b></div><div><span>来源与核实状态</span><b>{active.verification}</b></div><div><span>市场是否已反映</span><b>{active.reaction}</b></div><div><span>影响对象</span><b>{active.target ?? '黄金价格方向'} · 产品执行条件另行核验</b></div></div><button type="button" className="gc-text-button" onClick={onResearch}>进入关联 AI 研究 ↗</button></section>}

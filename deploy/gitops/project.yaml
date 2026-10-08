@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: gold-catcher
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: '-1'
+spec:
+  description: Gold Catcher namespace and read-only release acceptance
+  sourceRepos:
+    - git@github.com:Prodigalgal/ircs-prod-config.git
+  destinations:
+    - namespace: gold-catcher
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+  roles:
+    - name: release-read
+      description: CI may inspect this application only
+      policies:
+        - p, proj:gold-catcher:release-read, applications, get, gold-catcher/gold-catcher, allow

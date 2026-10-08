@@ -5,7 +5,7 @@ metadata:
   name: gold-catcher
   namespace: argocd
 spec:
-  project: default
+  project: gold-catcher
   ignoreDifferences:
     - group: apps
       kind: StatefulSet

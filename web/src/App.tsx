@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
 import InformationBoard from './InformationBoard';
+import ResearchRoom from './ResearchRoom';
 
 const pages = [
   ['overview', '市场总览', '先看形势，再看机会'],
   ['sources', '信息集合', '哪些信息支持金价，哪些形成压力'],
-  ['research', 'AI 研究', '结论、分歧与原始证据'],
+  ['research', 'AI 研究', '多 AI 交叉研究、辩论与修订'],
   ['trades', '模拟交易', '从计划到成交，再到净收益'],
   ['review', '策略复盘', '判断是否有效，成本是否覆盖'],
   ['operations', '运行与配置', '数据、模型与系统各自的状态'],
 ] as const;
 type Page = typeof pages[number][0];
 type Product = 'XAUUSDT' | 'XAUUSD.s';
-type WidgetState = { privateContent?: { page?: Page; product?: Product; round?: number } };
+type WidgetState = { modelContent?: Record<string, unknown>; privateContent?: { page?: Page; product?: Product; round?: number; [key: string]: unknown } };
 type Host = { widgetState?: WidgetState; setWidgetState?: (v: unknown) => Promise<void> };
 declare global { interface Window { openai?: Host; Tweak?: new (v: unknown) => { addSlider: (o: unknown, p: string, v: unknown) => void; dispose: () => void }; } }
 
@@ -52,23 +53,25 @@ function PriceChart({ product, compact = false }: { product: Product; compact?: 
 
 function App() {
   const restored = window.openai?.widgetState?.privateContent;
-  const defaultPage = document.getElementById('gold-catcher-app')?.dataset.initialPage === 'sources' ? 'sources' : 'overview';
+  const requestedPage = document.getElementById('gold-catcher-app')?.dataset.initialPage;
+  const defaultPage = pages.find(item=>item[0]===requestedPage)?.[0]??'overview';
   const [page, setPage] = useState<Page>(restored?.page && pages.some(p => p[0] === restored.page) ? restored.page : defaultPage);
   const [product, setProduct] = useState<Product>(restored?.product === 'XAUUSD.s' ? 'XAUUSD.s' : 'XAUUSDT');
-  const [round, setRound] = useState(restored?.round && restored.round < 4 ? restored.round : 0);
+  const [round, setRound] = useState(restored?.round !== undefined && Number.isInteger(restored.round) && restored.round >= -1 && restored.round < 4 ? restored.round : -1);
   const [detail, setDetail] = useState(false);
   const [appNode, setAppNode] = useState<HTMLDivElement | null>(null);
   const title = pages.find(p => p[0] === page)!;
   const navigate = (next: Page) => { setPage(next); setDetail(false); persist(next, product, round); };
   const persist = (p: Page, instrument: Product, stage: number) => {
-    window.openai?.setWidgetState?.({ modelContent: { page: p, product: instrument, design: 'six-page-terminal' }, privateContent: { page: p, product: instrument, round: stage } }).catch(() => {});
+    const saved = window.openai?.widgetState;
+    window.openai?.setWidgetState?.({ modelContent: { ...saved?.modelContent, page: p, product: instrument, researchStage: stage, design: 'six-page-terminal', demoData: true }, privateContent: { ...saved?.privateContent, page: p, product: instrument, round: stage } }).catch(() => {});
   };
   useEffect(() => {
     const handler = (event: Event) => {
       const saved = (event as CustomEvent<{globals?: {widgetState?: WidgetState}}>).detail?.globals?.widgetState?.privateContent;
       if (saved?.page && pages.some(p => p[0] === saved.page)) setPage(saved.page);
       if (saved?.product === 'XAUUSD.s' || saved?.product === 'XAUUSDT') setProduct(saved.product);
-      if (saved?.round !== undefined && saved.round >= 0 && saved.round < 4) setRound(saved.round);
+      if (saved?.round !== undefined && Number.isInteger(saved.round) && saved.round >= -1 && saved.round < 4) setRound(saved.round);
     };
     window.addEventListener('openai:set_globals', handler);
     return () => window.removeEventListener('openai:set_globals', handler);
@@ -106,17 +109,7 @@ function App() {
           <div className="gc-info-foot">示例报价与指标尚未接入。交易策略、杠杆与风险由模型评估，收益扣除实际适用成本。</div>
         </>}
         {page === 'sources' && <InformationBoard product={product} onResearch={() => navigate('research')}/>}
-        {page === 'research' && <>
-          <div className="gc-panel gc-research-summary"><div><span className="gc-eyebrow">研究示例 · {product}</span><h2>方向偏多，短线等待回踩验证</h2><p>综合结论显示支持证据、关键反证、适用周期与失效条件。</p></div>{badge('示例：已完成')}</div>
-          <div className="gc-rounds" aria-label="讨论阶段">{['独立判断', '匿名复核', '同步修订', '综合裁决'].map((v, i) => <button type="button" key={v} aria-pressed={round === i} onClick={() => { setRound(i); persist(page, product, i); }}><span>0{i + 1}</span>{v}</button>)}</div>
-          <div className="gc-model-grid">{['A', 'B', 'C'].map((model, i) => <section className="gc-panel" key={model}><div className="gc-panel-head"><h3>分析者 {model}</h3>{badge(['偏多', '等待', '谨慎偏多'][i])}</div><h3 className="gc-model-heading">{['趋势延续需要价格确认', '事件公布前等待更合适', '回踩入场优于追涨'][i]}</h3><p>{[
-            ['依据均线与波动结构，提出候选方向。首轮不读取其他观点。', '检查他人观点缺少的成交依据，提出事件风险反证。', '在相同反馈窗口内修订计划，并保留原稿。', '综合支持与反证，给出采纳理由和失效条件。'][round],
-            ['关注数据公布窗口与成本，独立选择等待。', '匿名检查趋势观点是否依赖过期信息。', '对新证据的处理进入下一轮，不倒填本轮。', '保留等待观点，作为最终判断的重要分歧。'][round],
-            ['将预期收益与点差、手续费、持有成本对比。', '核对计划是否能在可用报价条件下成交。', '同步提交调整后的入场与退出方案。', '裁决者使用新上下文，并说明未采纳的理由。'][round],
-          ][i]}</p><div className="gc-model-detail"><span>材料</span><b>同一截止快照</b><span>提交</span><b>阶段截止后统一可见</b></div></section>)}</div>
-          <button type="button" className="gc-detail-toggle" aria-expanded={detail} onClick={() => setDetail(!detail)}> {detail ? '收起' : '展开'} 输入预算与讨论审计 <span aria-hidden="true">↓</span></button>
-          {detail && <section className="gc-panel gc-audit-panel"><div className="gc-field-list"><div><span>输入截止时间</span><b>示例：14:30:00 UTC+8</b></div><div><span>输入预算</span><b>按各通道分别验证 token / 字符 / 字节</b></div><div><span>阅读顺序</span><b>匿名排列，跨轮次轮换</b></div><div><span>迟到响应</span><b>归档，不补入已结束阶段</b></div></div></section>}
-        </>}
+        {page === 'research' && <ResearchRoom product={product} stage={round} onStageChange={value=>{setRound(value);persist(page,product,value);}} onTrades={()=>navigate('trades')}/>}
         {page === 'trades' && <>
           <div className="gc-top-stats"><section className="gc-stat"><div className="gc-stat-label">虚拟账户 <span>{product}</span></div><strong>1,037.50 <small>{product === 'XAUUSDT' ? 'USDT' : 'USD'}</small></strong><div className="gc-stat-foot">期初本金 <span>1,000.00</span></div></section><section className="gc-stat"><div className="gc-stat-label">已实现净收益</div><strong>+37.50 <small>结算币种</small></strong><div className="gc-stat-foot">扣除费用 <span>2.50</span></div></section><section className="gc-stat"><div className="gc-stat-label">当前模拟状态</div><strong className="gc-text-value">1 个候选计划</strong><div className="gc-stat-foot">持仓 <span>0 · 示例已平仓</span></div></section></div>
           <section className="gc-panel"><div className="gc-panel-head"><h3>计划与订单</h3>{badge('仅内部账本')}</div><div className="gc-table-container"><table><thead><tr><th>计划</th><th>状态</th><th>报价 / 目标</th><th>杠杆 / 保证金</th><th>结果</th></tr></thead><tbody><tr><td><button className="gc-text-button" type="button" onClick={() => setDetail(true)}>回踩确认做多</button><small>{product}</small></td><td>{badge('等待条件')}</td><td>入场区间待确认</td><td>100X / 约 100U</td><td>未成交</td></tr><tr><td><button className="gc-text-button" type="button" onClick={() => setDetail(true)}>已平仓示例</button><small>{product}</small></td><td>{badge('已结算')}</td><td>4,700 → 4,720</td><td>100X / 94U</td><td>+37.50 <small>净收益</small></td></tr></tbody></table></div></section>

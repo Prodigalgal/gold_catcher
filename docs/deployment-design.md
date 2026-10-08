@@ -66,7 +66,7 @@ Argo 验收核对 Healthy、Synced 和两个预期 image digest，然后核对�
 2. 确认并创建 namespace 内 `gold-catcher-runtime` 与 `gold-catcher-registry` Secret。前者提供单人访问凭据、数据库密码、按厂商的 any2api 凭据；后者只提供镜像拉取凭据。运行密码、部署 key 与 API token 不入 Git。
 3. 首次绑定数据节点并确认 Longhorn RWO 挂载；Java 与数据库尽量同节点，以降低业务查询延迟。数据库调度位置在当时资源和实际卷状态下确定，不沿用其他业务的旧节点记录。
 4. 将 Java、Web、PostgreSQL 的副本数改为 1，设置首个已构建镜像 digest、源码版本、产品采集策略和正确的业务模式。增加数据库迁移与配置校验，验证单个撮合实例。
-5. 将 Application 模板加入 `apps/` 并登记到其 kustomization。仍由既有根 Argo 应用管理，不改变其他 Application 的同步政策。
+5. 将 `project.yaml` 的 AppProject 与 `application.yaml` 的 Application 模板加入 `apps/` 并登记到其 kustomization。专用 Project 只允许本 namespace 和指定 GitOps 源，`release-read` 角色只读取 Gold Catcher Application。仍由既有根 Argo 应用管理，不改变其他 Application 的同步政策。
 6. 核查 Cloudflare zone 中 `gold.mnnu.eu.org` 无冲突，创建与现有 Web 入口相同的 DNS 目标，按平台约定启用代理。复用 `mnnu-gateway` 的 HTTPS 监听器与通配证书；保持 `/api` 指向 Java、其他页面指向 Web，探针不经 API 路由公开。[Gateway API HTTPRoute](https://gateway-api.sigs.k8s.io/guides/user-guides/http-routing/)
 7. 配置 Gold Catcher 限定范围的 Argo 只读验收 token 和单人 HTTP 验收凭据。完成候选验收后启用 `RELEASE_ENABLED=true`，运行完整发布并保存证据。
 
@@ -76,9 +76,9 @@ Argo 验收核对 Healthy、Synced 和两个预期 image digest，然后核对�
 
 | Actions 配置 | 用途 | 本轮状态 |
 | --- | --- | --- |
-| `RELEASE_ENABLED=false`（变量） | 关闭设计阶段自动生产发布 | 初始化 |
-| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 两个镜像的推送权限 | 初始化时按现有私密材料配置，权限需在首次镜像推送中验证 |
-| `GITOPS_DEPLOY_KEY` | 独立 GitOps 仓库的 SSH 写入 | 使用 Gold Catcher 专用 key，避免复用其他应用的身份 |
+| `RELEASE_ENABLED=false`（变量） | 关闭设计阶段自动生产发布 | 已配置 |
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 两个镜像的推送权限 | 已从现有私密材料配置，推送权限尚未实测 |
+| `GITOPS_DEPLOY_KEY` | 独立 GitOps 仓库的 SSH 写入 | 已注册 Gold Catcher 专用写入 key，私钥只进入 Actions Secret 与本地私密目录 |
 | `ARGOCD_READ_TOKEN` | 获取本应用的同步、健康与 digest | 生产激活时配置 |
 | `GOLD_SMOKE_USERNAME` / `GOLD_SMOKE_PASSWORD` | 验证受保护的版本接口 | 生产激活时配置 |
 
