@@ -1,6 +1,15 @@
 server:
   port: 8080
   shutdown: graceful
+  servlet:
+    session:
+      timeout: 30m
+      tracking-modes: cookie
+      cookie:
+        http-only: true
+        secure: ${GOLD_AUTH_COOKIE_SECURE:false}
+        same-site: strict
+        path: /
 spring:
   application:
     name: gold-catcher
@@ -33,3 +42,4 @@ gold:
   auth:
     username: ${GOLD_AUTH_USERNAME:}
     password: ${GOLD_AUTH_PASSWORD:}
+    pow-bits: ${GOLD_AUTH_POW_BITS:18}

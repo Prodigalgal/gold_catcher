@@ -11,6 +11,11 @@ data:
   GOLD_MARKET_ENABLED: "true"
   GOLD_NEWS_ENABLED: "true"
   GOLD_RESEARCH_AUTOMATIC: "false"
+  GOLD_AUTH_COOKIE_SECURE: "true"
+  GOLD_AUTH_POW_BITS: "18"
+  GOLD_GATE_ENABLED: "true"
+  GOLD_GATE_HTTP_URL: https://api.gateio.ws/api/v4
+  GOLD_GATE_WS_URL: wss://fx-ws.gateio.ws/v4/ws/usdt
   GOLD_NEWS_POLL_SECONDS: "30"
   GOLD_EXECUTION_DELAY_MS: "250"
   TZ: UTC

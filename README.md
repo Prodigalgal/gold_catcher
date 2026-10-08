@@ -1,48 +1,49 @@
 # Gold Catcher
 
-Java / React 黄金研究与内部交易模拟系统。分析 Bybit XAUUSDT 与 XAUUSD.s，由 Java 计算指标和账务，经 any2api 调用多个 LLM 研究、复核和提出内部订单。
+Java / React 黄金研究与内部交易模拟系统。交易行情统一使用 Gate：XAU_USDT 黄金永续、XAUUSD 黄金 CFD；指标与账务由 Java 计算，多个模型经 any2api 独立研究、交叉质疑、修订和裁决。
 
-当前版本 **0.2.0，内部模拟 Alpha**。六个页面读取 Java 服务的实际数据：XAUUSDT 公共盘口、六周期指标、官方订阅、分阶段多 AI 研究、内部订单和持久化账本。独立离线设计原型保留在 `web/prototype.html`。
+当前版本 **0.3.0，内部模拟 Alpha**。独立登录页面采用 Session、CSRF 和单次 SHA-256 PoW，登录凭据只在后端配置。六个主页面展示实际行情、信息、讨论、永续内部订单、复盘和运行状态。
 
-XAUUSD.s 等待 MT5 实际报价及成本规则；资金费结算、L2 排队和完整行情回放仍待实现。L1 撮合、配置费率和简化逐仓强平均明确标记为模拟假设。系统只使用公共行情、官方信源和 any2api，不使用交易所下单接口。
+Gate XAU_USDT 已接入 WebSocket 买卖一、公开规格、风险档位、六周期 K 线与历史资金费。CFD 已接入公开 Bid/Ask 与六周期 K 线，并支持后台签名只读查询规格及佣金。CFD 的完整成交、隔夜费类型与结算约定仍需核实；不套用永续撮合或其他平台规则。系统没有外部下单调用。
 
-## 设计
+## 设计与运行边界
 
 - [系统与模拟规则](docs/system-design.md)
 - [信源目录](docs/source-catalog.md)
-- [六页面与信息影响看板](docs/ui-design.md)
+- [页面与信息影响看板](docs/ui-design.md)
 - [K8S 与 CI/CD](docs/deployment-design.md)
 - [当前实现、上下文证据与模拟边界](docs/runtime-alpha.md)
 
-## 本地查看
+## 本地运行
 
-前端需要 Node.js 22.12+，后端需要 JDK 25。
+需要 JDK 25、Node.js 22.12+。
 
 ```powershell
 cd backend
 .\gradlew.bat test bootJar
 cd ..
-./scripts/start-backend.ps1 -KeyFile 'D:\WorkSpace\Project\服务器管理\private\any2api\distribution\api-keys.env' -NoBuild
+.\scripts\start-backend.ps1 -NoBuild -KeyFile @(
+  'D:\WorkSpace\Project\服务器管理\private\any2api\distribution\api-keys.env',
+  'D:\WorkSpace\Project\服务器管理\private\gold-catcher\gate.env'
+)
 ```
 
-另一个终端启动前端：
+另一个终端执行 `cd web`、`npm ci`、`npm run dev`，打开 http://127.0.0.1:5173。后端绑定回环地址。本地访问配置保存在 Git 忽略的 `data/local-access.json`，账本与研究保存在 `data/gold-catcher.mv.db`，重启保留。
 
-```powershell
-cd web
-npm ci
-npm run dev
-```
+Gate 凭据保存在“服务器管理”的私密目录，权限限制为当前 Windows 用户，源仓库和 React 不保存 Key。`GOLD_GATE_API_KEY`、`GOLD_GATE_API_SECRET` 仅由 Java 读取。没有 Gate Key 仍可读取两种产品的公开行情。
 
-打开 `http://127.0.0.1:5173`。未配置本地登录时，脚本生成并保留 `data/local-access.json`（Git 忽略），在登录页输入其中的用户名和密码。后端绑定回环地址；账户和记录保存在 `data/gold-catcher.mv.db`，重启保留。凭据不复制到仓库，不进入 React 构建。
+永续默认采用 Gate 公开合约 Taker 费率，开平仓均保守计费；不是已核实的个人 VIP 费率。配置 `GOLD_TAKER_FEE_RATE` 可显式覆盖。交易数量使用基础 XAU 数量，原生 Gate 合约张数由 Java 按 `quanto_multiplier` 换算。
 
-研究默认手动启动，费率默认未知；模型应选择 WAIT，错误提出 CREATE 时 Java 记录拒绝。配置说明见 `.env.example`，默认路线为 `config/ai-routes.balanced.example.json`（MiniMax、MiMo、GLM 与 Arena），预算属于保守运行配置。可用 `-RoutesFile` 选择其他路线文件。真实复杂讨论可能需要数分钟，已有条件订单由 Java 行情循环持续处理。
+研究默认手动启动。默认路线为 `config/ai-routes.balanced.example.json`；可用 `-RoutesFile` 选择路线。预算参考 any2api 实测报告，但不当作已证明的最大上下文容量。PoW 在 Web Worker 中计算，浏览器不保存密码到 localStorage/sessionStorage。
 
-直接启动后端时，必须配置 `GOLD_AUTH_USERNAME` 与 `GOLD_AUTH_PASSWORD` 才有可用账号。HTTP Basic 与 CSRF 保持启用，浏览器凭据不写入 localStorage/sessionStorage。健康探针只表示进程健康，不表示行情或研究有效。
+直接启动 Java 时需要配置 `GOLD_AUTH_USERNAME` 和 `GOLD_AUTH_PASSWORD`；生产 HTTPS 配置 `GOLD_AUTH_COOKIE_SECURE=true`。Basic 不提供登录旁路，修改操作必须使用 CSRF。健康探针不代表行情或研究有效。
 
-保留离线原型：`npm run build:prototype`，再运行 `python scripts/create_preview.py <输出路径>`。原型不请求后端，示例与运行界面分开构建。
+离线设计原型仍可通过 `npm run build:prototype` 独立构建，示例数据不进入运行界面。
 
-## 发布
+## 交付
 
-源码私仓：<https://github.com/Prodigalgal/gold_catcher>。生产配置沿用 `Prodigalgal/ircs-prod-config` 的独立 GitOps 边界，目标目录 `gold-catcher/oracle`，目标域名 `gold.mnnu.eu.org`。
+源码仓库：https://github.com/Prodigalgal/gold_catcher 。GitOps 配置使用独立的 `Prodigalgal/ircs-prod-config`，目录 `gold-catcher/oracle`，域名 `gold.mnnu.eu.org`。
 
-CI 检查 Java、React 和清单；发布工作流构建 ARM64 镜像，按 digest 回写 GitOps，由 Argo CD 同步，再验证同步版本及受保护的 HTTP 接口。当前 `RELEASE_ENABLED=false`，生产 Application、DNS 和业务运行资源均未启用。模板的初始副本数为零，激活步骤见部署设计。
+CI 验证 Java、React、清单及发布变更；Release 构建 ARM64 镜像，按 digest 提升 GitOps，Argo CD 同步后以 PoW Session 核验 API、Web 源码版本和 Gate 行情。验收模式明确为 INTERNAL_SIMULATION_ALPHA，不将 CFD 完整模拟、全 tick 回放或盈利能力列为已完成能力。
+
+源码中的部署模板保持零副本。生产激活记录与实时验证分开记录，不能把 CI 通过当作已经部署。

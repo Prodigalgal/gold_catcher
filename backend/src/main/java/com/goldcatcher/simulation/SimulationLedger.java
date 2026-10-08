@@ -18,16 +18,23 @@ import tools.jackson.databind.JsonNode;
 public class SimulationLedger {
     public static class Order {
         public String id,decisionId,symbol,side,type,status="PENDING",positionStatus="NONE",riskAssessment,invalidate,
-            exitReason,ruleProvenance="PUBLIC_RULES_CONFIG_FEES",rejection;
+            exitReason,ruleProvenance="GATE_PUBLIC_RULES_TAKER_ASSUMPTION",rejection;
         public int version=1;
-        public Instant createdAt,activatedAt,expiresAt,holdUntil,closedAt,nextFundingTime;
+        public Instant createdAt,activatedAt,expiresAt,holdUntil,closedAt,nextFundingTime,firstFilledAt;
         public long lastSequence=-1;
-        public boolean costIncomplete=false,quoteGap=false,exitRequested=false,triggered=false;
+        public boolean costIncomplete=false,quoteGap=false,fundingUnknown=false,exitRequested=false,triggered=false;
+        public List<FundingExposure> funding=new ArrayList<>();
         @JsonFormat(shape=JsonFormat.Shape.STRING)
         public BigDecimal quantity,leverage,entryPrice,triggerPrice,stopLoss,takeProfit,feeRate,
             filled=ZERO,openQuantity=ZERO,averageEntry=ZERO,margin=ZERO,reservation=ZERO,
-            realizedGross=ZERO,entryFees=ZERO,exitFees=ZERO,netRealized=ZERO;
+            realizedGross=ZERO,entryFees=ZERO,exitFees=ZERO,fundingFees=ZERO,netRealized=ZERO;
     }
+    public static class FundingExposure {
+        public Instant scheduledAt,capturedAt,markTime,settledAt;
+        @JsonFormat(shape=JsonFormat.Shape.STRING) public BigDecimal quantity,mark,rate,charge;
+        public String pricingMethod="NEAR_BOUNDARY_MARK_ASSUMPTION",state="PENDING_RATE";
+    }
+    public record FundingRate(Instant scheduledAt,@JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal rate,Instant retrievedAt) {}
     public static class Ledger {
         @JsonFormat(shape=JsonFormat.Shape.STRING) public BigDecimal balance;
         public List<Order> orders=new ArrayList<>();
@@ -44,16 +51,16 @@ public class SimulationLedger {
         this.store=store;this.market=market;this.settings=settings;this.events=events;this.clock=clock;
         market.onQuote(this::acceptQuote);
     }
-    @PostConstruct void initialize(){store.transaction(()->{if(store.find("ledger","XAUUSDT",Ledger.class).isEmpty()) {
+    @PostConstruct void initialize(){store.transaction(()->{if(store.find("ledger","XAU_USDT",Ledger.class).isEmpty()) {
         var initial=settings.decimal("GOLD_INITIAL_BALANCE","1000");
         if(initial==null||initial.signum()<=0)throw new IllegalArgumentException("Initial virtual balance must be positive");
-        store.save("ledger","XAUUSDT",new Ledger(initial));store.event("XAUUSDT","ACCOUNT_INITIALIZED",Map.of("balance",initial.toPlainString()));
+        store.save("ledger","XAU_USDT",new Ledger(initial));store.event("XAU_USDT","ACCOUNT_INITIALIZED",Map.of("balance",initial.toPlainString()));
     }return null;});}
     public synchronized View view(String symbol) {
         return view(symbol,market.latestQuote());
     }
     public synchronized View view(String symbol,Quote quote) {
-        if(!symbol.equals("XAUUSDT"))return new View(symbol,"USD","WAITING_MT5",null,null,null,null,null,null,null,List.of(),"UNKNOWN","NOT_CONFIGURED");
+        if(!symbol.equals("XAU_USDT"))return new View(symbol,"USD","WAITING_CFD_SIMULATION",null,null,null,null,null,null,null,List.of(),"UNKNOWN","NOT_CONFIGURED");
         Ledger ledger=load();
         BigDecimal frozen=reserved(ledger),unrealized=ZERO,exitFees=ZERO;
         boolean priced=quote!=null&&quote.fresh(clock.instant());
@@ -65,13 +72,14 @@ public class SimulationLedger {
         return new View(symbol,"USDT",priced?"VALUED":"STALE_OR_WAITING_QUOTE",money(ledger.balance),money(ledger.balance.subtract(frozen,MC)),
             priced?money(ledger.balance.add(unrealized,MC)):null,money(frozen),priced?money(unrealized):null,priced?money(exitFees):null,
             quote==null?null:quote.exchangeTime(),List.copyOf(ledger.orders),
-            ledger.orders.stream().anyMatch(o->o.costIncomplete)?"INCOMPLETE_FUNDING_OR_DATA_GAP":settings.decimal("GOLD_TAKER_FEE_RATE",null)==null?"FEE_NOT_CONFIGURED":"CONFIGURED_FEE_ASSUMPTION",
+            ledger.orders.stream().anyMatch(o->o.costIncomplete)?"INCOMPLETE_FUNDING_OR_DATA_GAP":feeRate()==null?"FEE_NOT_CONFIGURED":"PUBLIC_TAKER_FEE_AND_BOUNDARY_MARK_ASSUMPTION",
             "SIMPLIFIED_ISOLATED_MARK_MARGIN");
     }
     public synchronized Order propose(String decisionId,String symbol,JsonNode plan) {
         return store.transaction(()->{
+            if(plan.path("action").asText().equals("WAIT")){store.event(decisionId,"DECISION_WAIT",Map.of("symbol",symbol,"plan",plan));return null;}
             Ledger ledger=load();
-            if(!symbol.equals("XAUUSDT"))throw new IllegalArgumentException("PRODUCT_RULES_MISSING");
+            if(!symbol.equals("XAU_USDT"))throw new IllegalArgumentException("PRODUCT_RULES_MISSING");
             var duplicate=ledger.orders.stream().filter(order->decisionId.equals(order.decisionId)).findFirst();
             if(duplicate.isPresent())return duplicate.get();
             String action=plan.path("action").asText("WAIT");
@@ -93,12 +101,12 @@ public class SimulationLedger {
                 order.quantity=decimal(plan,"quantity");order.leverage=decimal(plan,"leverage");order.entryPrice=decimal(plan,"entryPrice");
                 order.triggerPrice=decimal(plan,"triggerPrice");order.stopLoss=decimal(plan,"stopLoss");order.takeProfit=decimal(plan,"takeProfit");
                 order.expiresAt=Instant.parse(plan.path("expiresAt").asText());order.holdUntil=Instant.parse(plan.path("holdUntil").asText());
-                order.feeRate=settings.decimal("GOLD_TAKER_FEE_RATE",null);
+                order.feeRate=feeRate();
                 Snapshot snapshot=market.snapshot(symbol);validate(order,snapshot,ledger);
                 order.reservation=order.entryPrice.multiply(order.quantity,MC).divide(order.leverage,MC)
                     .add(order.entryPrice.multiply(order.quantity,MC).multiply(order.feeRate,MC),MC);
                 order.nextFundingTime=snapshot.quote().nextFundingTime();
-                if(order.nextFundingTime==null||order.holdUntil.isAfter(order.nextFundingTime))order.costIncomplete=true;
+                order.fundingUnknown=order.nextFundingTime==null;updateCosts(order);
             }catch(RuntimeException invalid){order.status="REJECTED";order.rejection=invalid.getMessage()!=null&&invalid.getMessage().matches("[A-Z0-9_]+")?invalid.getMessage():"INVALID_PLAN_FIELDS";order.reservation=ZERO;}
             ledger.orders.add(order);persist(ledger,order,"PLAN_RECORDED",null);return order;
         });
@@ -121,7 +129,7 @@ public class SimulationLedger {
             for(var order:ledger.orders) {
                 if(order.openQuantity.signum()>0) {
                     if(gap&&!order.quoteGap){order.quoteGap=true;order.costIncomplete=true;changed=true;}
-                    if(order.nextFundingTime!=null&&!quote.exchangeTime().isBefore(order.nextFundingTime)&&!order.costIncomplete){order.costIncomplete=true;changed=true;}
+                    if(captureFunding(order,quote,gap))changed=true;
                     BigDecimal exit=order.side.equals("BUY")?quote.bid():quote.ask();
                     String reason=exitReason(order,quote,rules,ledger);
                     if(reason!=null) {
@@ -165,7 +173,7 @@ public class SimulationLedger {
                     .divide(order.openQuantity.add(amount,MC),MC);
                 order.openQuantity=order.openQuantity.add(amount,MC);order.filled=order.filled.add(amount,MC);order.margin=order.margin.add(margin,MC);
                 order.entryFees=order.entryFees.add(fee,MC);ledger.balance=ledger.balance.subtract(fee,MC);
-                order.netRealized=order.realizedGross.subtract(order.entryFees,MC).subtract(order.exitFees,MC);
+                order.netRealized=net(order);if(order.firstFilledAt==null)order.firstFilledAt=quote.exchangeTime();
                 order.positionStatus="OPEN";order.status=order.filled.compareTo(order.quantity)==0?"FILLED":"PARTIALLY_FILLED";
                 order.reservation=order.entryPrice.multiply(order.quantity.subtract(order.filled,MC),MC).divide(order.leverage,MC)
                     .add(order.entryPrice.multiply(order.quantity.subtract(order.filled,MC),MC).multiply(order.feeRate,MC),MC);
@@ -174,12 +182,12 @@ public class SimulationLedger {
                 if(order.side.equals("BUY"))askAvailable=askAvailable.subtract(amount,MC);else bidAvailable=bidAvailable.subtract(amount,MC);
                 changed=true;
             }
-            if(changed){store.save("ledger","XAUUSDT",ledger);events.changed();}return null;
+            if(changed){store.save("ledger","XAU_USDT",ledger);events.changed();}return null;
         });
         observedSequence=quote.sequence();observedTime=quote.exchangeTime();
     }
     private void validate(Order order,Snapshot snapshot,Ledger ledger) {
-        if(!order.symbol.equals("XAUUSDT")||snapshot.rules()==null)fail("PRODUCT_RULES_MISSING");
+        if(!order.symbol.equals("XAU_USDT")||snapshot.rules()==null)fail("PRODUCT_RULES_MISSING");
         var rules=snapshot.rules();var quote=snapshot.quote();
         if(quote==null||!quote.fresh(clock.instant())||!quote.continuous())fail("QUOTE_NOT_EXECUTABLE");
         if(!rules.status().equals("Trading")||rules.receivedAt().isBefore(clock.instant().minusSeconds(7200)))fail("RULES_NOT_CURRENT");
@@ -226,15 +234,50 @@ public class SimulationLedger {
         BigDecimal released=order.margin.multiply(amount,MC).divide(order.openQuantity,MC);
         ledger.balance=ledger.balance.add(gross,MC).subtract(fee,MC);order.realizedGross=order.realizedGross.add(gross,MC);
         order.exitFees=order.exitFees.add(fee,MC);order.openQuantity=order.openQuantity.subtract(amount,MC);order.margin=order.margin.subtract(released,MC);
-        order.netRealized=order.realizedGross.subtract(order.entryFees,MC).subtract(order.exitFees,MC);
+        order.netRealized=net(order);
         order.exitReason=reason;order.exitRequested=order.openQuantity.signum()>0;order.reservation=ZERO;
         if(order.status.equals("PARTIALLY_FILLED"))order.status="CANCELED";
         order.positionStatus=order.openQuantity.signum()==0?(reason.equals("SIMULATED_LIQUIDATION")?"LIQUIDATED":"CLOSED"):"PARTIALLY_CLOSED";
         if(order.openQuantity.signum()==0)order.closedAt=quote.receivedAt();
         store.event(order.id,"EXIT_FILL_L1_ASSUMPTION",Map.of("quote",quote,"quantity",money(amount),"price",money(price),"gross",money(gross),"fee",money(fee),"reason",reason));
     }
-    private void persist(Ledger ledger,Order order,String event,Quote quote){store.save("ledger","XAUUSDT",ledger);store.event(order.id,event,order);if(quote!=null)store.event(order.id,"DECISION_QUOTE",quote);events.changed();}
-    private Ledger load(){return store.find("ledger","XAUUSDT",Ledger.class).orElseThrow();}
+    private boolean captureFunding(Order order,Quote quote,boolean gap) {
+        var boundary=order.nextFundingTime;if(boundary==null){order.fundingUnknown=true;updateCosts(order);return false;}
+        if(quote.exchangeTime().isBefore(boundary))return false;
+        boolean changed=false;
+        if((order.firstFilledAt==null||order.firstFilledAt.isBefore(boundary))&&order.funding.stream().noneMatch(item->item.scheduledAt.equals(boundary))) {
+            var exposure=new FundingExposure();exposure.scheduledAt=boundary;exposure.capturedAt=quote.receivedAt();exposure.quantity=order.openQuantity;
+            boolean near=!gap&&quote.mark()!=null&&quote.mark().signum()>0&&quote.markTime()!=null
+                &&!quote.markTime().isBefore(boundary.minusSeconds(3))&&!quote.markTime().isAfter(boundary.plusSeconds(3))
+                &&!quote.exchangeTime().isAfter(boundary.plusSeconds(3));
+            if(near){exposure.mark=quote.mark();exposure.markTime=quote.markTime();}
+            else{exposure.state="MISSING_BOUNDARY_MARK";order.fundingUnknown=true;}
+            order.funding.add(exposure);store.event(order.id,"FUNDING_EXPOSURE_CAPTURED",exposure);changed=true;
+        }
+        if(quote.nextFundingTime()!=null&&quote.nextFundingTime().isAfter(boundary)){order.nextFundingTime=quote.nextFundingTime();changed=true;}
+        updateCosts(order);return changed;
+    }
+    public synchronized void acceptFundingHistory(List<FundingRate> rates) {
+        store.transaction(()->{
+            Ledger ledger=load();boolean changed=false;
+            for(var order:ledger.orders)for(var exposure:order.funding) {
+                if(!exposure.state.equals("PENDING_RATE")||exposure.mark==null)continue;
+                var rate=rates.stream().filter(item->item.scheduledAt().equals(exposure.scheduledAt)).findFirst();if(rate.isEmpty())continue;
+                exposure.rate=rate.get().rate();exposure.charge=exposure.mark.multiply(exposure.quantity,MC).multiply(exposure.rate,MC);
+                if(order.side.equals("SELL"))exposure.charge=exposure.charge.negate();
+                exposure.state="SETTLED_ASSUMPTION";exposure.settledAt=clock.instant();
+                order.fundingFees=order.fundingFees.add(exposure.charge,MC);ledger.balance=ledger.balance.subtract(exposure.charge,MC);
+                order.netRealized=net(order);order.version++;updateCosts(order);
+                store.event(order.id,"FUNDING_SETTLED_BOUNDARY_MARK_ASSUMPTION",Map.of("exposure",exposure,"rateSource","GATE_PUBLIC_FUNDING_HISTORY","retrievedAt",rate.get().retrievedAt()));changed=true;
+            }
+            if(changed){store.save("ledger","XAU_USDT",ledger);events.changed();}return null;
+        });
+    }
+    private BigDecimal net(Order order){return order.realizedGross.subtract(order.entryFees,MC).subtract(order.exitFees,MC).subtract(order.fundingFees,MC);}
+    private void updateCosts(Order order){order.costIncomplete=order.quoteGap||order.fundingUnknown||order.funding.stream().anyMatch(item->!item.state.equals("SETTLED_ASSUMPTION"));}
+    private void persist(Ledger ledger,Order order,String event,Quote quote){store.save("ledger","XAU_USDT",ledger);store.event(order.id,event,order);if(quote!=null)store.event(order.id,"DECISION_QUOTE",quote);events.changed();}
+    private Ledger load(){return store.find("ledger","XAU_USDT",Ledger.class).orElseThrow();}
+    private BigDecimal feeRate(){BigDecimal configured=settings.decimal("GOLD_TAKER_FEE_RATE",null);return configured!=null?configured:market.feeRate("XAU_USDT");}
     private Order find(Ledger ledger,String id){return ledger.orders.stream().filter(order->order.id.equals(id)).findFirst().orElseThrow(()->new IllegalArgumentException("ORDER_NOT_FOUND"));}
     private BigDecimal reserved(Ledger ledger){return ledger.orders.stream().map(order->order.margin.add(order.reservation,MC)).reduce(ZERO,(a,b)->a.add(b,MC));}
     private BigDecimal sideQuantity(Ledger ledger,String side){return ledger.orders.stream().filter(order->side.equals(order.side)).map(order->order.openQuantity).reduce(ZERO,(a,b)->a.add(b,MC));}

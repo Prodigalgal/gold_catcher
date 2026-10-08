@@ -46,6 +46,11 @@ public class Any2ApiClient {
             var parameters=capabilities.path("supported_parameters").path("chat_completions");
             boolean structuredTool=capabilities.path("tools").path("function_calling").asBoolean(false)
                 &&capabilities.path("tools").path("strict").asBoolean(false);
+            if(structuredTool) {
+                int format=instruction.indexOf("格式："),wait=instruction.indexOf("WAIT 时");
+                if(format>=0&&wait>format)request.put("messages",List.of(Map.of("role","system","content",instruction.substring(0,format)+instruction.substring(wait)),
+                    Map.of("role","user","content",mapper.writeValueAsString(packet))));
+            }
             if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",outputSchema()))));
                 request.put("tool_choice",Map.of("type","function","function",Map.of("name","submit_research")));}
             String outputParameter=null;

@@ -1,6 +1,6 @@
 # Gold Catcher 黄金分析信源目录
 
-整理日期：2026 年 10 月 8 日。对应产品为 Bybit XAUUSDT 黄金永续和 XAUUSD.s 黄金 CFD，主要分析数分钟至两天的机会，并保留更长周期的背景。
+整理日期：2026 年 10 月 8 日。对应产品为 Gate XAU_USDT 黄金永续和 XAUUSD 黄金 CFD，主要分析数分钟至两天的机会，并保留更长周期的背景。
 
 信源包括交易行情、经济数据与预期、财经快讯、国际突发新闻、官方公告、事件日历和黄金供需。第一版先覆盖正确的产品报价、美国重要发布、快速新闻及美元与利率信息，再扩充背景材料。来源用途、采集方式、时效和限制一起记录，避免把日频统计当成分钟行情，或把转载数量当成独立证据数量。
 
@@ -23,15 +23,15 @@
 
 | ID 与优先级 | 来源及采集内容 | 接入与权限 | 采集调度 | 用途与限制 |
 | --- | --- | --- | --- | --- |
-| M01 P0 | Bybit XAUUSDT：[Ticker](https://bybit-exchange.github.io/docs/v5/websocket/public/ticker)、[盘口](https://bybit-exchange.github.io/docs/v5/websocket/public/orderbook)、[公开成交](https://bybit-exchange.github.io/docs/v5/websocket/public/trade) | 公共 WebSocket，接口文档 | 连续接收；文档所列衍生品 ticker 为 100ms，50 档盘口为 20ms | 内部成交、点差、深度、估值和 Java 指标；推送频率不等于端到端延迟，具体品种支持需订阅验证 |
-| M02 P0 | Bybit 产品规格、历史 K 线、资金费、持仓量与保证金档位：[规格](https://bybit-exchange.github.io/docs/v5/market/instrument)、[K 线](https://bybit-exchange.github.io/docs/v5/market/kline)、[资金费](https://bybit-exchange.github.io/docs/v5/market/history-fund-rate)、[持仓量](https://bybit-exchange.github.io/docs/v5/market/open-interest)、[档位](https://bybit-exchange.github.io/docs/v5/market/risk-limit) | 公共 REST，接口文档 | 启动及补缺；规格约 15–60 分钟，持仓量按源支持的时间粒度，资金费按结算与补查 | 费用和执行规则；实际账户费率另行配置，不能用历史资金费冒充下一次已确定费率 |
-| M03 P0 | Bybit MT5 的 XAUUSD.s：[tick](https://www.mql5.com/en/docs/series/copyticksrange)、[合约属性](https://www.mql5.com/en/docs/constants/environment_state/marketinfoconstants) | 登录正确服务器的只读终端行情桥接；接口文档 | 约 100–500ms 读取新增 tick，保留原序列 | CFD Bid/Ask、合约单位、swap、交易状态；必须取得对应服务器报价，不用其他 XAUUSD 或永续价格替代 |
+| M01 P0 | Gate XAU_USDT：[官方 Futures WebSocket](https://www.gate.com/docs/developers/futures/ws/en/) 的 futures.book_ticker 与 futures.tickers | 公共 WebSocket，运行已接入 | 连续接收，重连首报价不参与开仓 | 买卖一、可见合约张数、标记价格；Java 按 quanto_multiplier 转成基础 XAU 数量，不能将张数直接当盎司 |
+| M02 P0 | Gate 永续规格、K 线、资金费和风险档：[官方 REST](https://www.gate.com/docs/developers/apiv4/en/futures/) | 公共 REST，运行已接入 | 规格、六周期 K 线及资金费每60秒；时间校准每180秒 | 公布的 Taker 费率用于保守模拟，个人费率仍未验证；资金费使用历史结算记录与边界附近标记价格 |
+| M03 P0 | Gate XAUUSD CFD：[官方 CFD API](https://www.gate.com/docs/developers/apiv4/en/cfd/) | tickers、klines、symbols 公开；detail 与 commissions 需要只读 Key | 买卖报价每秒；K 线每60秒，请求间隔至少300ms，失败退避 | 不需要 MT5；报价没有 tick 时间或可见数量，当前仅形势研究，合约规格与佣金未核实前不模拟成交 |
 | M04 P0 通道候选 | [CME 实时期货与期权数据 API](https://www.cmegroup.com/market-data/real-time-futures-and-options-data-api.html)：黄金及相关利率、股指、能源合约 | 商业授权的 WebSocket JSON；接口文档 | 连续接收 | 黄金参考、跨市场反应和利率期货；文档服务含成交、最优报价和日统计，不等同于全深度。合约到期和换月分别处理 |
 | M05 P0 通道候选 | [ICE USDX](https://www.ice.com/forex/usdx)：美元指数及美元指数期货 | ICE 或授权供应商行情，商业通道待确定 | 优先实时流；延迟数据明确标记 | 指数与期货分别记录；不能把单一 EURUSD、广义美元日频指数或其他平台合成值标成 ICE USDX |
 | M06 P1 | [TraderMade 外汇流](https://www.tradermade.com/docs/streaming-data-api)：EURUSD、USDJPY 等关联汇率 | WebSocket JSON、API key、按方案授权；接口文档 | 连续接收 | 外汇联动和必要换算；所选方案品种与 Bid/Ask 需验证，不能根据通用文档认定已覆盖所有贵金属 |
-| M07 P0 | Bybit [公告](https://bybit-exchange.github.io/docs/v5/announcement)与[系统状态](https://bybit-exchange.github.io/docs/v5/system-status) | 公共 REST，接口文档 | 状态约 15–60 秒，公告约 30–60 秒；异常时复核 | 维护、产品变更与服务中断；状态接口不能代替本系统实际连接健康，CFD 规则另看其公告与终端 |
+| M07 P0 | Gate [公告](https://www.gate.com/announcements)与平台状态资料 | 官方网页与 API 文档，后续接入 | 公告目标30–60秒，按许可与实测限制调整 | 维护、交易时段、产品规则、资金费与费用变更；公开公告不能代替实际连接健康 |
 
-XAUUSDT 使用 V5 `category=linear`，XAUUSD.s 使用 MT5，产品和来源不能混用。[Bybit TradFi 接入说明](https://bybit-exchange.github.io/docs/zh-TW/v5/tradfi-integration)
+系统只接入 Gate。XAU_USDT 永续与 XAUUSD CFD 的数据、成本、计量单位和账户分别记录。二者不能互换成交依据。
 
 ## 经济数据和央行信息
 
@@ -59,7 +59,7 @@ XAUUSDT 使用 V5 `category=linear`，XAUUSD.s 使用 MT5，产品和来源不�
 
 | ID 与优先级 | 来源及采集内容 | 接入与权限 | 采集调度 | 用途与限制 |
 | --- | --- | --- | --- | --- |
-| N01 P0 选一 | [金十数据官方 MCP](https://mcp.jin10.com/app/doc.html)：快讯、资讯、参考行情 | 需要 MCP Token；`list_flash`、`search_flash`、`list_news`、`search_news`、`get_news` 等已有文档 | 若许可，快讯约 5–15 秒增量拉取，资讯约 1–5 分钟；额度与补缺参数待测 | 中文突发报道和解释；文档中的报价不是 Bybit 成交源，当前公开工具列表未列经济日历，不能据此假定已覆盖 |
+| N01 P0 选一 | [金十数据官方 MCP](https://mcp.jin10.com/app/doc.html)：快讯、资讯、参考行情 | 需要 MCP Token；`list_flash`、`search_flash`、`list_news`、`search_news`、`get_news` 等已有文档 | 若许可，快讯约 5–15 秒增量拉取，资讯约 1–5 分钟；额度与补缺参数待测 | 中文突发报道和解释；文档中的报价不是 Gate 成交源，当前公开工具列表未列经济日历，不能据此假定已覆盖 |
 | N02 P1 | [华尔街见闻快讯](https://wallstreetcn.com/live)：全球财经快讯与事件提醒 | 公开页面已确认；官方稳定机器接口、授权与方案待确定 | 获准后优先推送或约 15–60 秒增量获取 | 中文交叉核验；不把网页内部接口当成已承诺的开放 API |
 | N03 P0 选一 | LSEG/Reuters：[机器新闻产品](https://www.lseg.com/en/data-catalogue/news)、[News Service](https://developers.lseg.com/en/product/news/news_service_rdp) | 商业授权；MRN/实时平台及 News Service 的流与 API 为不同方案 | 按取得的实时通道接收；搜索与历史补查另调度 | 国际突发、宏观和原始报道；要确认标题、正文、修订、主题覆盖、存储及外部 LLM 使用条件 |
 | N04 P0 选一 | [Bloomberg Event-Driven Feeds](https://professional.bloomberg.com/products/data/enterprise-catalog/event-driven-feeds/)：文字新闻、经济事件与分析 | 商业机器服务；方案和传输方式待确定 | 实时流按授权接收 | 快速国际与金融新闻；新闻服务与 B-PIPE 行情、普通网页或终端订阅分别确认 |
@@ -86,7 +86,7 @@ AP、AFP、Dow Jones，以及财联社等中文机构可继续列入备选池；
 | G03 P1 | [iShares IAU](https://www.ishares.com/us/products/239561/ishares-gold-trust-fund)：黄金持有量、份额与基金数据 | 发行方页面及可用下载 | 日度，约 1 小时检查更新并记录字段 as-of | ETF 交叉背景；页面各字段日期可不同，交易日与会计口径不能混用 |
 | G04 P1 | CFTC COT：[发布日历](https://www.cftc.gov/MarketReports/CommitmentsofTraders/ReleaseSchedule/index.htm)、[公开报告与 API 入口](https://publicreporting.cftc.gov/stories/s/COT-Help/p2fg-u73y/) | 官方报告、PRE 查询；数据集字段和端点接入时确认 | 周度发布窗口采集，按节假日表调整 | 黄金期货持仓结构；通常周五公布此前周二快照，不能当作今天机构仓位 |
 | G05 P2 | [CME 库存与交割报告](https://www.cmegroup.com/solutions/clearing/operations-and-deliveries/nymex-delivery-notices.html) | 交易所报告与下载文件 | 按日度与月度报告，通常约 1 小时检查 | registered/eligible、交割与库存背景；类别调整不直接等于当日实物消费或新增买盘 |
-| G06 P2 | [LBMA 黄金基准价](https://www.lbma.org.uk/prices-and-data/lbma-precious-metal-prices) | LBMA/IBA 基准数据，历史表与使用需要相应许可 | 伦敦每日两次定价，依授权发布后获取 | 基准参考；不是连续 XAUUSD 报价，也不是 Bybit 可成交价 |
+| G06 P2 | [LBMA 黄金基准价](https://www.lbma.org.uk/prices-and-data/lbma-precious-metal-prices) | LBMA/IBA 基准数据，历史表与使用需要相应许可 | 伦敦每日两次定价，依授权发布后获取 | 基准参考；不是连续 XAUUSD 报价，也不是 Gate 可成交价 |
 | G07 P1 | [上海黄金交易所](https://www.sge.com.cn/)：每日行情、上海金基准、公告与交易时段 | 官方页面/报表；实时行情按授权产品确认 | 日报告与基准按日程采集；实时通道另验证 | 亚洲市场与境内外价差；网站延时行情需标识，人民币/克与美元/金衡盎司先做单位、汇率及时间对齐 |
 | G08 P1 | [SAFE 官方储备资产](https://www.safe.gov.cn/safe/gfcbzc/index.html)：中国黄金储备数量与金额 | 官方统计及年度、月份表 | 月度发布窗口，平时日检查 | 央行需求背景；数量变动和美元估值变动分开，金额增加不自动代表增持 |
 
@@ -103,8 +103,8 @@ AP、AFP、Dow Jones，以及财联社等中文机构可继续列入备选池；
 | 美国国债拍卖 | [TreasuryDirect 日程](https://www.treasurydirect.gov/auctions/when-auctions-happen/)和公告 | Bills/Notes/Bonds/TIPS/FRNs，公告、截止、结果、发行及 Quarterly Refunding |
 | 能源与国际政策 | EIA 周报计划、OPEC 正式会议安排、相关机构活动与政策公告 | 库存发布、正式产量会议、已宣布的政策生效日；不能把媒体猜测的会期当已确认 |
 | 黄金统计发布 | WGC、CFTC、ETF 发行方、SAFE | COT 周报、ETF 汇总、黄金储备、季度需求报告；数据所属期与发布时间分开 |
-| 产品交易日程 | Bybit 产品规则与公告、MT5 合约交易时段、[CME 交易及假日日历](https://www.cmegroup.com/trading-hours.html) | 开闭市、节假日、提前收市、维护窗口；逐产品核对，不沿用另一黄金品种日程 |
-| 合约与费用事件 | CME 合约参考资料、Bybit 当前资金费时间、MT5 swap/rollover 与合约规则 | 到期、交割、换月、资金费结算、隔夜费日程及适用规则变化 |
+| 产品交易日程 | Gate 产品规则与公告、CFD 合约交易时段、[CME 交易及假日日历](https://www.cmegroup.com/trading-hours.html) | 开闭市、节假日、提前收市、维护窗口；逐产品核对，不沿用另一黄金品种日程 |
+| 合约与费用事件 | CME 合约参考资料、Gate 当前资金费时间、CFD swap/rollover 与合约规则 | 到期、交割、换月、资金费结算、隔夜费日程及适用规则变化 |
 | 政治与外交安排 | 政府、议会、外交机构和国际组织正式安排，可靠新闻作补充 | 已确认选举、听证、峰会、谈判、政策生效；时间未知则保存日期或范围，不编造时点 |
 | 企业披露 | 关注的金融机构与黄金相关公司的 IR 日历，SEC 发布核验 | 已确认财报、重要公告、金融风险事件；仅收相关名单，非全市场财报扫描 |
 

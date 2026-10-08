@@ -4,13 +4,21 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.ProviderManager;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
+import org.springframework.security.web.savedrequest.NullRequestCache;
 
 @Configuration
 public class SecurityConfiguration {
@@ -27,12 +35,28 @@ public class SecurityConfiguration {
             .roles("OWNER").disabled(!configured).build());
     }
 
+    @Bean PasswordEncoder passwordEncoder() { return PasswordEncoderFactories.createDelegatingPasswordEncoder(); }
+    @Bean AuthenticationManager authenticationManager(UserDetailsService users, PasswordEncoder encoder) {
+        var provider = new DaoAuthenticationProvider(users); provider.setPasswordEncoder(encoder);
+        return new ProviderManager(provider);
+    }
+    @Bean HttpSessionSecurityContextRepository contextRepository() { return new HttpSessionSecurityContextRepository(); }
+    @Bean HttpSessionCsrfTokenRepository csrfRepository() { return new HttpSessionCsrfTokenRepository(); }
+
     @Bean
-    SecurityFilterChain security(HttpSecurity http) throws Exception {
+    SecurityFilterChain security(HttpSecurity http, HttpSessionSecurityContextRepository contexts, HttpSessionCsrfTokenRepository csrf) throws Exception {
         return http.authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/health/liveness", "/actuator/health/readiness").permitAll()
+                .requestMatchers("/actuator/health/liveness", "/actuator/health/readiness", "/api/auth/challenge", "/api/auth/login").permitAll()
                 .anyRequest().authenticated())
-            .httpBasic(Customizer.withDefaults())
+            .httpBasic(AbstractHttpConfigurer::disable).formLogin(AbstractHttpConfigurer::disable)
+            .securityContext(context -> context.securityContextRepository(contexts).requireExplicitSave(true))
+            .csrf(config -> config.csrfTokenRepository(csrf))
+            .requestCache(cache -> cache.requestCache(new NullRequestCache()))
+            .exceptionHandling(errors -> errors
+                .authenticationEntryPoint((request,response,error) -> { response.setStatus(401); response.setContentType("application/json"); response.getWriter().write("{\"error\":\"AUTH_REQUIRED\"}"); })
+                .accessDeniedHandler((request,response,error) -> { response.setStatus(403); response.setContentType("application/json"); response.getWriter().write("{\"error\":\"CSRF_OR_ACCESS_DENIED\"}"); }))
+            .logout(logout -> logout.logoutUrl("/api/auth/logout").deleteCookies("JSESSIONID")
+                .logoutSuccessHandler((request,response,auth) -> { response.setContentType("application/json"); response.getWriter().write("{\"status\":\"LOGGED_OUT\"}"); }))
             .build();
     }
 }

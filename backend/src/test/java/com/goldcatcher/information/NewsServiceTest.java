@@ -26,5 +26,13 @@ class NewsServiceTest {
         assertThat(news.calendar().get(1).scheduledAt().toString()).isEqualTo("2026-11-12T13:30:00Z");
         assertThat(news.calendar().get(0).title()).isEqualTo("EmploymentSituation");
     }
+    @Test void calendarsKeepTheirSourceAndIdsSeparate() {
+        var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
+        var ics=bytes("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:same\r\nSUMMARY:Release\r\nDTSTART;VALUE=DATE-TIME:20261029T123000Z\r\nEND:VEVENT\r\nEND:VCALENDAR");
+        assertThat(news.parseCalendar("BEA_CALENDAR",ics,"https://www.bea.gov/news/schedule")).isEqualTo(1);
+        assertThat(news.parseCalendar("BLS_CALENDAR",ics,"https://www.bls.gov/schedule")).isEqualTo(1);
+        assertThat(news.calendar()).hasSize(2);assertThat(news.calendar().stream().map(NewsService.CalendarEvent::source)).containsExactlyInAnyOrder("BEA_CALENDAR","BLS_CALENDAR");
+        assertThat(news.calendar().stream().map(NewsService.CalendarEvent::id).distinct().count()).isEqualTo(2);
+    }
     private byte[] bytes(String text){return text.getBytes(StandardCharsets.UTF_8);}
 }

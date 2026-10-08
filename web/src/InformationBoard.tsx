@@ -76,7 +76,7 @@ export default function InformationBoard({ product, onResearch }: { product: str
     <div className="gc-impact-toolbar"><div className="gc-tabs" aria-label="影响方向筛选">{filters.map(value => <button type="button" key={value} aria-pressed={filter === value} onClick={() => { setFilter(value); setSelected(null); remember({filter:value,selected:null}); }}>{value}</button>)}</div><span className="gc-small">去重事件 · 条目数不代表综合强度</span></div>
     <div className="gc-evidence-grid">{visible.map(item => <section className="gc-panel gc-evidence-card" key={item.id}>
       <div className="gc-panel-head"><span className="gc-badge gc-muted-badge">{item.category}</span><span className={`gc-impact-badge ${tone(direction(item))}`}>{direction(item) === '偏多' ? '↑ ' : direction(item) === '偏空' ? '↓ ' : ''}{direction(item)}{item.target ? ' · 价格' : ''}</span></div>
-      <h3>{item.id === 'cost' ? product === 'XAUUSDT' ? '资金费与交易成本变化' : 'CFD 点差与隔夜成本变化' : item.title}</h3><p className="gc-evidence-fact">{item.fact}</p>
+      <h3>{item.id === 'cost' ? product === 'XAU_USDT' ? '资金费与交易成本变化' : 'CFD 点差与隔夜成本变化' : item.title}</h3><p className="gc-evidence-fact">{item.fact}</p>
       <div className="gc-evidence-reason"><span>对黄金的解读</span><p>{item.reason}</p></div>
       <div className="gc-evidence-footer"><div><span>{item.source}</span><span>{item.freshness}</span></div><button className="gc-text-button" type="button" onClick={() => { const next=selected === item.id ? null : item.id; setSelected(next); remember({selected:next}); }} aria-expanded={selected === item.id}>{selected === item.id ? '收起依据' : '依据与反证'} ↗</button></div>
     </section>)}</div>

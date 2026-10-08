@@ -18,10 +18,10 @@ class ResearchServiceTest {
         f=new TestSupport();var market=mock(MarketFeed.class);ledger=mock(SimulationLedger.class);ai=mock(Any2ApiClient.class);
         var routes=new ArrayList<RuntimeSettings.AiRoute>();for(String id:List.of("p","q","r","j"))routes.add(new RuntimeSettings.AiRoute(id,id,id+"/model","https://localhost/"+id+"/v1","TEST_KEY",10000,14000,30000,2,1000,2,id.equals("j")));
         f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(routes));f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","1");f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","1");
-        var quote=new Quote("XAUUSDT","TEST",1,f.clock.instant(),f.clock.instant(),d("100"),d("101"),d("1"),d("1"),d("100"),d("100"),f.clock.instant(),d("0"),f.clock.instant().plusSeconds(3600),true);
-        var rules=new Instrument("XAUUSDT","Trading","USDT",d(".01"),d(".001"),d(".001"),d("1000"),d("1000"),d("1"),d("1"),d("100"),d(".01"),List.of(),f.clock.instant());
-        when(market.snapshot("XAUUSDT")).thenReturn(new Snapshot("XAUUSDT","LIVE",quote,rules,Map.of(),List.of(),f.clock.instant(),null));
-        when(ledger.view("XAUUSDT",quote)).thenReturn(new SimulationLedger.View("XAUUSDT","USDT","VALUED","1000","1000","1000","0","0","0",f.clock.instant(),List.of(),"UNKNOWN","TEST"));
+        var quote=new Quote("XAU_USDT","TEST",1,f.clock.instant(),f.clock.instant(),d("100"),d("101"),d("1"),d("1"),d("100"),d("100"),f.clock.instant(),d("0"),f.clock.instant().plusSeconds(3600),true);
+        var rules=new Instrument("XAU_USDT","Trading","USDT",d(".01"),d(".001"),d(".001"),d("1000"),d("1000"),d("1"),d("1"),d("100"),d(".01"),List.of(),f.clock.instant());
+        when(market.snapshot("XAU_USDT")).thenReturn(new Snapshot("XAU_USDT","LIVE",quote,rules,Map.of(),List.of(),f.clock.instant(),null));
+        when(ledger.view("XAU_USDT",quote)).thenReturn(new SimulationLedger.View("XAU_USDT","USDT","VALUED","1000","1000","1000","0","0","0",f.clock.instant(),List.of(),"UNKNOWN","TEST"));
         research=new ResearchService(f.settings,f.store,market,new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock),ledger,ai,f.mapper,new EventHub(),f.clock);
     }
     @AfterEach void cleanup(){research.stop();}
@@ -36,7 +36,7 @@ class ResearchServiceTest {
             return new Any2ApiClient.Answer(route.model(),"摘要","EXPLICIT_OUTPUT_SUMMARY",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",
                 new Any2ApiClient.Budget(100,100,34,2,1000,"hash","CONFIG","NOT_SUPPORTED"),1);
         });
-        var run=research.start("XAUUSDT","SHORT");
+        var run=research.start("XAU_USDT","SHORT");
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
         while(research.find(run.id).status.equals("RUNNING")&&System.nanoTime()<deadline)Thread.sleep(20);
         while(research.find(run.id).messages.stream().anyMatch(m->m.state().equals("TIMED_OUT"))&&System.nanoTime()<deadline)Thread.sleep(20);
@@ -48,11 +48,11 @@ class ResearchServiceTest {
             else for(var peer:packet.path("peers"))assertThat(peer.path("id").asText().split("-")[5]).isEqualTo(Integer.toString(phase-1));
             if(phase==1)assertThat(packet.path("peers")).hasSize(2);
         }
-        verify(ledger,times(1)).propose(eq(run.id),eq("XAUUSDT"),any());
+        verify(ledger,times(1)).propose(eq(run.id),eq("XAU_USDT"),any());
     }
     @Test void insufficientValidModelsNeverCreatesAnOrder() throws Exception {
         when(ai.complete(any(),anyString(),any())).thenThrow(new IllegalStateException("MODEL_NOT_AVAILABLE"));
-        var run=research.start("XAUUSDT","SHORT");long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
+        var run=research.start("XAU_USDT","SHORT");long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
         while(research.find(run.id).status.equals("RUNNING")&&System.nanoTime()<deadline)Thread.sleep(20);
         assertThat(research.find(run.id).status).isEqualTo("LOW_QUORUM");verify(ledger,never()).propose(anyString(),anyString(),any());
     }

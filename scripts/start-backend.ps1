@@ -1,8 +1,8 @@
-param([string]$KeyFile = '', [string]$RoutesFile = '', [switch]$NoBuild)
+param([string[]]$KeyFile = @(), [string]$RoutesFile = '', [switch]$NoBuild)
 $ErrorActionPreference = 'Stop'
 $goldRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if ($KeyFile) {
-    $goldKeyPath = (Resolve-Path -LiteralPath $KeyFile).Path
+foreach ($goldFile in $KeyFile) {
+    $goldKeyPath = (Resolve-Path -LiteralPath $goldFile).Path
     foreach ($goldLine in [IO.File]::ReadAllLines($goldKeyPath)) {
         if ($goldLine -match '^\s*(ANY2API_[A-Z0-9_]+|GOLD_[A-Z0-9_]+)\s*=(.*)$') {
             $goldName = $Matches[1]; $goldValue = $Matches[2].Trim().Trim('"').Trim("'")
@@ -18,7 +18,7 @@ if (!$env:GOLD_AUTH_USERNAME -or !$env:GOLD_AUTH_PASSWORD) {
     $goldAccessPath = Join-Path $goldData 'local-access.json'
     if (Test-Path -LiteralPath $goldAccessPath) { $goldAccess = Get-Content -LiteralPath $goldAccessPath -Raw | ConvertFrom-Json }
     else {
-        $goldAccess = @{ username = 'owner'; password = [Guid]::NewGuid().ToString('N') }
+        $goldAccess = @{ username = 'admin'; password = [Guid]::NewGuid().ToString('N') }
         [IO.File]::WriteAllText($goldAccessPath, ($goldAccess | ConvertTo-Json))
     }
     $env:GOLD_AUTH_USERNAME = $goldAccess.username; $env:GOLD_AUTH_PASSWORD = $goldAccess.password
@@ -27,10 +27,11 @@ if (!$env:GOLD_AUTH_USERNAME -or !$env:GOLD_AUTH_PASSWORD) {
 $env:SERVER_ADDRESS = '127.0.0.1'
 if (!$env:GOLD_MARKET_ENABLED) { $env:GOLD_MARKET_ENABLED = 'true' }
 if (!$env:GOLD_NEWS_ENABLED) { $env:GOLD_NEWS_ENABLED = 'true' }
+# Unset fee override uses the public Gate XAU_USDT contract taker fee.
 if (!$env:GOLD_DB_URL) { $env:GOLD_DB_URL = 'jdbc:h2:file:' + ($goldData -replace '\\','/') + '/gold-catcher;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH' }
 Push-Location (Join-Path $goldRoot 'backend')
 try {
     if (!$NoBuild) { & .\gradlew.bat bootJar; if ($LASTEXITCODE -ne 0) { throw 'Backend build failed.' } }
-    & java -jar build/libs/gold-catcher-server-0.2.0.jar
+    & java -jar build/libs/gold-catcher-server-0.3.0.jar
     if ($LASTEXITCODE -ne 0) { throw 'Backend process failed.' }
 } finally { Pop-Location }

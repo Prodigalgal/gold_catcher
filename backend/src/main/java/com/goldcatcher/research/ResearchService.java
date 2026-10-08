@@ -35,6 +35,7 @@ public class ResearchService {
         各阶段独立请求：首轮看不到同伴稿；后续只引用 packet.peers 中已解封的上一阶段消息。
         根据 phase 给出独立判断、质疑与反驳、接受/拒绝后的修订，或综合裁决。裁决必须说明采纳与未采纳理由，保留分歧。
         明确成交、费用、杠杆和资金风险。触价不等于成交；资金费尚未结算的净结果不能称为已知盈利。
+        quantity 使用 evidence.quantityUnit；市价 entryPrice 是买入最高/卖出最低可接受价格，其他价格为限价、触发、止损和止盈。
         只返回一个 JSON 对象，不用 Markdown。title 最多80字，analysisSummary 最多500字，output 最多600字。
         如果请求提供 submit_research 函数，必须通过该函数提交上述 JSON 作为 arguments；不要在文本中重复输出。
         格式：{"title":"观点标题","analysisSummary":"可见分析摘要","output":"正式输出与采纳理由",
@@ -42,7 +43,7 @@ public class ResearchService {
         "quotedMessages":["上一阶段消息id"],"evidenceRefs":["证据id"],"changes":"具体修订",
         "impacts":[{"newsId":"证据id","horizon":"SHORT|LONG","direction":"BULLISH|BEARISH|UNKNOWN|MIXED","reason":"影响依据","counter":"反证"}],
         "plan":{"action":"WAIT|CREATE|CANCEL|CLOSE","orderId":"仅取消/退出时填写","side":"BUY|SELL",
-        "type":"LIMIT|MARKET|STOP_LIMIT|STOP_MARKET","quantity":"合约数量十进制字符串","leverage":"十进制字符串",
+        "type":"LIMIT|MARKET|STOP_LIMIT|STOP_MARKET","quantity":"基础 XAU 数量十进制字符串，以 evidence.quantityUnit 为准","leverage":"十进制字符串",
         "entryPrice":"限价；市价单为买入最高/卖出最低可接受成交价","triggerPrice":null,"stopLoss":null,"takeProfit":null,
         "expiresAt":"挂单过期UTC ISO时间","holdUntil":"持仓最晚退出UTC ISO时间","riskAssessment":"风险与盈利亏损情景",
         "invalidate":"失效条件"}}。
@@ -77,7 +78,7 @@ public class ResearchService {
         if(researchers.size()<2||researchers.size()>6||researchers.stream().map(route->route.provider()+"/"+route.model()).distinct().count()<2)
             throw new IllegalArgumentException("TWO_DISTINCT_MODELS_REQUIRED");
         var snapshot=market.snapshot(symbol);
-        if(!snapshot.state().equals("LIVE")||snapshot.rules()==null)throw new IllegalArgumentException("MARKET_NOT_READY");
+        if(!snapshot.state().equals("LIVE")||snapshot.quote()==null)throw new IllegalArgumentException("MARKET_NOT_READY");
         if(!running.tryAcquire())throw new IllegalArgumentException("RESEARCH_ALREADY_RUNNING");
         try {
             Run run=new Run();run.id=UUID.randomUUID().toString();run.symbol=symbol;run.horizon=horizon;run.startedAt=clock.instant();
@@ -90,21 +91,32 @@ public class ResearchService {
             for(var indicator:compactIndicators)for(var field:indicator.path("values").properties())if(!field.getValue().isNull())
                 ((tools.jackson.databind.node.ObjectNode)indicator.path("values")).put(field.getKey(),new java.math.BigDecimal(field.getValue().asText()).setScale(8,java.math.RoundingMode.HALF_EVEN).stripTrailingZeros().toPlainString());
             core.put("indicators",compactIndicators);core.put("indicatorPrecision","LLM view rounded to 8 decimals by Java; calculation retains DECIMAL128 precision.");
-            var compactRules=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(snapshot.rules());
-            compactRules.set("tiers",mapper.valueToTree(snapshot.rules().tiers().stream().limit(4).toList()));
-            compactRules.put("totalTierCount",snapshot.rules().tiers().size());compactRules.put("tierScope","First four risk tiers only; do not propose exposure outside supplied tiers. Full instrument rule snapshot is archived separately.");
-            core.put("rules",compactRules);
+            if(snapshot.rules()!=null) {
+                var compactRules=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(snapshot.rules());
+                compactRules.set("tiers",mapper.valueToTree(snapshot.rules().tiers().stream().limit(4).toList()));
+                compactRules.put("totalTierCount",snapshot.rules().tiers().size());compactRules.put("tierScope","First four risk tiers only; do not propose exposure outside supplied tiers. Full instrument rule snapshot is archived separately.");
+                core.put("rules",compactRules);
+            } else core.put("rules",null);
+            var provenance=market.provenance(symbol);Map<String,Object> selectedProvenance=new LinkedHashMap<>();
+            for(String key:List.of("venue","nativeSymbol","transport","quoteTimestampMeaning","depthStatus","rulesState","quantityUnit","leverageStepMethod","cfdRules"))
+                if(provenance.containsKey(key)&&provenance.get(key)!=null)selectedProvenance.put(key,provenance.get(key));
+            core.put("marketProvenance",selectedProvenance);
+            core.put("allowedActions",snapshot.rules()==null?List.of("WAIT"):List.of("WAIT","CREATE","CANCEL","CLOSE"));
             var accountJson=mapper.valueToTree(account);((tools.jackson.databind.node.ObjectNode)accountJson).set("orders",mapper.valueToTree(account.orders().stream()
                 .filter(order->order.openQuantity.signum()>0||List.of("PENDING","PARTIALLY_FILLED").contains(order.status)).toList()));
-            core.put("account",accountJson);core.put("feeRate",settings.text("GOLD_TAKER_FEE_RATE","UNKNOWN"));
+            core.put("account",accountJson);core.put("feeRate",market.costConfiguration(symbol).get("takerFeeRate"));
+            core.put("feeSource",market.costConfiguration(symbol).get("source"));core.put("costConfiguration",market.costConfiguration(symbol));
+            core.put("quantityUnit",symbol.equals("XAU_USDT")?"XAU base units; native contracts = quantity / quantityMultiplier.":"CFD volume is lots; contract_volume defines XAU units per lot. Execution is not enabled.");
             core.put("marginReference","约100 USDT保证金/笔，属于用户习惯参考，不是固定仓位；实际数量与风险由模型评估。接受单笔保证金全部亏损。");
-            core.put("costLimitations","Fee rates are configured assumptions; funding settlement not implemented. Liquidation is an explicit simplified isolated-margin model.");
+            core.put("costLimitations","Public taker fees are assumptions. Funding: historical rate + near-boundary mark; missing marks unknown. Liquidation simplified. CFD swap/execution conventions unverified.");
             core.put("news",news.evidence(run.evidenceCutoff).stream().limit(4).map(article->Map.of("id",article.id(),"title",article.title(),
                 "excerpt",article.excerpt().length()>180?article.excerpt().substring(0,180)+" [选取前180字符，原文可追溯]":article.excerpt(),"source",article.source(),
-                "publishedAt",article.publishedAt()==null?"UNKNOWN":article.publishedAt().toString(),"receivedAt",article.receivedAt().toString(),"version",article.version(),"link",article.link())).toList());
-            core.put("calendar",news.calendar().stream().filter(event->event.receivedAt()!=null&&!event.receivedAt().isAfter(run.evidenceCutoff)).limit(6).toList());
+                "publishedAt",article.publishedAt()==null?"UNKNOWN":article.publishedAt().toString(),"receivedAt",article.receivedAt().toString(),"version",article.version())).toList());
+            core.put("calendar",news.calendar().stream().filter(event->event.receivedAt()!=null&&!event.receivedAt().isAfter(run.evidenceCutoff)).limit(6)
+                .map(event->Map.of("id",event.id(),"title",event.title(),"source",event.source(),"scheduledAt",event.scheduledAt())).toList());
+            core.put("selectionNote","News versions, full calendars and original source links are archived; this view selects four news excerpts and six scheduled releases. Forecast/actual values not supplied.");
             core.put("evidenceIds",List.of("market:quote","market:rules","account","indicators"));
-            store.save("research-rules",run.id,snapshot.rules());store.save("research-indicators",run.id,snapshot.indicators());
+            if(snapshot.rules()!=null)store.save("research-rules",run.id,snapshot.rules());store.save("research-indicators",run.id,snapshot.indicators());
             run.evidence=mapper.valueToTree(core);run.evidenceHash=NewsService.hash(mapper.writeValueAsString(core));
             List<AiRoute> shuffled=new ArrayList<>(researchers);Collections.shuffle(shuffled,new Random(run.seed));
             String[] roles={"价格与趋势","宏观与事件","风险与成交","反证核验","成本与持有","综合研究"};
@@ -128,6 +140,7 @@ public class ResearchService {
             synchronized(run){run.verdict=verdict;}
             var plan=verdict.path("plan");
             if(!plan.isObject())throw new IllegalStateException("MISSING_JUDGE_PLAN");
+            if(run.evidence.path("rules").isNull()&&!plan.path("action").asText().equals("WAIT"))throw new IllegalStateException("PRODUCT_RULES_MISSING");
             var order=ledger.propose(run.id,run.symbol,plan);
             synchronized(run){run.orderId=order==null?null:order.id;run.status="COMPLETED";}
         }catch(Exception failure){synchronized(run){run.status="FAILED";run.error=Any2ApiClient.safeError(failure);}}
@@ -188,8 +201,8 @@ public class ResearchService {
             if(original.path("plan").path("riskAssessment").isTextual())plan.set("riskAssessment",original.path("plan").path("riskAssessment"));
             if(original.path("plan").path("invalidate").isTextual())plan.set("invalidate",original.path("plan").path("invalidate"));
         }else if(original.has("plan"))compact.set("plan",original.path("plan"));
-        compact.put("selectionNote","Analysis summary omitted; output/changes bounded to 700 chars with an explicit marker; WAIT-only non-applicable fields omitted; all impacts/counter evidence and actionable plan numbers retained. Full message archived.");
-        for(String field:List.of("output","changes")){String value=original.path(field).asText();compact.put(field,value.length()>700?value.substring(0,700)+" [摘要截短，全文已归档]":value);}
+        compact.put("selectionNote","Text excerpt; full output archived. Numeric plan fields and references retained.");
+        for(String field:List.of("output","changes")){String value=original.path(field).asText();int limit=field.equals("output")?400:120;compact.put(field,value.length()>limit?value.substring(0,limit)+" [摘录，全文已归档]":value);}
         return compact;
     }
     public Map<String,Object> scheduling(){var queued=pendingNews.get();return Map.of("automatic",settings.enabled("GOLD_RESEARCH_AUTOMATIC"),"running",running.availablePermits()==0,
@@ -200,8 +213,8 @@ public class ResearchService {
         if(!settings.enabled("GOLD_RESEARCH_AUTOMATIC")||running.availablePermits()==0)return;
         var trigger=pendingNews.get();
         if(trigger==null&&lastAutomatic.plusSeconds(settings.integer("GOLD_RESEARCH_INTERVAL_SECONDS",300)).isAfter(clock.instant()))return;
-        if(!market.snapshot("XAUUSDT").state().equals("LIVE"))return;
-        try {start("XAUUSDT","SHORT");lastAutomatic=clock.instant();pendingNews.compareAndSet(trigger,null);automaticError=null;}
+        if(!market.snapshot("XAU_USDT").state().equals("LIVE"))return;
+        try {start("XAU_USDT","SHORT");lastAutomatic=clock.instant();pendingNews.compareAndSet(trigger,null);automaticError=null;}
         catch(IllegalArgumentException invalid){lastAutomatic=clock.instant();automaticError=invalid.getMessage();}
     }
 }

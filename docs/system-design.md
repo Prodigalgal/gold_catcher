@@ -10,7 +10,7 @@ Gold Catcher 持续收集影响黄金的信息和价格数据，计算量化指�
 
 | 项目 | 设计约定 |
 | --- | --- |
-| 产品 | Bybit XAUUSDT 黄金永续、XAUUSD.s 黄金 CFD |
+| 产品 | Gate XAU_USDT 黄金永续、Gate XAUUSD 黄金 CFD |
 | 分析范围 | 重点覆盖数分钟至两天，同时使用更长周期的信息理解市场形势 |
 | 资金参考 | 每笔约 100U 保证金，允许参考资金全部亏损；具体风险由 LLM 动态评估 |
 | 杠杆 | 按实际产品和仓位档位选择，覆盖可用的高杠杆范围 |
@@ -24,7 +24,7 @@ Gold Catcher 持续收集影响黄金的信息和价格数据，计算量化指�
 | 信息时效 | 按信源发布方式分级采集，记录采集延迟、覆盖缺口与决策时的新鲜度 |
 | AI 讨论 | 独立首轮、匿名复核、顺序轮换和同步提交；全程保留证据版本与输入预算 |
 | 自动化范围 | 内部出单和管理无需逐笔人工确认 |
-| 当前阶段 | 设计、Java 工程骨架与 React 原型；采集、研究、撮合与账本尚未实现 |
+| 当前阶段 | 0.3.0 内部模拟 Alpha：Gate 公共行情、指标、官方信息、多模型研究和永续账本已实现；CFD 成交等待规则与费用 |
 
 约 100U 是操作参考，不作为写死的程序常数。LLM 可以建议降低仓位、承担更大比例的单笔风险、等待或不出单。系统不增加统一的盈利百分比、止损百分比、最低胜率或最低盈亏比门槛。
 
@@ -34,19 +34,19 @@ Gold Catcher 持续收集影响黄金的信息和价格数据，计算量化指�
 
 黄金信息和宏观判断可以共用，产品行情与模拟账本分别处理。
 
-| 内容 | XAUUSDT | XAUUSD.s |
+| 内容 | XAU_USDT | GATE:XAUUSD |
 | --- | --- | --- |
-| 产品性质 | USDT 结算的黄金永续 | MT5 黄金 CFD |
-| 行情来源 | Bybit V5 公共行情接口 | 对应 Bybit MT5 服务器的实际报价 |
-| 产品规则来源 | instruments-info、risk-limit、费用配置 | MT5 合约属性与 Bybit CFD 规则 |
+| 产品性质 | USDT 结算的黄金永续 | 黄金 CFD |
+| 行情来源 | Gate Futures WebSocket / REST | Gate 官方 TradFi REST 报价与 K 线 |
+| 产品规则来源 | Gate contracts、risk_limit_tiers 及公开 Taker 费率 | Gate symbols/detail 与 symbols/commissions；需要只读 Key |
 | 持仓成本 | 交易手续费和资金费 | 点差、适用佣金和隔夜费 |
 | 模拟成交依据 | 买卖报价、公开成交与可用盘口深度 | 对应服务器的 Bid、Ask 和订单执行规则 |
 | 保证金与强平 | 按选定永续保证金模式及档位计算 | 按虚拟 CFD 账户净值和占用保证金计算 |
-| 数据不可用时 | 保留状态并标记数据缺口 | 不用 XAUUSDT 报价替代 CFD 成交价 |
+| 数据不可用时 | 保留状态并标记数据缺口 | 不用 XAU_USDT 报价替代 CFD 成交价 |
 
-Bybit 原生黄金永续使用 V5 category=linear；XAUUSD.s 属于 MT5 CFD，不能通过 V5 查询或交易。[Bybit TradFi 接入说明](https://bybit-exchange.github.io/docs/zh-TW/v5/tradfi-integration)
+产品数据使用 [Gate 官方 API v4](https://www.gate.com/docs/developers/apiv4/en/)。CFD 的公开报价、K 线、产品列表均无需运行 MT5；私有规格和佣金接口需要 Key。
 
-启动和定时刷新时读取实际产品规格，记录规则生效时间。不能把某个品类的最高杠杆当成所有黄金产品、所有仓位的可用杠杆。XAUUSDT 的杠杆、数量精度和保证金档位以当前接口结果为准；CFD 同时考虑具体 symbol 和曝光规模。
+启动和定时刷新时读取实际产品规格，记录规则生效时间。不能把某个品类的最高杠杆当成所有黄金产品、所有仓位的可用杠杆。XAU_USDT 的杠杆、数量精度和保证金档位以当前接口结果为准；CFD 同时考虑具体 symbol 和曝光规模。
 
 ## 整体结构
 
@@ -72,7 +72,7 @@ flowchart TD
 
 React 通过后端 REST 查询快照，通过 SSE 接收有版本和游标的行情摘要、研究进度、订单与账户变化。前端断线后重新取一致快照，再接续增量；页面刷新频率与后端逐事件模拟频率分别设置。图表可以合并渲染更新，后端成交评估不能因此丢掉 tick。
 
-CFD 通过 Windows 上连接 MT5 的只读行情适配器接入 Java 后端。终端侧可用 MQL5 桥接，传输方式和历史 tick 能力在接入时验证；不能假定存在已经可用的官方 Java MT5 SDK。主系统的采集编排、指标、LLM、模拟和账务均用 Java 实现。MT5 适配器只输出带来源、时间和序号的市场数据，不包含交易命令接口。
+CFD 通过 Gate 官方 TradFi API 直接接入 Java。公开行情已接通；details 与 commissions 需要只读 Key。主系统的采集、指标、LLM、模拟和账务都使用 Java，不配置 MT5 终端。
 
 高频原始数据保存为分段压缩文件，PostgreSQL 保存索引、分析快照、订单和账务记录。保存周期和数据容量可配置；不能先删除订单复盘必需的数据，再保留无法解释的历史利润。
 
@@ -134,9 +134,9 @@ LLM 推理统一经过 `D:\WorkSpace\Project\ai\any2api` 对应的网关。Java 
 
 行情至少记录 Bid、Ask、Last、Mark、Index、报价数量、产品状态以及交易所时间。缺失字段保留为空，不能用零填充。不同价格各有用途：可成交买卖价用于成交和退出估值，Mark 等适用价格用于保证金和强平检查。
 
-XAUUSDT 使用公共 WebSocket 接收报价和盘口、公开成交；REST 用于规则、历史 K 线、资金费和断线恢复。订单簿收到新 snapshot 后重建，delta 按增删改规则应用。公共盘口不能恢复真实订单的完整队列位置，因此任何内部成交都保留其模拟假设。[报价字段](https://bybit-exchange.github.io/docs/v5/websocket/public/ticker)、[订单簿规则](https://bybit-exchange.github.io/docs/v5/websocket/public/orderbook)、[公开成交](https://bybit-exchange.github.io/docs/v5/websocket/public/trade)
+XAU_USDT 使用官方 futures.book_ticker 和 futures.tickers；REST 补充 contracts、risk_limit_tiers、candlesticks 和 funding_rate。盘口原生尺寸为合约张数，Java 使用 quanto_multiplier 统一到基础 XAU 数量。每一报价数量在内部订单间共享，重连、迟到、重复和断档分别处理。[官方 WebSocket](https://www.gate.com/docs/developers/futures/ws/en/)
 
-CFD 使用 MT5 的 tick 序列获取 Bid 和 Ask，并读取合约乘数、数量步长、价格精度、保证金和 swap 属性。只轮询最新报价可能漏掉中途触发，优先按游标读取新增 tick，再对边界重复记录去重。相同毫秒可以有多个 tick，不能只按时间戳去重；终端批次保留原始顺序、边界内容和重复次数，遇到同步超时或缓冲不足时标记缺口。[MT5 tick 数据](https://www.mql5.com/en/docs/series/copyticksrange)、[合约属性](https://www.mql5.com/en/docs/constants/environment_state/marketinfoconstants)
+CFD 使用官方 GET /tradfi/symbols/XAUUSD/tickers 的 Bid/Ask 和 /klines。响应 timestamp 是服务器响应时间，不能当作最后一次 tick 时间；接口不提供可见数量或完整 tick 流。当前以 REST 快照进行形势研究，不能补造两次查询之间的触发和成交。[官方 CFD API](https://www.gate.com/docs/developers/apiv4/en/cfd/)
 
 黄金信息按影响路径整理：
 
@@ -347,9 +347,9 @@ LLM 可以决定买卖方向、是否出单、仓位和杠杆、入场方式、�
 
 ### CFD 挂单
 
-使用 XAUUSD.s 对应服务器的 Bid 和 Ask。买单与卖单的触发侧、订单执行方式和止盈止损侧按产品规则分别配置。
+使用 GATE:XAUUSD 对应服务器的 Bid 和 Ask。买单与卖单的触发侧、订单执行方式和止盈止损侧按产品规则分别配置。
 
-CFD 的挂单触发和成交是两个事件。Bybit 的 CFD 滑点说明将相关挂单触发后的执行描述为市场执行，可能出现滑点，不能直接沿用永续限价的价格保护语义。[CFD 滑点规则](https://www.bybit.com/en/help-center/article/Slippage-in-CFD-Trading)
+CFD 的触发与成交分别建模。Gate 当前产品的市价/限价语义、可用数量和滑点规则必须独立核实；未确认前不模拟成交，也不套用永续规则。
 
 缺少 CFD 深度时，按当前报价加配置的执行假设模拟，注明缺少数量与队列证据。未来若取得更完整的数据，另存规则版本，不重写此前成绩。
 
@@ -400,7 +400,7 @@ S = 多头取 +1，空头取 -1
 
 永续开平仓分别按 maker 或 taker 收费。历史资金费在对应结算时点，按符合持仓条件的数量和适用价格计算；没有结算数据时保留估计费用与未确认状态。
 
-CFD 按账户模式收费。Bybit 的 Zero-Fee 模式把费用计入点差，Tight-Spread 模式收取适用佣金；swap 按合约方向、服务器结算时间和 rollover 日期计算。[CFD 模式与 symbol 后缀](https://www.bybit.com/en/help-center/article/Introduction-to-CFD)、[CFD 费用](https://www.bybit.com/en/help-center/article/Bybit-CFD-Fees-Explained)
+CFD 点差、每手佣金、swap 与结算日历以 Gate 当前产品规格及佣金接口为依据。不能将零佣金与零成本混同；未知隔夜费不填零。[Gate CFD 接口](https://www.gate.com/docs/developers/apiv4/en/cfd/)
 
 费用配置带来源、账户模式和生效时间。未核实的费率使用显式假设并给出净收益范围；缺少费用不能按零成本认定盈利。
 
@@ -416,9 +416,9 @@ CFD 按账户模式收费。Bybit 的 Zero-Fee 模式把费用计入点差，Tig
 
 下单、条件触发、部分成交、撤单和退出分别按产品规则预留、检查或释放资金。同一笔保证金不能重复冻结，也不能同时供多个已建立仓位使用。两个产品的黄金方向敞口合并呈现给 LLM，帮助识别重复承担的市场风险。
 
-永续模拟使用选定的保证金模式、Mark 和实际档位计算维持保证金，包括必要的费用与档位扣减。逐仓与全仓分别处理，不能通用地用“逆向变化等于 1 除以杠杆”代替强平规则。[永续保证金档位](https://bybit-exchange.github.io/docs/v5/market/risk-limit)
+永续模拟使用 Gate 公开风险档位、维护保证金率与 deduction，采用明确标注的简化逐仓模型。不能通用地用“逆向变化等于 1 除以杠杆”代替强平规则。[Gate 风险档位接口](https://www.gate.com/docs/developers/apiv4/en/futures/)
 
-CFD 的 Margin Level 为账户净值除以占用保证金再乘 100%；Bybit 公开规则在低于 50% 时开始 Stop-Out，按其平仓顺序建模。部分保证金对应的仓位可能消耗同一账户的其他资金，模拟时不人为将每笔亏损裁剪到 100U。[CFD 保证金与 Stop-Out](https://www.bybit.com/en/help-center/article/Margin-Calculations-on-CFD-Trading)
+CFD 的 Margin Level、Stop-Out 阈值和退出顺序以 Gate 账户与具体产品规则为依据，当前尚未核实，不采用其他交易平台的阈值或平仓顺序。
 
 触发强平后记录 LIQUIDATED，按适用规则和可用退出报价计算结果。无法准确复现某项强平费用、部分强平或执行过程时，保留近似等级和结果区间。所有强平与亏损进入成绩。
 
@@ -506,7 +506,7 @@ AI 研究以多 AI 聊天室呈现独立意见、引用、质疑、反驳、同�
 
 ## 实现顺序与验收
 
-先搭建 Java、React、PostgreSQL 与页面设计骨架，完成产品规则、公共行情、确定性的内部撮合和账本；再加入分级信源、指标、any2api 接入、上下文预算与公平讨论；随后完成持仓复核、CFD 接入和看板。首版完成范围包含两个产品，接入顺序优先 XAUUSDT。
+先搭建 Java、React、PostgreSQL 与页面设计骨架，完成产品规则、公共行情、确定性的内部撮合和账本；再加入分级信源、指标、any2api 接入、上下文预算与公平讨论；随后完成持仓复核、CFD 接入和看板。首版完成范围包含两个产品，接入顺序优先 XAU_USDT。
 
 验收以可重放的具体情景为准：
 
@@ -534,4 +534,4 @@ AI 研究以多 AI 聊天室呈现独立意见、引用、质疑、反驳、同�
 22. Java 指标的固定样本结果与独立公式或可信参考实现核对；覆盖预热、零分母、缺失量、断线、未收盘 K 线和多周期边界，不能用未来确认的数据生成早期信号。
 23. 同一输入下指标增量计算与全量重算一致；React、LLM 证据包和复盘引用相同的 Java 指标版本，模型自行估算的值不进入正式指标库。
 
-实现前的配置项包括：虚拟账户初始资金和保证金模式、any2api 地址与厂商 key 注入、实际模型与预算档案、各来源授权和采集时效、新闻及预期数据源、MT5 行情桥接、费用与舍入模式、执行延迟和滑点假设、数据保存周期、讨论阶段期限及主题配色。现有私有配置是接入线索，密钥有效性、线上能力和链路时延仍需在实现接入时验证；配置值不影响本文已经明确的内部模拟范围和由 LLM 动态评估交易风险的方式。
+实现前的配置项包括：虚拟账户初始资金和保证金模式、any2api 地址与厂商 key 注入、实际模型与预算档案、各来源授权和采集时效、新闻及预期数据源、Gate CFD 规格及费用读取、费用与舍入模式、执行延迟和滑点假设、数据保存周期、讨论阶段期限及主题配色。现有私有配置是接入线索，密钥有效性、线上能力和链路时延仍需在实现接入时验证；配置值不影响本文已经明确的内部模拟范围和由 LLM 动态评估交易风险的方式。

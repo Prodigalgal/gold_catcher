@@ -26,7 +26,15 @@ public final class MarketTypes {
         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal minLeverage,
         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal maxLeverage,
         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal leverageStep,
-        List<RiskTier> tiers,Instant receivedAt) {}
+        List<RiskTier> tiers,Instant receivedAt,
+        @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal quantityMultiplier,
+        @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal takerFeeRate) {
+        public Instrument(String symbol,String status,String settlement,BigDecimal tickSize,BigDecimal qtyStep,BigDecimal minQty,
+            BigDecimal maxQty,BigDecimal maxLimitQty,BigDecimal minNotional,BigDecimal minLeverage,BigDecimal maxLeverage,
+            BigDecimal leverageStep,List<RiskTier> tiers,Instant receivedAt) {
+            this(symbol,status,settlement,tickSize,qtyStep,minQty,maxQty,maxLimitQty,minNotional,minLeverage,maxLeverage,leverageStep,tiers,receivedAt,BigDecimal.ONE,null);
+        }
+    }
     public record Quote(String symbol,String source,long sequence,Instant exchangeTime,Instant receivedAt,
         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal bid,
         @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal ask,
@@ -37,7 +45,11 @@ public final class MarketTypes {
         Instant markTime,@JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal fundingRate,
         Instant nextFundingTime,boolean continuous) {
         public boolean fresh(Instant now) {
-            return bid!=null&&ask!=null&&bid.signum()>0&&ask.compareTo(bid)>=0&&bidSize!=null&&askSize!=null&&bidSize.signum()>=0&&askSize.signum()>=0
+            return bidSize!=null&&askSize!=null&&bidSize.signum()>=0&&askSize.signum()>=0&&priceFresh(now);
+        }
+        /** A fresh displayed price does not establish executable size or tick continuity. */
+        public boolean priceFresh(Instant now) {
+            return bid!=null&&ask!=null&&bid.signum()>0&&ask.compareTo(bid)>=0
                 && !receivedAt.isAfter(now.plusSeconds(2)) && !exchangeTime.isAfter(now.plusSeconds(2))
                 && Duration.between(receivedAt,now).compareTo(Duration.ofSeconds(3))<=0
                 && Duration.between(exchangeTime,now).compareTo(Duration.ofSeconds(3))<=0;

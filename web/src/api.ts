@@ -1,12 +1,14 @@
-export type Product = 'XAUUSDT' | 'XAUUSD.s';
+export type Product = 'XAU_USDT' | 'GATE:XAUUSD';
 export type Direction = 'BULLISH' | 'BEARISH' | 'UNKNOWN' | 'MIXED';
-export type Session = { username: string; csrfHeader: string; csrfToken: string; authorization: string };
-export type Quote = { symbol: string; source: string; sequence: number; exchangeTime: string; receivedAt: string; bid: string; ask: string; bidSize: string; askSize: string; last: string | null; mark: string | null; markTime: string | null; fundingRate: string | null; nextFundingTime: string | null; continuous: boolean };
+export type Session = { username: string; csrfHeader: string; csrfToken: string };
+export type Challenge = { id: string; nonce: string; difficulty: number; expiresInSeconds: number; algorithm: string };
+export type LoginChallenge = { challenge: Challenge; csrfHeader: string; csrfToken: string };
+export type Quote = { symbol: string; source: string; sequence: number; exchangeTime: string; receivedAt: string; bid: string; ask: string; bidSize: string | null; askSize: string | null; last: string | null; mark: string | null; markTime: string | null; fundingRate: string | null; nextFundingTime: string | null; continuous: boolean };
 export type Indicators = { frame: string; samples: number; closedThrough: string | null; state: string; values: Record<string, string | null> };
-export type Candle = { start: string; end: string; open: string; high: string; low: string; close: string; volume: string };
-export type Instrument = { symbol: string; maxLeverage: string; tickSize: string; qtyStep: string; receivedAt: string; status: string };
+export type Candle = { start: string; end: string; open: string; high: string; low: string; close: string; volume: string | null };
+export type Instrument = { symbol: string; maxLeverage: string; tickSize: string; qtyStep: string; receivedAt: string; status: string; quantityMultiplier: string; takerFeeRate: string | null };
 export type Market = { symbol: Product; state: string; quote: Quote | null; rules: Instrument | null; indicators: Record<string, Indicators>; candles: Candle[]; retrievedAt: string; error: string | null };
-export type Order = { id: string; decisionId: string; symbol: string; side: string; type: string; status: string; positionStatus: string; riskAssessment: string; invalidate: string; rejection: string | null; createdAt: string; activatedAt: string; expiresAt: string | null; holdUntil: string | null; closedAt: string | null; quantity: string | null; leverage: string | null; entryPrice: string | null; averageEntry: string; filled: string; openQuantity: string; margin: string; reservation: string; entryFees: string; exitFees: string; realizedGross: string; netRealized: string; costIncomplete: boolean; quoteGap: boolean; exitReason: string | null; version: number };
+export type Order = { id: string; decisionId: string; symbol: string; side: string; type: string; status: string; positionStatus: string; riskAssessment: string; invalidate: string; rejection: string | null; createdAt: string; activatedAt: string; expiresAt: string | null; holdUntil: string | null; closedAt: string | null; quantity: string | null; leverage: string | null; entryPrice: string | null; averageEntry: string; filled: string; openQuantity: string; margin: string; reservation: string; entryFees: string; exitFees: string; fundingFees: string; realizedGross: string; netRealized: string; costIncomplete: boolean; quoteGap: boolean; exitReason: string | null; version: number };
 export type Account = { symbol: string; currency: string; state: string; balance: string | null; available: string | null; equity: string | null; frozenMargin: string | null; unrealized: string | null; estimatedExitFees: string | null; valuedAt: string | null; orders: Order[]; costStatus: string; liquidationMethod: string };
 export type News = { id: string; source: string; title: string; excerpt: string; link: string; publishedAt: string | null; receivedAt: string; verification: string; version: number };
 export type CalendarEvent = { id: string; source: string; title: string; scheduledAt: string; originalZone: string; link: string; receivedAt: string };
@@ -18,14 +20,11 @@ export type Answer = { model: string; analysis: string; analysisSource: string; 
 export type Message = { id: string; actorId: string; role: string; stage: number; state: string; startedAt: string; completedAt: string | null; error: string | null; readingOrder: string[]; answer: Answer | null };
 export type Run = { id: string; symbol: Product; horizon: string; status: string; error: string | null; evidenceHash: string; orderId: string | null; stage: number; seed: number; evidenceCutoff: string; startedAt: string; completedAt: string | null; actors: { id: string; role: string; routeId: string; provider: string; model: string }[]; messages: Message[]; verdict: Output | null; evidence: { news?: { id: string; version: number }[]; [key: string]: unknown } };
 export type Model = { routeId: string; provider: string; model: string; credentialConfigured: boolean; catalog: { available?: boolean; runtime?: { status?: string }; capabilities?: Record<string, unknown> } | null; catalogRetrievedAt: string | null; lastInference: string; inferenceError: string | null };
-export type Dashboard = { serverTime: string; market: Market; account: Account; news: News[]; calendar: CalendarEvent[]; sources: Source[]; models: Model[]; budgets: { id: string; inputEstimateLimit: number; characterLimit: number; byteLimit: number; outputReserve: number; timeoutSeconds: number; judge: boolean }[]; research: Run | null; researchHistory: { id: string; horizon: string; status: string; startedAt: string; stage: number }[]; scheduling: { automatic: boolean; running: boolean; lastAutomatic: string; queuedNews: string; error: string }; review: { closedOrders: number; gross: string; fees: string; netBeforeUnknownCosts: string; fullyCostedOrders: number; positiveRecordedNet: number; status: string }; clock: { state: string; source?: string; offsetMillis?: number; uncertaintyMillis?: number; calibratedAt?: string; error?: string } };
+export type Dashboard = { serverTime: string; marketProvenance: { venue: string; nativeSymbol: string; transport: string; pollSeconds?: number; quoteTimestampMeaning: string; depthStatus: string; rulesState: string; cfdRules?: Record<string,string | string[] | number>; rulesReceivedAt?: string | null; rulesError?: string | null; simulationReady: boolean; historyError?: string | null; lastHistorySuccess?: string | null; historyState?: string }; funding: { state: string; lastSuccess: string | null; error: string | null; pricingMethod: string }; costConfiguration: {takerFeeRate: string; feePerLot?: string; feeUnit?: string; source: string; reference: string}; market: Market; account: Account; news: News[]; calendar: CalendarEvent[]; sources: Source[]; models: Model[]; budgets: { id: string; inputEstimateLimit: number; characterLimit: number; byteLimit: number; outputReserve: number; timeoutSeconds: number; judge: boolean }[]; research: Run | null; researchHistory: { id: string; horizon: string; status: string; startedAt: string; stage: number }[]; scheduling: { automatic: boolean; running: boolean; lastAutomatic: string; queuedNews: string; error: string }; review: { closedOrders: number; gross: string; fees: string; netBeforeUnknownCosts: string; fullyCostedOrders: number; positiveRecordedNet: number; status: string }; clock: { state: string; source?: string; offsetMillis?: number; uncertaintyMillis?: number; calibratedAt?: string; error?: string } };
 export type AuditEvent = { sequence: number; aggregateId: string; type: string; payload: Record<string, unknown>; occurredAt: string };
 
-export function authorization(username: string, password: string) {
-  return 'Basic ' + btoa(Array.from(new TextEncoder().encode(`${username}:${password}`), byte => String.fromCharCode(byte)).join(''));
-}
-export async function call<T>(path: string, session: Pick<Session, 'authorization'> & Partial<Session>, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const headers: Record<string, string> = { Authorization: session.authorization, Accept: 'application/json' };
+export async function call<T>(path: string, session: Partial<Session> = {}, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) { headers['Content-Type'] = 'application/json'; if (session.csrfHeader && session.csrfToken) headers[session.csrfHeader] = session.csrfToken; }
   const response = await fetch(`/api/${path}`, { headers, credentials: 'include', method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body), signal });
   if (!response.ok) {
@@ -35,10 +34,10 @@ export async function call<T>(path: string, session: Pick<Session, 'authorizatio
   }
   return response.json();
 }
-export async function watch(session: Session, changed: () => void, state: (connected: boolean) => void, signal: AbortSignal) {
+export async function watch(_session: Session, changed: () => void, state: (connected: boolean) => void, signal: AbortSignal) {
   while (!signal.aborted) {
     try {
-      const response = await fetch('/api/events', { headers: { Authorization: session.authorization, Accept: 'text/event-stream' }, credentials: 'include', signal });
+      const response = await fetch('/api/events', { headers: { Accept: 'text/event-stream' }, credentials: 'include', signal });
       if (!response.ok || !response.body) throw new Error('EVENT_STREAM_UNAVAILABLE');
       state(true); const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '', revision = '';
       try {

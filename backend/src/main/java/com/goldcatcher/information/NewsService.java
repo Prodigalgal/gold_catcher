@@ -28,6 +28,9 @@ public class NewsService {
     private static final Map<String,String> FEEDS=Map.of(
         "FED_PRESS","https://www.federalreserve.gov/feeds/press_all.xml",
         "FED_SPEECH","https://www.federalreserve.gov/feeds/speeches.xml",
+        "BEA_NEWS","https://apps.bea.gov/rss/rss.xml",
+        "ECB_PRESS","https://www.ecb.europa.eu/rss/press.html",
+        "BEA_CALENDAR","https://www.bea.gov/news/schedule",
         "BLS_NEWS","https://www.bls.gov/feed/bls_latest.rss",
         "BLS_CALENDAR","https://www.bls.gov/schedule/news_release/bls.ics");
     private final RuntimeSettings settings;private final RemoteHttp http;private final DocumentStore store;
@@ -62,10 +65,10 @@ public class NewsService {
         }
     }
     private void fetch(Map.Entry<String,String> feed,SourceState previous) {
-            int interval=feed.getKey().equals("BLS_CALENDAR")?3600:settings.integer("GOLD_NEWS_POLL_SECONDS",30);
+            int interval=feed.getKey().endsWith("_CALENDAR")?3600:Math.max(15,settings.integer("GOLD_NEWS_POLL_SECONDS",30));
             try {
                 var builder=HttpRequest.newBuilder(URI.create(feed.getValue())).timeout(Duration.ofSeconds(12))
-                    .header("User-Agent","GoldCatcher/0.2 official-feed-reader");
+                    .header("User-Agent","GoldCatcher/0.3 official-feed-reader");
                 if(etags.containsKey(feed.getKey()))builder.header("If-None-Match",etags.get(feed.getKey()));
                 var response=http.send(builder.GET().build(),1_500_000);
                 if(response.statusCode()==304) {
@@ -74,11 +77,12 @@ public class NewsService {
                 }
                 if(response.statusCode()!=200)throw new IllegalStateException("HTTP_"+response.statusCode());
                 response.headers().firstValue("etag").ifPresent(value->etags.put(feed.getKey(),value));
-                int count=feed.getKey().equals("BLS_CALENDAR")?parseCalendar(response.body(),feed.getValue()):parseRss(feed.getKey(),response.body());
+                int count=feed.getKey().equals("BEA_CALENDAR")?parseBeaSchedule(response.body(),feed.getValue()):
+                    feed.getKey().endsWith("_CALENDAR")?parseCalendar(feed.getKey(),response.body(),feed.getValue()):parseRss(feed.getKey(),response.body());
                 states.put(feed.getKey(),new SourceState(feed.getKey(),feed.getValue(),"CURRENT",interval,clock.instant(),
                     clock.instant().plusSeconds(interval),null,count));events.changed();
             } catch(Exception failure) {
-                int delay=previous!=null&&previous.error()!=null?Math.min(previous.intervalSeconds()*2,300):60;
+                int delay=previous!=null&&previous.error()!=null?Math.min(previous.intervalSeconds()*2,feed.getKey().endsWith("_CALENDAR")?3600:300):60;
                 states.put(feed.getKey(),new SourceState(feed.getKey(),feed.getValue(),"FETCH_FAILED",delay,
                     previous==null?null:previous.lastSuccess(),clock.instant().plusSeconds(delay),
                     failure instanceof IllegalStateException&&failure.getMessage()!=null&&failure.getMessage().matches("HTTP_[0-9]+")?failure.getMessage():"SOURCE_FETCH_OR_PARSE_FAILED",0));events.changed();
@@ -110,6 +114,31 @@ public class NewsService {
         return changed;
     }
     int parseCalendar(byte[] data,String link) {
+        return parseCalendar("BLS_CALENDAR",data,link);
+    }
+    int parseBeaSchedule(byte[] bytes,String link) {
+        String html=new String(bytes,StandardCharsets.UTF_8);
+        var yearMatch=java.util.regex.Pattern.compile(">Year (20[0-9]{2})<").matcher(html);
+        if(!yearMatch.find())throw new IllegalStateException("BEA_CALENDAR_FORMAT_CHANGED");
+        int year=Integer.parseInt(yearMatch.group(1));int entries=0;
+        var rows=java.util.regex.Pattern.compile("<tr class=\"scheduled-releases-type-press\">(.*?)</tr>",java.util.regex.Pattern.DOTALL).matcher(html);
+        while(rows.find()) {
+            String row=rows.group(1);String date=htmlField(row,"<div class=\"release-date\">(.*?)</div>");
+            String time=htmlField(row,"<small class=\"text-muted\">(.*?)</small>");
+            String title=htmlField(row,"<td class=\"release-title[^\"]*\"[^>]*>(.*?)</td>");
+            if(date.isBlank()||time.isBlank()||title.isBlank())continue;
+            var local=LocalDateTime.parse(date+" "+year+" "+time,DateTimeFormatter.ofPattern("MMMM d yyyy h:mm a",Locale.US));
+            Instant scheduled=local.atZone(ZoneId.of("America/New_York")).toInstant();
+            String id=hash("BEA_CALENDAR:"+title+":"+scheduled);
+            store.save("calendar",id,new CalendarEvent(id,"BEA_CALENDAR",title,scheduled,"America/New_York",link,clock.instant()));entries++;
+        }
+        if(entries==0)throw new IllegalStateException("BEA_CALENDAR_FORMAT_CHANGED");return entries;
+    }
+    private String htmlField(String source,String regex) {
+        var match=java.util.regex.Pattern.compile(regex,java.util.regex.Pattern.DOTALL).matcher(source);
+        return match.find()?match.group(1).replaceAll("<[^>]+>"," ").replace("&amp;","&").replace("&#039;","'").replace("&quot;","\"").replaceAll("\\s+"," ").trim():"";
+    }
+    int parseCalendar(String calendarSource,byte[] data,String link) {
         String source=new String(data,StandardCharsets.UTF_8).replaceAll("\\r?\\n[ \\t]","");
         int entries=0;
         for(String block:source.split("BEGIN:VEVENT")) {
@@ -129,8 +158,8 @@ public class NewsService {
                 if(start.endsWith("Z")){scheduled=LocalDateTime.parse(start.substring(0,start.length()-1),DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss")).toInstant(ZoneOffset.UTC);zone="UTC";}
                 else scheduled=LocalDateTime.parse(start,DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss")).atZone(ZoneId.of(zone)).toInstant();
             }catch(RuntimeException invalid){continue;}
-            String id=hash("BLS_CALENDAR:"+(uid.isBlank()?title+start:uid));
-            store.save("calendar",id,new CalendarEvent(id,"BLS_CALENDAR",title,scheduled,zone,link,clock.instant()));entries++;
+            String id=hash(calendarSource+":"+(uid.isBlank()?title+start:uid));
+            store.save("calendar",id,new CalendarEvent(id,calendarSource,title,scheduled,zone,link,clock.instant()));entries++;
         }
         return entries;
     }

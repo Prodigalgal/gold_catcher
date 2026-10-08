@@ -11,7 +11,7 @@ const pages = [
   ['operations', '运行与配置', '数据、模型与系统各自的状态'],
 ] as const;
 type Page = typeof pages[number][0];
-type Product = 'XAUUSDT' | 'XAUUSD.s';
+type Product = 'XAU_USDT' | 'GATE:XAUUSD';
 type WidgetState = { modelContent?: Record<string, unknown>; privateContent?: { page?: Page; product?: Product; round?: number; [key: string]: unknown } };
 type Host = { widgetState?: WidgetState; setWidgetState?: (v: unknown) => Promise<void> };
 declare global { interface Window { openai?: Host; Tweak?: new (v: unknown) => { addSlider: (o: unknown, p: string, v: unknown) => void; dispose: () => void }; } }
@@ -30,7 +30,7 @@ function PriceChart({ product, compact = false }: { product: Product; compact?: 
   const values = frame === '1h'
     ? [54, 66, 48, 57, 45, 37, 49, 40, 27, 35, 29, 17, 24, 16, 25, 11, 22, 15, 19, 9, 14, 8]
     : [70, 58, 64, 59, 75, 67, 53, 60, 56, 43, 49, 37, 47, 39, 46, 31, 37, 30, 25, 37, 26, 21, 31, 26, 16, 24, 20, 26, 19, 15];
-  values[values.length - 1] = product === 'XAUUSDT' ? 24.6667 : 27.3333;
+  values[values.length - 1] = product === 'XAU_USDT' ? 24.6667 : 27.3333;
   const left = 12, right = width - 65, top = 18, bottom = chartHeight - 28;
   const x = (i: number) => left + (i / (values.length - 1)) * (right - left);
   const y = (v: number) => top + (v / 100) * (bottom - top);
@@ -56,7 +56,7 @@ function App() {
   const requestedPage = document.getElementById('gold-catcher-app')?.dataset.initialPage;
   const defaultPage = pages.find(item=>item[0]===requestedPage)?.[0]??'overview';
   const [page, setPage] = useState<Page>(restored?.page && pages.some(p => p[0] === restored.page) ? restored.page : defaultPage);
-  const [product, setProduct] = useState<Product>(restored?.product === 'XAUUSD.s' ? 'XAUUSD.s' : 'XAUUSDT');
+  const [product, setProduct] = useState<Product>(restored?.product === 'GATE:XAUUSD' ? 'GATE:XAUUSD' : 'XAU_USDT');
   const [round, setRound] = useState(restored?.round !== undefined && Number.isInteger(restored.round) && restored.round >= -1 && restored.round < 4 ? restored.round : -1);
   const [detail, setDetail] = useState(false);
   const [appNode, setAppNode] = useState<HTMLDivElement | null>(null);
@@ -70,7 +70,7 @@ function App() {
     const handler = (event: Event) => {
       const saved = (event as CustomEvent<{globals?: {widgetState?: WidgetState}}>).detail?.globals?.widgetState?.privateContent;
       if (saved?.page && pages.some(p => p[0] === saved.page)) setPage(saved.page);
-      if (saved?.product === 'XAUUSD.s' || saved?.product === 'XAUUSDT') setProduct(saved.product);
+      if (saved?.product === 'GATE:XAUUSD' || saved?.product === 'XAU_USDT') setProduct(saved.product);
       if (saved?.round !== undefined && Number.isInteger(saved.round) && saved.round >= -1 && saved.round < 4) setRound(saved.round);
     };
     window.addEventListener('openai:set_globals', handler);
@@ -95,10 +95,10 @@ function App() {
     <div className="gc-workspace">
       <header className="gc-header"><div className="gc-breadcrumb">工作空间 <span>/</span> {title[1]}</div><div className="gc-header-meta"><span>UTC+8</span><span className="gc-avatar">Z</span></div></header>
       <main className="gc-main">
-        <div className="gc-title-row"><div><span className="gc-eyebrow">GOLD INTELLIGENCE</span><h1>{title[1]}</h1><p>{title[2]}</p></div><div className="gc-title-actions"><span className="gc-badge gc-gold-badge">设计原型 · 示例数据</span><select aria-label="分析产品" value={product} onChange={e => { const v = e.target.value as Product; setProduct(v); persist(page, v, round); }}><option>XAUUSDT</option><option>XAUUSD.s</option></select></div></div>
+        <div className="gc-title-row"><div><span className="gc-eyebrow">GOLD INTELLIGENCE</span><h1>{title[1]}</h1><p>{title[2]}</p></div><div className="gc-title-actions"><span className="gc-badge gc-gold-badge">设计原型 · 示例数据</span><select aria-label="分析产品" value={product} onChange={e => { const v = e.target.value as Product; setProduct(v); persist(page, v, round); }}><option>XAU_USDT</option><option>GATE:XAUUSD</option></select></div></div>
         {page === 'overview' && <>
           <div className="gc-top-stats">
-            <section className="gc-stat"><div className="gc-stat-label">{product} <span>{product === 'XAUUSDT' ? '黄金永续' : 'MT5 黄金 CFD'}</span></div><strong>{product === 'XAUUSDT' ? '4,732.60' : '4,731.80'} <small>{product === 'XAUUSDT' ? 'USDT' : 'USD'}</small></strong><div className="gc-stat-foot">Bid / Ask <span>{product === 'XAUUSDT' ? '4,732.50 / 4,732.70' : '4,731.40 / 4,732.20'}</span></div></section>
+            <section className="gc-stat"><div className="gc-stat-label">{product} <span>{product === 'XAU_USDT' ? '黄金永续' : 'Gate 黄金 CFD'}</span></div><strong>{product === 'XAU_USDT' ? '4,732.60' : '4,731.80'} <small>{product === 'XAU_USDT' ? 'USDT' : 'USD'}</small></strong><div className="gc-stat-foot">Bid / Ask <span>{product === 'XAU_USDT' ? '4,732.50 / 4,732.70' : '4,731.40 / 4,732.20'}</span></div></section>
             <section className="gc-stat"><div className="gc-stat-label">较长周期形势 <span>4h – 2d</span></div><strong className="gc-text-value">偏多 · 等待确认</strong><div className="gc-stat-foot">核心分歧 <span>利率变化是否延续</span></div></section>
             <section className="gc-stat"><div className="gc-stat-label">短线机会 <span>5m – 1h</span></div><strong className="gc-text-value">等待回踩</strong><div className="gc-stat-foot">评估状态 <span>候选计划待复核</span></div></section>
           </div>
@@ -111,7 +111,7 @@ function App() {
         {page === 'sources' && <InformationBoard product={product} onResearch={() => navigate('research')}/>}
         {page === 'research' && <ResearchRoom product={product} stage={round} onStageChange={value=>{setRound(value);persist(page,product,value);}} onTrades={()=>navigate('trades')}/>}
         {page === 'trades' && <>
-          <div className="gc-top-stats"><section className="gc-stat"><div className="gc-stat-label">虚拟账户 <span>{product}</span></div><strong>1,037.50 <small>{product === 'XAUUSDT' ? 'USDT' : 'USD'}</small></strong><div className="gc-stat-foot">期初本金 <span>1,000.00</span></div></section><section className="gc-stat"><div className="gc-stat-label">已实现净收益</div><strong>+37.50 <small>结算币种</small></strong><div className="gc-stat-foot">扣除费用 <span>2.50</span></div></section><section className="gc-stat"><div className="gc-stat-label">当前模拟状态</div><strong className="gc-text-value">1 个候选计划</strong><div className="gc-stat-foot">持仓 <span>0 · 示例已平仓</span></div></section></div>
+          <div className="gc-top-stats"><section className="gc-stat"><div className="gc-stat-label">虚拟账户 <span>{product}</span></div><strong>1,037.50 <small>{product === 'XAU_USDT' ? 'USDT' : 'USD'}</small></strong><div className="gc-stat-foot">期初本金 <span>1,000.00</span></div></section><section className="gc-stat"><div className="gc-stat-label">已实现净收益</div><strong>+37.50 <small>结算币种</small></strong><div className="gc-stat-foot">扣除费用 <span>2.50</span></div></section><section className="gc-stat"><div className="gc-stat-label">当前模拟状态</div><strong className="gc-text-value">1 个候选计划</strong><div className="gc-stat-foot">持仓 <span>0 · 示例已平仓</span></div></section></div>
           <section className="gc-panel"><div className="gc-panel-head"><h3>计划与订单</h3>{badge('仅内部账本')}</div><div className="gc-table-container"><table><thead><tr><th>计划</th><th>状态</th><th>报价 / 目标</th><th>杠杆 / 保证金</th><th>结果</th></tr></thead><tbody><tr><td><button className="gc-text-button" type="button" onClick={() => setDetail(true)}>回踩确认做多</button><small>{product}</small></td><td>{badge('等待条件')}</td><td>入场区间待确认</td><td>100X / 约 100U</td><td>未成交</td></tr><tr><td><button className="gc-text-button" type="button" onClick={() => setDetail(true)}>已平仓示例</button><small>{product}</small></td><td>{badge('已结算')}</td><td>4,700 → 4,720</td><td>100X / 94U</td><td>+37.50 <small>净收益</small></td></tr></tbody></table></div></section>
           {detail && <section className="gc-panel gc-trade-detail"><div className="gc-panel-head"><h3>订单详情与成交依据</h3><button type="button" className="gc-text-button" onClick={() => setDetail(false)}>收起</button></div><div className="gc-field-list"><div><span>示例已平仓数量</span><b>2 金衡盎司</b></div><div><span>毛盈亏</span><b>+40.00</b></div><div><span>交易费用 / 持有成本</span><b>2.20 / 0.30（示例）</b></div><div><span>最终净收益</span><b>+37.50 · 结算币种</b></div></div><div className="gc-order-timeline"><span>判断完成</span><span>订单生效</span><span>触价验证</span><span>模拟成交</span><span>退出结算</span></div>{link('回到当时研究', 'research')}</section>}
           <div className="gc-info-foot">示例金额用于说明费用展示。实际费用和 CFD / 永续规则由 Java 按具体产品分别计算。</div>
@@ -122,7 +122,7 @@ function App() {
           <section className="gc-panel"><div className="gc-panel-head"><h3>研究结果分布</h3>{link('追溯研究', 'research')}</div><div className="gc-outcome-list">{['实际成交与退出', '等待 / 主动撤销', '未触发 / 未成交', '超时 / 数据缺口', '无法确定结果'].map(v => <div key={v}><span>{v}</span><span className="gc-secondary">真实统计接入后显示</span></div>)}</div></section>
         </>}
         {page === 'operations' && <>
-          <section className="gc-panel"><div className="gc-panel-head"><h3>功能状态</h3>{badge('工程骨架')}</div><div className="gc-health-grid">{[['行情', '待接入', 'Bybit WS / 对应 MT5 报价'], ['信息', '待接入', '按源类型与事件窗口采集'], ['AI 研究', '待接入', 'any2api · 通道预算分别验证'], ['模拟账本', '待实现', 'Java · 可恢复 · 有限虚拟资金']].map(([name, state, desc]) => <div key={name}><h3>{name}</h3>{badge(state, 'gc-muted-badge')}<p>{desc}</p></div>)}</div></section>
+          <section className="gc-panel"><div className="gc-panel-head"><h3>功能状态</h3>{badge('工程骨架')}</div><div className="gc-health-grid">{[['行情', '待接入', 'Gate WebSocket / CFD REST'], ['信息', '待接入', '按源类型与事件窗口采集'], ['AI 研究', '待接入', 'any2api · 通道预算分别验证'], ['模拟账本', '待实现', 'Java · 可恢复 · 有限虚拟资金']].map(([name, state, desc]) => <div key={name}><h3>{name}</h3>{badge(state, 'gc-muted-badge')}<p>{desc}</p></div>)}</div></section>
           <div className="gc-secondary-grid"><section className="gc-panel"><div className="gc-panel-head"><h3>模型配置</h3><span className="gc-small">凭据仅服务端保存</span></div><div className="gc-field-list"><div><span>模型目录</span><b>从 any2api 按厂商读取</b></div><div><span>上下文</span><b>通道上限 / 输出保留 / 裁剪记录</b></div><div><span>讨论方式</span><b>独立首轮 → 匿名复核 → 同步修订</b></div><div><span>实际可用性</span><b>推理结果与探针分别展示</b></div></div></section><section className="gc-panel"><div className="gc-panel-head"><h3>运行与发布</h3>{badge('部署未启用')}</div><div className="gc-field-list"><div><span>发布链路</span><b>GitHub Actions → GitOps → Argo CD</b></div><div><span>目标域名</span><b>gold.mnnu.eu.org</b></div><div><span>配置生效</span><b>带版本与生效时间</b></div><div><span>重启恢复</span><b>恢复订单、持仓与游标</b></div></div></section></div>
           <div className="gc-info-foot">页面原型不执行配置写入。服务在线、模型探针成功与新增有效研究分别显示。</div>
         </>}

@@ -5,6 +5,7 @@ import com.goldcatcher.market.MarketFeed;
 import com.goldcatcher.persistence.DocumentStore;
 import com.goldcatcher.research.*;
 import com.goldcatcher.simulation.SimulationLedger;
+import com.goldcatcher.simulation.FundingService;
 import java.math.BigDecimal;
 import java.security.Principal;
 import java.time.Clock;
@@ -19,17 +20,21 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class RuntimeApi {
     private final MarketFeed market;private final NewsService news;private final SimulationLedger ledger;private final ResearchService research;
     private final Any2ApiClient ai;private final RuntimeSettings settings;private final EventHub events;private final DocumentStore store;private final Clock clock;
+    private final FundingService funding;
     public RuntimeApi(MarketFeed market,NewsService news,SimulationLedger ledger,ResearchService research,Any2ApiClient ai,
-        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock) {
+        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding) {
         this.market=market;this.news=news;this.ledger=ledger;this.research=research;this.ai=ai;this.settings=settings;this.events=events;this.store=store;this.clock=clock;
+        this.funding=funding;
     }
     @GetMapping("/session") public Map<String,String> session(Principal principal,CsrfToken token) {
         return Map.of("username",principal.getName(),"csrfHeader",token.getHeaderName(),"csrfToken",token.getToken());
     }
-    @GetMapping("/dashboard") public Map<String,Object> dashboard(@RequestParam(defaultValue="XAUUSDT") String symbol) {
+    @GetMapping("/dashboard") public Map<String,Object> dashboard(@RequestParam(defaultValue="XAU_USDT") String symbol) {
         product(symbol);Map<String,Object> data=new LinkedHashMap<>();
-        data.put("serverTime",clock.instant());data.put("market",market.snapshot(symbol));data.put("account",ledger.view(symbol));
+        data.put("serverTime",clock.instant());data.put("market",market.snapshot(symbol));data.put("marketProvenance",market.provenance(symbol));data.put("account",ledger.view(symbol));
         data.put("news",news.news());data.put("calendar",news.calendar());data.put("sources",news.sources());data.put("models",ai.states());
+        data.put("funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));
+        data.put("costConfiguration",market.costConfiguration(symbol));
         data.put("budgets",settings.routes().stream().map(route->Map.of("id",route.id(),"inputEstimateLimit",route.inputEstimateLimit(),"characterLimit",route.characterLimit(),
             "byteLimit",route.byteLimit(),"outputReserve",route.outputReserve(),"timeoutSeconds",route.timeoutSeconds(),"judge",route.judge())).toList());
         data.put("research",research.latest(symbol));
@@ -47,10 +52,10 @@ public class RuntimeApi {
     private Map<String,Object> review(String symbol) {
         var account=ledger.view(symbol);var completed=account.orders().stream().filter(order->order.closedAt!=null).toList();
         var gross=completed.stream().map(order->order.realizedGross).reduce(BigDecimal.ZERO,BigDecimal::add);
-        var fees=completed.stream().map(order->order.entryFees.add(order.exitFees)).reduce(BigDecimal.ZERO,BigDecimal::add);
+        var fees=completed.stream().map(order->order.entryFees.add(order.exitFees).add(order.fundingFees)).reduce(BigDecimal.ZERO,BigDecimal::add);
         return Map.of("closedOrders",completed.size(),"gross",SimulationLedger.money(gross),"fees",SimulationLedger.money(fees),"netBeforeUnknownCosts",SimulationLedger.money(gross.subtract(fees)),
             "fullyCostedOrders",completed.stream().filter(order->!order.costIncomplete).count(),"positiveRecordedNet",completed.stream().filter(order->order.netRealized.signum()>0).count(),
-            "status",completed.isEmpty()?"NO_CLOSED_SAMPLE":"CONFIGURED_FEES_UNKNOWN_FUNDING_POSSIBLE");
+            "status",completed.isEmpty()?"NO_CLOSED_SAMPLE":completed.stream().anyMatch(o->o.costIncomplete)?"RECORDED_COSTS_INCOMPLETE":"PUBLIC_COST_ASSUMPTIONS");
     }
-    private void product(String symbol){if(symbol==null||!List.of("XAUUSDT","XAUUSD.s").contains(symbol))throw new IllegalArgumentException("UNKNOWN_PRODUCT");}
+    private void product(String symbol){if(symbol==null||!List.of("XAU_USDT","GATE:XAUUSD").contains(symbol))throw new IllegalArgumentException("UNKNOWN_PRODUCT");}
 }
