@@ -29,5 +29,5 @@ public final class AnalysisTypes {
     public record View(String symbol,Instant calculatedAt,long calculationMicros,String method,
         List<Horizon> horizons,List<Driver> drivers,List<Release> releases,List<Expectation> expectations,
         List<SourceCheck> sources,List<String> gaps,List<Reaction> reactions,Map<String,String> costs,
-        String evidenceVersion) {}
+        String evidenceVersion,SupplementalSources.View supplemental) {}
 }

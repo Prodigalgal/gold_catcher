@@ -48,7 +48,7 @@ final class ContextWindow {
         // Only optional prose is shortened. All financial fields, every peer, all IDs and timestamps remain.
         for(int level=1;level<=3;level++) {
             JsonNode selected=originalPacket.deepCopy();List<Change> changes=new ArrayList<>();
-            int newsLimit=level==1?120:level==2?60:0,peerLimit=level==1?240:level==2?160:80;
+            int newsLimit=level==1?120:level==2?60:0,peerLimit=level==1?240:level==2?160:40;
             int changeLimit=level==1?80:level==2?40:0,impactLimit=level==1?140:level==2?80:40;
             int index=0;
             for(JsonNode article:selected.path("evidence").path("news"))

@@ -23,6 +23,9 @@ final class OfficialArticle {
             case "FED_PRESS","FED_SPEECH" -> Set.of("www.federalreserve.gov","federalreserve.gov");
             case "BEA_NEWS" -> Set.of("www.bea.gov","bea.gov");
             case "ECB_PRESS" -> Set.of("www.ecb.europa.eu");
+            case "BOE_NEWS","BOE_SPEECH" -> Set.of("www.bankofengland.co.uk");
+            case "BOJ_NEWS" -> Set.of("www.boj.or.jp");
+            case "EIA_PRESS","EIA_ENERGY","EIA_NEW" -> Set.of("www.eia.gov","eia.gov");
             case "BLS_NEWS" -> Set.of("www.bls.gov","bls.gov");
             default -> Set.of();
         };
@@ -44,6 +47,10 @@ final class OfficialArticle {
             case "FED_PRESS","FED_SPEECH" -> document.selectFirst("#article");
             case "BEA_NEWS" -> document.selectFirst("article .field--name-body");
             case "ECB_PRESS" -> document.selectFirst("main > .section");
+            case "BOE_NEWS","BOE_SPEECH" -> document.selectFirst(".page-content");
+            case "BOJ_NEWS" -> document.selectFirst("#contents, #main-content");
+            case "EIA_ENERGY" -> document.selectFirst(".tie-article");
+            case "EIA_PRESS" -> document.selectFirst(".pagecontent .main_col");
             case "BLS_NEWS" -> document.selectFirst("#bodytext, .news-release");
             default -> null;
         };

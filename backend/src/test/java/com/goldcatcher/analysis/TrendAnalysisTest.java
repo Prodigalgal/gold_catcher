@@ -69,7 +69,7 @@ class TrendAnalysisTest {
         var packet=f.mapper.valueToTree(analysis.freeze("XAU_USDT",f.clock.instant(),"run"));
         assertThat(packet.has("horizons")).isFalse();
         assertThat(packet.path("releases").path(0).path("csv").asText()).contains("econ:CPI_MOM","0.30000000000000001","0.10000000000000001");
-        assertThat(packet.path("releaseSources").path("csv").asText()).contains(published.toString(),EconomicExtractor.VERSION);
+        assertThat(packet.path("releaseSources").path("csv").asText()).contains(published.toString());assertThat(packet.path("releaseSources").path("common").path("extractionVersion").asText()).isEqualTo(EconomicExtractor.VERSION);
         var archived=f.store.find("research-analysis","run",View.class).orElseThrow();assertThat(archived.horizons()).hasSize(4);
         var references=f.store.find("research-analysis-references","run",Map.class).orElseThrow();
         assertThat(references.get("econ:CPI_MOM")).isEqualTo(archived.releases().getFirst().id());

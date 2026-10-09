@@ -55,6 +55,12 @@ public class NewsService {
         Map.entry("FED_SPEECH","https://www.federalreserve.gov/feeds/speeches.xml"),
         Map.entry("BEA_NEWS","https://www.bea.gov/news/current-releases"),
         Map.entry("ECB_PRESS","https://www.ecb.europa.eu/rss/press.html"),
+        Map.entry("BOE_NEWS","https://www.bankofengland.co.uk/rss/news"),
+        Map.entry("BOE_SPEECH","https://www.bankofengland.co.uk/rss/speeches"),
+        Map.entry("BOJ_NEWS","https://www.boj.or.jp/en/rss/whatsnew.xml"),
+        Map.entry("EIA_PRESS","https://www.eia.gov/rss/press_rss.xml"),
+        Map.entry("EIA_ENERGY","https://www.eia.gov/rss/todayinenergy.xml"),
+        Map.entry("EIA_NEW","https://www.eia.gov/about/new/WNtest3.php"),
         Map.entry("BEA_CALENDAR","https://www.bea.gov/news/schedule"),
         Map.entry("BLS_CPI","https://www.bls.gov/feed/cpi.rss"),
         Map.entry("BLS_EMPLOYMENT","https://www.bls.gov/feed/empsit.rss"),
@@ -109,6 +115,9 @@ public class NewsService {
                 feed.getKey().startsWith("BLS_")&&!calendar?"Feed 时间可能早于正式公布；需用正文声明的发布时间核验。":
                     feed.getKey().equals("BEA_NEWS")?"当前发布列表已替换旧 RSS；历史且时间未知的旧记录隔离。":
                     feed.getKey().equals("FOMC_CALENDAR")?"官方会议日期范围；未给出决议时刻，不推定为14:00。":
+                    feed.getKey().equals("EIA_NEW")?"产品更新目录：保留来源摘要与官方报告链接，未把报表入口当新闻全文；结构化库存与油价另需接入。":
+                    feed.getKey().startsWith("EIA_")?"RSS含来源摘要；EST按原文固定偏移解析，不补缺失年份。Feed时间不冒充已核实的库存发布时刻。":
+                    feed.getKey().equals("BOJ_NEWS")?"RSS日期/更新时间未独立核实为首发时刻；下载表格与完整政策日历另需接入。":
                     "连接成功不表示新闻刚刚发布；正文和发布时间分别核验。" );
             return new SourceState(state.id(),state.url(),state.state(),state.intervalSeconds(),state.lastSuccess(),state.nextPoll(),state.error(),state.entries(),quality,state.route());
         }).toList();
@@ -185,6 +194,7 @@ public class NewsService {
     @Scheduled(fixedDelay=3000,initialDelay=5000) void collectBodies() {
         if(!settings.enabled("GOLD_NEWS_ENABLED"))return;
         for(var article:news()) {
+            if(article.source().equals("EIA_NEW"))continue;
             if(article.publishedAt()==null||Boolean.TRUE.equals(article.archived())||article.publishedAt().isAfter(clock.instant())
                 ||article.publishedAt().isBefore(clock.instant().minus(Duration.ofDays(90))))continue;
             var previous=bodies.get(article.id());
@@ -321,18 +331,24 @@ public class NewsService {
         int changed=0;
         for(int i=0;i<nodes.getLength();i++) {
             Element item=(Element)nodes.item(i);String title=text(item,"title"),link=atom?atomLink(item):text(item,"link");
+            if(source.startsWith("EIA_")&&!link.isBlank()){
+                try{var target=URI.create("https://www.eia.gov/").resolve(link);if("http".equalsIgnoreCase(target.getScheme())&&Set.of("www.eia.gov","eia.gov").contains(target.getHost()))target=URI.create("https"+target.toString().substring(4));link=target.toString();}catch(IllegalArgumentException invalid){continue;}
+            }
+            if(source.equals("BOJ_NEWS")&&link.startsWith("http://www.boj.or.jp/"))link="https"+link.substring(4);
             if(title.isBlank()||!safeLink(link))continue;
             String identity=text(item,atom?"id":"guid");if(identity.isBlank())identity=link;
             String summary=text(item,atom?"content":"description");if(summary.isBlank()&&atom)summary=text(item,"summary");
             String id=hash(source+":"+identity),excerpt=Jsoup.parseBodyFragment(summary).text();
             if(excerpt.length()>1800)excerpt=excerpt.substring(0,1800)+" [来源摘要已截短]";
             String publication=text(item,atom?"published":"pubDate");if(publication.isBlank()&&atom)publication=text(item,"updated");
+            boolean feedTime=source.startsWith("EIA_")||source.equals("BOJ_NEWS");
+            if(publication.isBlank()&&!atom){publication=text(item,"date");if(publication.isBlank())publication=text(item,"updated");feedTime=true;}
             String fingerprint=hash(title+"\n"+excerpt+"\n"+publication+"\n"+text(item,"updated"));
             var previous=store.find("news",id,News.class);
             if(previous.isPresent()&&previous.get().contentHash().equals(fingerprint))continue;
-            Instant published=date(publication);
+            Instant published=date(source.startsWith("EIA_")?publication.replaceFirst(" EST$"," -0500").replaceFirst(" EDT$"," -0400"):publication);
             var article=new News(id,source,title,excerpt,link,published,clock.instant(),"OFFICIAL_SOURCE",
-                previous.map(n->n.version()+1).orElse(1),fingerprint,source.startsWith("BLS_")&&atom?"FEED_TIMESTAMP":published==null?"UNKNOWN":"EXACT",
+                previous.map(n->n.version()+1).orElse(1),fingerprint,published==null?"UNKNOWN":feedTime||source.startsWith("BLS_")&&atom?"FEED_TIMESTAMP":"EXACT",
                 null,null,null,null,null,null,null);
             store.transaction(()->{store.save("news",id,article);store.event(id,"NEWS_VERSION",article);return article;});changed++;
             if(previous.isPresent()||(published!=null&&published.isAfter(clock.instant().minusSeconds(1800))))newsTrigger.accept(id);

@@ -6,7 +6,7 @@
 
 下列是首批 45 项来源记录。同一机构的不同数据通道可以分别登记，不代表 45 家独立机构。公开文档或页面已找到与运行接入已验证是两种状态；此阶段完成来源梳理，尚未取得所有订阅、验证凭据或测量链路延迟。
 
-当前已实现11个官方传输通道，并新增6个公开驱动与日历通道，详见 [运行实现记录](runtime-alpha.md#公开驱动数据与快速结构观察)。本目录其余项目仍是接入目标，商业快讯、分钟级美国收益率和经核实的市场一致预期不能计入现有覆盖。
+当前实现17个官方新闻/日历通道、6个公开驱动/预期通道和7个补充数据通道，共30个传输通道；此外还有两个交易产品的行情连接。详见 [运行实现记录](runtime-alpha.md#公开驱动数据与快速结构观察)。传输可用、正文可用、数值可用和时效覆盖分别展示；30个通道不代表目录45项全部完成，商业快讯、分钟级美国收益率和经核实的市场一致预期不能计入现有覆盖。
 
 | 新增运行通道 | 接口与调度 | 已取得的用途与限制 |
 | --- | --- | --- |
@@ -14,6 +14,17 @@
 | TREASURY_NOMINAL | [财政部 XML](https://home.treasury.gov/treasury-daily-interest-rate-xml-feed)，daily_treasury_yield_curve，每小时 | 2年及10年名义收益率，日频统计与上一可用日变化，单位 bp |
 | TREASURY_REAL | 同一官方 XML，daily_treasury_real_yield_curve，每小时 | 10年实际收益率日频背景；允许负值，不代表盘中报价 |
 | FF_EXPECTATIONS | [Forex Factory 本周 JSON 导出](https://nfs.faireconomy.media/ff_calendar_thisweek.json)，每30分钟 | 美元数据发布与讲话安排、提供方预期；不包含实际值。未映射事件保留原文，不参与自动数值匹配 |
+| DOL_CLAIMS | [DOL 官方 PDF](https://www.dol.gov/ui/data.pdf)，通常每15分钟；纽约工作日08:00–09:30每15秒 | 季调初请/续请人数、前值和修订，公布时刻按原文及DST换算，原PDF版本保存 |
+| CENSUS_ECON | [经济指标 RSS](https://www.census.gov/economic-indicators/indicator.xml)，每60秒 | 零售、耐用品、住房、贸易等18类当前摘要；变化单位与定义保留，未支持模板不猜值。完整数列API目前需要注册Key |
+| CFTC_GOLD | [CFTC 官方公开数据](https://publicreporting.cftc.gov/stories/s/COT-Help/p2fg-u73y/)，通常15分钟；周五纽约15:00–16:30每30秒 | 黄金 Futures Only、代码088691、管理基金多空/净值及生产商持仓；周二统计背景，精确首发时刻未知 |
+| TREASURY_AUCTIONS | [Fiscal Data 拍卖数据](https://fiscaldata.treasury.gov/datasets/treasury-securities-auctions-data/)，通常5分钟；常见截止窗口每15秒 | 公告、竞争性投标截止、发行额、中标收益率、投标倍数；截止不等于公布，未来拍卖不含提前取得的结果 |
+| IAU_HOLDINGS | [iShares 发行方](https://www.ishares.com/us/products/239561/ishares-gold-trust-fund)，每小时 | 金衡盎司、公吨、份额、净资产，按各字段as-of分组；日频持仓不是盘中资金流，不伪造首发时刻 |
+| GATE_DEPTH / GATE_TRADES | [Gate 官方 Futures REST](https://www.gate.com/docs/developers/apiv4/en/futures/)，每2秒 | 20档快照与最近最多100条成交；张数用quanto_multiplier换算XAU，Java计算失衡、样本量和VWAP。连续全量覆盖/主动成交方向未验证，CFD不共享此数据 |
+| BOE_NEWS / BOE_SPEECH | [英国央行 RSS](https://www.bankofengland.co.uk/rss)，每30秒 | 新闻与讲话原文；单独保留来源发布时间、正文和收到时刻 |
+| BOJ_NEWS | [日本央行官方 RSS](https://www.boj.or.jp/en/rss/whatsnew.xml)，每30秒 | 发布目录与可提取HTML/PDF；Feed时刻未独立核实为首发，表格和完整政策日历仍有缺口 |
+| EIA_PRESS / EIA_ENERGY / EIA_NEW | [EIA 官方 RSS](https://www.eia.gov/tools/rssfeeds/)，每30秒 | 新闻稿、能源摘要与产品更新；EST按来源字面固定偏移解析，不补缺失年份；NEW只收摘要/报告链接，不把入口页当新闻全文。结构化库存/油价未完成 |
+
+页面“信息集合 → 补充数据”提供8类实际覆盖清单。仍未完成：盘中美国利率、利率期货/FedWatch/期权、商业快讯、已核实一致预期、连续微观行情、GLD/全球ETF/央行储备/库存/亚洲市场、私营调查与地区央行、能源/外交/平台公告/相关资产的剩余通道。具体机构按下表逐条登记，未实现的目标不计入成功通道数。
 
 ## 优先级和核查状态
 

@@ -7,6 +7,13 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 class OfficialArticleTest {
+    @Test void newSourceRegionsExcludeNavigationAndRemainOnExactOfficialHosts(){
+        String text="The monetary policy outlook reflects repeated shocks, inflation and supply pressures in financial markets.";
+        for(var entry:java.util.Map.of("BOE_NEWS","<div class='page-content'>","EIA_ENERGY","<div class='tie-article'>","EIA_PRESS","<div class='pagecontent'><div class='main_col'>").entrySet()){
+            String source=entry.getKey(),host=source.startsWith("BOE_")?"www.bankofengland.co.uk":"www.eia.gov";
+            var article=OfficialArticle.extract(source,("<nav>irrelevant menu</nav>"+entry.getValue()+"<p>"+text+"</p><script>external instruction</script></div></div><footer>unrelated</footer>").getBytes(StandardCharsets.UTF_8),"https://"+host+"/article");assertThat(article.text()).contains(text).doesNotContain("irrelevant menu","external instruction","unrelated");assertThat(OfficialArticle.allowed(source,URI.create("https://"+host+".evil.example/article"))).isFalse();
+        }
+    }
     @Test void extractsOnlyOfficialRegionAndFollowsKnownMinutesDocument() {
         String html="<nav>unrelated headline</nav><div id='article'><p>The monetary policy committee considered inflation and employment and published the minutes of its latest meeting.</p><a href='/monetarypolicy/fomcminutes20260916.htm'>HTML minutes</a><script>secret command</script></div><aside>Related news</aside>";
         var article=OfficialArticle.extract("FED_PRESS",html.getBytes(StandardCharsets.UTF_8),"https://www.federalreserve.gov/newsevents/pressreleases/monetary20261007a.htm");

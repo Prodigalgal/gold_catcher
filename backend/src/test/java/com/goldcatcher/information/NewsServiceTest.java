@@ -8,6 +8,12 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void newFeedsResolveOfficialRelativeLinksWithoutInventingPublicationTimes() throws Exception {
+        var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
+        String xml="<rss xmlns:a='http://www.w3.org/2005/Atom'><channel><item><title>EIA release</title><link>/pressroom/releases/press593.php</link><pubDate>Wed, 07 Oct 2026 09:00:00 EST</pubDate></item><item><title>Missing year</title><link>http://www.eia.gov/todayinenergy/detail.php?id=1</link><pubDate>Thu, 08 Oct 09:00:00 EST</pubDate></item></channel></rss>";
+        assertThat(news.parseRss("EIA_PRESS",bytes(xml))).isEqualTo(2);assertThat(news.news()).filteredOn(n->n.title().equals("EIA release")).allSatisfy(n->{assertThat(n.link()).isEqualTo("https://www.eia.gov/pressroom/releases/press593.php");assertThat(n.publishedAt()).isEqualTo(Instant.parse("2026-10-07T14:00:00Z"));assertThat(n.publishedPrecision()).isEqualTo("FEED_TIMESTAMP");});assertThat(news.news()).filteredOn(n->n.title().equals("Missing year")).allSatisfy(n->assertThat(n.publishedAt()).isNull());assertThat(news.evidence(f.clock.instant())).isEmpty();
+        String boj="<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' xmlns:dc='http://purl.org/dc/elements/1.1/'><item><title>Policy</title><link>https://www.boj.or.jp/en/test.htm</link><dc:date>2026-10-07T01:00:00+09:00</dc:date></item></rdf:RDF>";assertThat(news.parseRss("BOJ_NEWS",bytes(boj))).isEqualTo(1);assertThat(news.news()).filteredOn(n->n.source().equals("BOJ_NEWS")).allMatch(n->n.publishedPrecision().equals("FEED_TIMESTAMP"));
+    }
     @Test void deduplicatesAndPreservesRevisionsWithReceiptTime() throws Exception {
         var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
         String xml="<rss><channel><item><guid>same</guid><title>Fed release</title><link>https://www.federalreserve.gov/newsevents/pressreleases.htm</link><description>original</description><pubDate>Thu, 08 Oct 2026 00:00:00 GMT</pubDate></item></channel></rss>";

@@ -4,6 +4,8 @@ import os
 import time
 import urllib.error
 import urllib.request
+import http.client
+from decimal import Decimal
 from pathlib import Path
 from auth_client import SessionClient, USER_AGENT
 
@@ -43,6 +45,14 @@ except urllib.error.HTTPError as error:
 else:
     raise SystemExit('API unexpectedly accessible without authentication')
 client.login(username, password)
+def snapshot(path):
+    for attempt in range(3):
+        try:
+            return client.request(path)
+        except (http.client.IncompleteRead, ConnectionResetError, urllib.error.URLError, TimeoutError):
+            if attempt == 2:
+                raise
+            time.sleep(1)
 api = client.request('/api/system/status')
 if api.get("sourceCommit") != commit or api.get("mode") != "INTERNAL_SIMULATION_ALPHA" or api.get('venue') != 'GATE' or api.get('authentication') != 'SESSION_CSRF_SHA256_POW':
     raise SystemExit("API source commit/mode/venue/authentication mismatch")
@@ -50,8 +60,8 @@ if set(api.get('products', [])) != {'XAU_USDT', 'GATE:XAUUSD'}:
     raise SystemExit('unexpected active products')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
-    perpetual = client.request('/api/dashboard?symbol=XAU_USDT')
-    cfd = client.request('/api/dashboard?symbol=GATE:XAUUSD')
+    perpetual = snapshot('/api/dashboard?symbol=XAU_USDT')
+    cfd = snapshot('/api/dashboard?symbol=GATE:XAUUSD')
     if (perpetual['market']['state'] == 'LIVE' and len(perpetual['market']['indicators']) == 6
             and perpetual['market']['quote']['source'] == 'GATE_WS_BOOK_TICKER'
             and perpetual['market']['rules']['quantityMultiplier'] is not None
@@ -63,10 +73,11 @@ while time.monotonic() < deadline:
 else:
     raise SystemExit('Gate data acceptance timed out')
 expected_sources = {'FED_PRESS', 'FED_SPEECH', 'ECB_PRESS', 'BEA_NEWS', 'BEA_CALENDAR',
-                    'BLS_CPI', 'BLS_EMPLOYMENT', 'BLS_PPI', 'BLS_JOLTS', 'BLS_CALENDAR', 'FOMC_CALENDAR'}
+                    'BLS_CPI', 'BLS_EMPLOYMENT', 'BLS_PPI', 'BLS_JOLTS', 'BLS_CALENDAR', 'FOMC_CALENDAR',
+                    'BOE_NEWS', 'BOE_SPEECH', 'BOJ_NEWS', 'EIA_PRESS', 'EIA_ENERGY', 'EIA_NEW'}
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
-    sources = client.request('/api/dashboard?symbol=XAU_USDT')
+    sources = snapshot('/api/dashboard?symbol=XAU_USDT')
     states = {source['id']: source for source in sources['sources']}
     if (set(states) == expected_sources
             and all(states[key]['state'] == 'CURRENT' and states[key].get('quality') for key in expected_sources)
@@ -84,7 +95,7 @@ driver_sources = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'TREASURY_NOMINAL'
 driver_ids = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'US_NOMINAL_2Y', 'US_NOMINAL_10Y', 'US_REAL_10Y'}
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
-    analysis = client.request('/api/dashboard?symbol=XAU_USDT').get('analysis', {})
+    analysis = snapshot('/api/dashboard?symbol=XAU_USDT').get('analysis', {})
     channels = {item['id']: item for item in analysis.get('sources', [])}
     observations = {item['id']: item for item in analysis.get('drivers', [])}
     metrics = {item['indicator']: item for item in analysis.get('releases', [])}
@@ -105,8 +116,34 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Public driver, official numeric release or four-horizon analysis acceptance timed out')
+supplemental_sources = {'DOL_CLAIMS', 'CENSUS_ECON', 'CFTC_GOLD', 'TREASURY_AUCTIONS', 'IAU_HOLDINGS', 'GATE_DEPTH', 'GATE_TRADES'}
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    extra = snapshot('/api/dashboard?symbol=XAU_USDT').get('analysis', {}).get('supplemental') or {}
+    channels = {s['id']: s for s in extra.get('sources', [])}
+    rows = extra.get('observations', [])
+    depth, trades = extra.get('depth') or {}, extra.get('trades') or {}
+    if (set(channels) == supplemental_sources and all(s['state'] == 'CURRENT' for s in channels.values())
+            and {'INITIAL_CLAIMS', 'CONTINUED_CLAIMS'} <= {o['id'] for o in rows}
+            and {'CENSUS_ECON', 'CFTC_GOLD', 'TREASURY_AUCTIONS', 'IAU_HOLDINGS'} <= {o['source'] for o in rows}
+            and all(o['receivedAt'] and o['bodyHash'] for o in rows)
+            and depth.get('symbol') == 'XAU_USDT' and 1 <= len(depth.get('bids', [])) <= 20
+            and 1 <= len(depth.get('asks', [])) <= 20 and depth.get('responseAt') and depth.get('updatedAt')
+            and trades.get('symbol') == 'XAU_USDT' and 1 <= trades.get('count', 0) <= 100
+            and trades.get('firstAt') and trades.get('lastAt') and trades.get('vwap')
+            and 'NOT_FIXED_TIME_WINDOW' in trades.get('coverage', '')
+            and len(extra.get('coverage', [])) == 8):
+        for level in depth['bids'] + depth['asks']:
+            assert Decimal(level['quantity']) == Decimal(level['nativeContracts']) * Decimal(depth['quantityMultiplier'])
+        assert len(trades['rows']) == trades['count']
+        assert len({r['id'] for r in trades['rows']}) == trades['count']
+        assert all(Decimal(o['values']['tonnes']) > 0 for o in rows if o['source'] == 'IAU_HOLDINGS' and 'tonnes' in o['values'])
+        break
+    time.sleep(5)
+else:
+    raise SystemExit('Seven supplemental public sources, provenance or microstructure samples acceptance timed out')
 client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:
     raise SystemExit("web source commit mismatch")
-print("Argo digests, PoW session, Gate feeds, eleven official channels, six public driver/calendar channels, dated official metrics, four-horizon analysis and API/web Alpha release verified.")
+print("Argo digests, PoW session, Gate feeds, seventeen official channels, six driver/calendar channels, seven supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified.")

@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.ObjectMapper;
 
 /** Continuous structure observations, separate from AI judgment and order execution. */
@@ -22,11 +23,16 @@ public class TrendAnalysis {
     private final DriverSources sources;private final NewsService news;private final MarketFeed market;
     private final DocumentStore store;private final ObjectMapper mapper;private final Clock clock;private final EventHub events;
     private final AtomicBoolean extracting=new AtomicBoolean();private final Map<String,String> processed=new ConcurrentHashMap<>();
+    private final SupplementalSources supplemental;
     private final Map<String,List<Sample>> samples=new ConcurrentHashMap<>();
     record Sample(Instant at,String value,boolean continuous) {}
     private static final MathContext MC=MathContext.DECIMAL128;
     public TrendAnalysis(DriverSources sources,NewsService news,MarketFeed market,DocumentStore store,ObjectMapper mapper,Clock clock,EventHub events){
+        this(sources,news,market,store,mapper,clock,events,null);
+    }
+    @Autowired public TrendAnalysis(DriverSources sources,NewsService news,MarketFeed market,DocumentStore store,ObjectMapper mapper,Clock clock,EventHub events,SupplementalSources supplemental){
         this.sources=sources;this.news=news;this.market=market;this.store=store;this.mapper=mapper;this.clock=clock;this.events=events;
+        this.supplemental=supplemental;
     }
     @Scheduled(fixedDelay=3000,initialDelay=6500) void extract(){
         if(!extracting.compareAndSet(false,true))return;try{
@@ -73,11 +79,12 @@ public class TrendAnalysis {
         horizons.add(horizon("H1_4","1–4 小时",List.of("60","240"),snapshot,drivers,cutoff,gaps));
         horizons.add(horizon("H4_48","4–48 小时",List.of("240","D"),snapshot,drivers,cutoff,gaps));
         var reactions=releases.stream().filter(r->r.publishedAt().isAfter(cutoff.minusSeconds(1800))).map(r->reaction(symbol,r,cutoff)).toList();
-        String version=NewsService.hash(mapper.writeValueAsString(Map.of("releases",releases.stream().map(r->r.id()+":"+r.version()).toList(),"background",drivers.stream().filter(d->d.frequency().equals("DAILY")).map(d->d.id()+":"+d.version()).toList())));
-        return new View(symbol,cutoff,(System.nanoTime()-start)/1000,"JAVA_STRUCTURE_V1_UNCALIBRATED",List.copyOf(horizons),drivers,releases,sources.expectations(cutoff),sources.sources(),gaps,reactions,market.costConfiguration(symbol),version);
+        var extra=supplemental==null?null:supplemental.view(cutoff);if(extra!=null){var combined=new ArrayList<>(gaps);combined.addAll(extra.gaps());gaps=List.copyOf(combined);}
+        String version=NewsService.hash(mapper.writeValueAsString(Map.of("releases",releases.stream().map(r->r.id()+":"+r.version()).toList(),"background",drivers.stream().filter(d->d.frequency().equals("DAILY")).map(d->d.id()+":"+d.version()).toList(),"public",extra==null?List.of():extra.observations().stream().map(o->o.id()+":"+o.bodyHash()+":"+o.receivedAt()).toList())));
+        return new View(symbol,cutoff,(System.nanoTime()-start)/1000,"JAVA_STRUCTURE_V1_UNCALIBRATED",List.copyOf(horizons),drivers,releases,sources.expectations(cutoff),sources.sources(),gaps,reactions,market.costConfiguration(symbol),version,extra);
     }
     static List<String> coverage(List<Driver> drivers,Instant cutoff){
-        List<String> gaps=new ArrayList<>();gaps.add("分钟级美国收益率、利率期货及 FedWatch 概率尚未接入");gaps.add("商业实时快讯、L2 深度、逐笔成交、ETF 与期权数据尚未接入");
+        List<String> gaps=new ArrayList<>();gaps.add("分钟级美国收益率、利率期货及 FedWatch 概率尚未接入");gaps.add("商业实时快讯、GLD/全球ETF流量与期权数据尚未接入");
         if(drivers.stream().noneMatch(d->d.id().equals("GATE_USIDX")&&fresh(d,cutoff)))gaps.add("当前美元指数 CFD 观察不可用或已过期");
         if(drivers.stream().noneMatch(d->d.id().equals("US_REAL_10Y")&&dailyFresh(d,cutoff)))gaps.add("美国实际收益率日频背景未取得或统计日过旧");
         return List.copyOf(gaps);
@@ -134,7 +141,7 @@ public class TrendAnalysis {
             d.put("freshness",original.frequency().equals("DAILY")?(dailyFresh(original,cutoff)?"DAILY_BACKGROUND":"AS_OF_DATE_STALE"):(fresh(original,cutoff)?"RECENT_RESPONSE_TICK_TIME_UNKNOWN":"STALE_OR_CLOSED"));}
         for(var node:compactDrivers){var d=(tools.jackson.databind.node.ObjectNode)node;for(String minutes:List.of("5","15","60")){var value=d.path("returnsPct").path(minutes);if(!value.isMissingNode()&&!value.isNull())d.put("return"+minutes+"Pct",plain(new BigDecimal(value.asText()).setScale(8,RoundingMode.HALF_EVEN)));}}
         packet.put("drivers",EvidenceTable.pack(mapper,compactDrivers,List.of("id","source","frequency","unit","value","previous","change","changeUnit","asOfDate","responseAt","receivedAt","marketStatus","freshness","return5Pct","return15Pct","return60Pct")));
-        packet.put("driverTimeMeaning","Gate timestamp为服务器响应时刻，最后tick时刻未知；Treasury只有日频统计日。USIDX基准构成未独立核实。");
+        packet.put("driverTimeMeaning","Gate timestamp是响应时刻，tick未知；Treasury日频；USIDX基准未核实。");
         var revisionRows=mapper.createArrayNode();
         Map<String,Map<String,Object>> grouped=new LinkedHashMap<>();for(var release:view.releases()){
             String key=release.newsId()+":"+release.bodyHash()+":"+release.extractedAt()+":"+release.precision()+":"+release.extractionVersion();var group=grouped.computeIfAbsent(key,k->{Map<String,Object> row=new LinkedHashMap<>();String id="s"+(grouped.size()+1);row.put("id",id);referenceMap.put(id,release.newsId());row.put("source",release.source());row.put("period",release.period());row.put("publishedAt",release.publishedAt());row.put("receivedAt",release.receivedAt());row.put("extractedAt",release.extractedAt());row.put("precision",release.precision());row.put("extractionVersion",release.extractionVersion());row.put("metrics",new ArrayList<>());return row;});
@@ -148,17 +155,29 @@ public class TrendAnalysis {
             var source=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(group);source.remove("metrics");metadata.add(source);
             releaseGroups.add(Map.of("sourceId",group.get("id"),"csv",EvidenceTable.pack(mapper,mapper.valueToTree(group.get("metrics")),metricColumns).get("csv")));
         }
-        packet.put("releaseSources",EvidenceTable.pack(mapper,metadata,List.of("id","source","period","publishedAt","receivedAt","extractedAt","precision","extractionVersion")));
+        packet.put("releaseSources",EvidenceTable.packFactored(mapper,metadata,List.of("id","source","period","publishedAt","receivedAt","extractedAt","precision","extractionVersion"),List.of("extractedAt","extractionVersion","precision")));
         packet.put("releases",releaseGroups);packet.put("revisions",EvidenceTable.pack(mapper,revisionRows,List.of("metricId","period","before","after","delta","unit")));
-        packet.put("releaseMeaning","sourceId关联releaseSources时刻/期间/精度；forecast空=无发布前预期。原文/hash/id映射归档。");
+        packet.put("releaseMeaning","sourceId关联releaseSources元数据；forecast空=无发布前预期；原文/hash/id映射归档。");
         var expected=mapper.valueToTree(view.expectations().stream().filter(e->!e.scheduledAt().isBefore(cutoff)&&e.scheduledAt().isBefore(cutoff.plusSeconds(172800))).limit(6).toList());
         int index=0;for(var node:expected){var row=(tools.jackson.databind.node.ObjectNode)node;String alias="ff:"+(++index);refs.add(alias);referenceMap.put(alias,row.path("id").asText());row.put("id",alias);}
         packet.put("expectations",EvidenceTable.pack(mapper,expected,List.of("id","indicator","title","scheduledAt","timingPrecision","impact","unit","forecast","previous","rawForecast","rawPrevious","receivedAt","version")));
         packet.put("expectationSource",Map.of("source","FOREX_FACTORY_PROVIDER_FORECAST","url",DriverSources.CALENDAR));
         packet.put("evidenceIds",List.copyOf(refs));store.save("research-analysis-references",runId,referenceMap);
         packet.put("precision","价格/金额/时刻原精度，派生百分比舍入8位；全精度归档。");
-        packet.put("expectationSelection","本周导出未来48h最近6项USD安排；UNMAPPED保留原文、不计算差值；导出无实际值。");
-        packet.put("gaps",view.gaps());
+        packet.put("expectationSelection","本周未来48h最多6项USD；UNMAPPED仅原文、不算差值；无实际值。");
+        if(view.supplemental()!=null){
+            var extra=mapper.createArrayNode();var latest=view.supplemental().observations().stream().sorted(Comparator.comparing(SupplementalSources.Observation::period).reversed()).toList();
+            Set<String> selected=new HashSet<>();for(var o:latest){String field=switch(o.source()){case "DOL_CLAIMS"->o.id().equals("INITIAL_CLAIMS")?"actual":null;case "CFTC_GOLD"->"managedNet";case "CENSUS_ECON"->o.label().contains("Retail and Food Services")?"reportedChangePct":null;case "TREASURY_AUCTIONS"->o.label().startsWith("Note")||o.label().startsWith("Bond")?"bid_to_cover_ratio":null;case "IAU_HOLDINGS"->"tonnes";default->null;};
+                if(field==null||!o.values().containsKey(field)||!selected.add(o.source()))continue;String alias="pub:"+(extra.size()+1);referenceMap.put(alias,o.id());
+                var row=extra.addObject().put("id",alias).put("source",o.source()).put("period",o.period()).put("field",field).put("value",o.values().get(field));row.put("unit",field.equals("bid_to_cover_ratio")?"RATIO":field.equals("tonnes")?"TONNES":o.unit());row.put("publishedAt",o.publishedAt()==null?null:o.publishedAt().toString());row.put("receivedAt",o.receivedAt().toString());
+            }
+            var depth=view.supplemental().depth();if(symbol.equals("XAU_USDT")&&depth!=null&&Duration.between(depth.receivedAt(),cutoff).toSeconds()<=10){String alias="pub:"+(extra.size()+1);referenceMap.put(alias,"public-depth:XAU_USDT:"+depth.sequence());extra.addObject().put("id",alias).put("source","GATE_DEPTH").put("field","20LevelQuantityImbalance").put("value",plain(new BigDecimal(depth.imbalance()).setScale(8,RoundingMode.HALF_EVEN))).put("unit","RATIO").put("receivedAt",depth.receivedAt().toString());}
+            var trades=view.supplemental().trades();if(symbol.equals("XAU_USDT")&&trades!=null&&trades.vwap()!=null&&Duration.between(trades.receivedAt(),cutoff).toSeconds()<=10){String alias="pub:"+(extra.size()+1);referenceMap.put(alias,"public-trades:XAU_USDT:"+trades.receivedAt());extra.addObject().put("id",alias).put("source","GATE_TRADES").put("period",trades.firstAt()+"/"+trades.lastAt()).put("field","recentSampleVwap").put("value",plain(new BigDecimal(trades.vwap()).setScale(8,RoundingMode.HALF_EVEN))).put("unit","USDT_PER_XAU").put("receivedAt",trades.receivedAt().toString());}
+            packet.put("publicFacts",EvidenceTable.pack(mapper,extra,List.of("id","source","period","field","unit","value","publishedAt","receivedAt")));
+            packet.put("publicScope","每类1值、全量封存；COT周度，Census按field，拍卖倍数非收益率，IAU日频非资金流；盘口/逐笔连续性未知。");
+            store.save("research-analysis-references",runId,referenceMap);
+        }
+        packet.put("gaps",view.gaps().stream().filter(g->!g.startsWith("补充视图最多读取")).toList());
         return packet;
     }
     private static String plain(BigDecimal value){return DriverSources.plain(value);}
