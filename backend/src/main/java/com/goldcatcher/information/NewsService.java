@@ -120,6 +120,12 @@ public class NewsService {
         .sorted(Comparator.comparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
             .thenComparing(News::receivedAt,Comparator.reverseOrder())).limit(12).toList();}
     private boolean verifiedTime(News news){return news.publishedAt()!=null&&!"FEED_TIMESTAMP".equals(news.publishedPrecision());}
+    public List<News> analysisArticles(Instant cutoff){return store.list("news",News.class,1000).stream()
+        .filter(n->!n.receivedAt().isAfter(cutoff)).map(n->decorate(n,cutoff))
+        .filter(n->verifiedTime(n)&&!n.publishedAt().isAfter(cutoff)&&!Boolean.TRUE.equals(n.archived())
+            &&n.publishedAt().isAfter(cutoff.minus(Duration.ofDays(90))))
+        .sorted(Comparator.comparing(News::publishedAt).reversed()).toList();}
+    public ArticleBody bodyForEvidence(String id,Instant cutoff){return store.find("news",id,News.class).map(n->knownBody(n,cutoff)).orElse(null);}
     private ArticleBody knownBody(News news,Instant cutoff) {
         var body=bodies.get(news.id());
         return body!=null&&body.receivedAt()!=null&&!body.receivedAt().isAfter(cutoff)&&Objects.equals(body.feedHash(),news.contentHash())?body:null;

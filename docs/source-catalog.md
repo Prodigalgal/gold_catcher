@@ -1,12 +1,19 @@
 # Gold Catcher 黄金分析信源目录
 
-整理日期：2026 年 10 月 8 日。对应产品为 Gate XAU_USDT 黄金永续和 XAUUSD 黄金 CFD，主要分析数分钟至两天的机会，并保留更长周期的背景。
+更新日期：2026 年 10 月 9 日。对应产品为 Gate XAU_USDT 黄金永续和 XAUUSD 黄金 CFD，主要分析数分钟至两天的机会，并保留更长周期的背景。
 
 信源包括交易行情、经济数据与预期、财经快讯、国际突发新闻、官方公告、事件日历和黄金供需。第一版先覆盖正确的产品报价、美国重要发布、快速新闻及美元与利率信息，再扩充背景材料。来源用途、采集方式、时效和限制一起记录，避免把日频统计当成分钟行情，或把转载数量当成独立证据数量。
 
 下列是首批 45 项来源记录。同一机构的不同数据通道可以分别登记，不代表 45 家独立机构。公开文档或页面已找到与运行接入已验证是两种状态；此阶段完成来源梳理，尚未取得所有订阅、验证凭据或测量链路延迟。
 
-当前已实现的11个官方传输通道和正文、日历、代理规则见 [运行实现记录](runtime-alpha.md#官方信息)。本目录其余项目仍是接入目标，商业订阅、市场一致预期和关联市场实时流不能计入现有覆盖。
+当前已实现11个官方传输通道，并新增6个公开驱动与日历通道，详见 [运行实现记录](runtime-alpha.md#公开驱动数据与快速结构观察)。本目录其余项目仍是接入目标，商业快讯、分钟级美国收益率和经核实的市场一致预期不能计入现有覆盖。
+
+| 新增运行通道 | 接口与调度 | 已取得的用途与限制 |
+| --- | --- | --- |
+| GATE_USIDX / EURUSD / USDJPY | [Gate 官方 CFD API](https://www.gate.com/docs/developers/apiv4/en/cfd/) 的公开 /tradfi tickers，每5秒；1分钟 klines 每60秒 | 美元关联报价，约5/15/60分钟变化；timestamp 是响应时刻。USIDX 基准构成未独立核实，不标为 ICE USDX |
+| TREASURY_NOMINAL | [财政部 XML](https://home.treasury.gov/treasury-daily-interest-rate-xml-feed)，daily_treasury_yield_curve，每小时 | 2年及10年名义收益率，日频统计与上一可用日变化，单位 bp |
+| TREASURY_REAL | 同一官方 XML，daily_treasury_real_yield_curve，每小时 | 10年实际收益率日频背景；允许负值，不代表盘中报价 |
+| FF_EXPECTATIONS | [Forex Factory 本周 JSON 导出](https://nfs.faireconomy.media/ff_calendar_thisweek.json)，每30分钟 | 美元数据发布与讲话安排、提供方预期；不包含实际值。未映射事件保留原文，不参与自动数值匹配 |
 
 ## 优先级和核查状态
 

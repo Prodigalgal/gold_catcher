@@ -163,11 +163,15 @@ public class GateCfdFeed {
         return List.copyOf(history.values());
     }
     private JsonNode get(String resource,Duration timeout) throws Exception {
-        if(resource.contains("/klines?"))paceKlines();
+        paceKlines();
         var response=http.send(HttpRequest.newBuilder(URI.create(settings.text("GOLD_GATE_HTTP_URL","https://api.gateio.ws/api/v4")+resource))
             .header("Accept","application/json").header("Cache-Control","no-cache").timeout(timeout).GET().build(),1_000_000);
         if(response.statusCode()!=200)throw new IllegalStateException("GATE_HTTP_"+response.statusCode());
         var body=mapper.readTree(response.body());requireSuccess(body);return body;
+    }
+    public JsonNode driverObservation(String symbol,boolean history) throws Exception {
+        if(!Set.of("USIDX","EURUSD","USDJPY").contains(symbol))throw new IllegalArgumentException("UNKNOWN_DRIVER_SYMBOL");
+        return get("/tradfi/symbols/"+symbol+(history?"/klines?kline_type=1m&limit=200":"/tickers"),Duration.ofSeconds(4));
     }
     private synchronized void paceKlines() throws InterruptedException {
         long remaining=300_000_000L-(System.nanoTime()-lastKlineRequest);

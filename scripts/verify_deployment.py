@@ -80,8 +80,33 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Official feed, article body or calendar acceptance timed out')
+driver_sources = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'TREASURY_NOMINAL', 'TREASURY_REAL', 'FF_EXPECTATIONS'}
+driver_ids = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'US_NOMINAL_2Y', 'US_NOMINAL_10Y', 'US_REAL_10Y'}
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    analysis = client.request('/api/dashboard?symbol=XAU_USDT').get('analysis', {})
+    channels = {item['id']: item for item in analysis.get('sources', [])}
+    observations = {item['id']: item for item in analysis.get('drivers', [])}
+    metrics = {item['indicator']: item for item in analysis.get('releases', [])}
+    if (set(channels) == driver_sources and all(item['state'] == 'CURRENT' for item in channels.values())
+            and set(observations) == driver_ids
+            and all(observations[key]['frequency'] == 'DAILY' and observations[key]['asOfDate']
+                    and observations[key]['unit'] == 'PERCENT' and observations[key]['responseAt'] is None
+                    for key in {'US_NOMINAL_2Y', 'US_NOMINAL_10Y', 'US_REAL_10Y'})
+            and all(observations[key]['timestampMeaning'] == 'SERVER_RESPONSE_TIME; LAST_TICK_TIME_NOT_SUPPLIED'
+                    for key in {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY'})
+            and {item['id'] for item in analysis.get('horizons', [])} == {'M5_15', 'M15_60', 'H1_4', 'H4_48'}
+            and analysis.get('method') == 'JAVA_STRUCTURE_V1_UNCALIBRATED' and analysis.get('gaps')
+            and {'CPI_MOM', 'NFP', 'JOLTS', 'PCE_MOM'} <= set(metrics)
+            and all(item['actual'] is not None and item['bodyHash'] and item['extractedAt']
+                    and (item['surprise'] is None or item['expectationReceivedAt'] < item['publishedAt'])
+                    for item in metrics.values())):
+        break
+    time.sleep(5)
+else:
+    raise SystemExit('Public driver, official numeric release or four-horizon analysis acceptance timed out')
 client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:
     raise SystemExit("web source commit mismatch")
-print("Argo digests, PoW session, Gate feeds, eleven official channels, verified BLS article time and API/web Alpha release verified.")
+print("Argo digests, PoW session, Gate feeds, eleven official channels, six public driver/calendar channels, dated official metrics, four-horizon analysis and API/web Alpha release verified.")

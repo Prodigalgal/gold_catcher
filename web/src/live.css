@@ -148,3 +148,36 @@ body { margin:0; background:#0d1118; }
 .gc-login-footer { display:flex;justify-content:space-between;color:var(--gc-muted);font-size:10px;letter-spacing:1px;border-top:1px solid var(--gc-line);padding-top:22px; }
 @media(max-width:900px) { .gc-login-layout { gap:40px; }.gc-login-card { padding:27px; }.gc-login-intro h1 { font-size:30px; } }
 @media(max-width:650px) { .gc-login-page.gc-app { padding:24px 20px; }.gc-login-layout { display:block;padding:35px 0; }.gc-login-intro { margin-bottom:28px; }.gc-login-intro h1 { margin:16px 0 10px;font-size:26px; }.gc-login-intro .gc-eyebrow { font-size:8px; }.gc-login-visual,.gc-login-features { display:none; }.gc-login-card { padding:26px 22px; }.gc-login-card input { font-size:16px; }.gc-login-brand>span { display:none; }.gc-login-footer { gap:10px;font-size:9px; } }
+.gc-driver-board { margin: 24px 0; }
+.gc-horizon-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; }
+.gc-horizon-card { padding: 18px; min-width: 0; }
+.gc-horizon-card .gc-panel-head { align-items: flex-start; flex-wrap: wrap; gap: 8px; }
+.gc-horizon-card ul { padding-left: 17px; font-size: 12px; line-height: 1.8; min-height: 72px; margin: 12px 0; }
+.gc-horizon-card details { font-size: 12px; line-height: 1.7; }
+.gc-horizon-card summary,.gc-economic-row summary { cursor: pointer; }
+.gc-driver-tabs { margin: 20px 0; }
+.gc-driver-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+.gc-driver-card { min-width: 0; }
+.gc-driver-card .gc-panel-head { gap: 10px; flex-wrap: wrap; }
+.gc-driver-card a,.gc-driver-source a { color: var(--gc-text); text-decoration: none; font-weight: 600; }
+.gc-driver-card > strong { display: block; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 29px; letter-spacing: -1px; margin: 16px 0; }
+.gc-driver-card > strong small { font-size: 13px; margin-left: 5px; color: var(--gc-muted); }
+.gc-driver-card > small,.gc-driver-source > small { color: var(--gc-muted); font-size: 11px; line-height: 1.8; }
+.gc-driver-returns { display: flex; gap: 14px; flex-wrap: wrap; margin: 10px 0; }
+.gc-driver-returns span { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--gc-muted); }
+.gc-driver-returns b { font-size: 13px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--gc-text); font-weight: 500; }
+.gc-driver-gaps { margin-top: 16px; font-size: 13px; line-height: 1.9; }
+.gc-economic-row { border-top: 1px solid var(--gc-line); padding: 15px 0; }
+.gc-economic-row summary { display: grid; grid-template-columns: 1.5fr repeat(3,1fr); gap: 12px; align-items: center; }
+.gc-economic-row summary span { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.gc-economic-row summary small,.gc-expectation-row small { font-size: 11px; color: var(--gc-muted); }
+.gc-economic-row summary b { font-size: 13px; overflow-wrap: anywhere; }
+.gc-economic-detail { margin-top: 12px; padding: 15px; background: var(--gc-surface); border-radius: 10px; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.gc-economic-reactions { border-top: 1px solid var(--gc-line); padding-top: 15px; }
+.gc-economic-reactions > div { padding: 12px 0; font-size: 13px; }
+.gc-expectation-row { display: grid; grid-template-columns: 110px 1.5fr 1fr 1fr; gap: 14px; align-items: center; border-top: 1px solid var(--gc-line); padding: 15px 0; font-size: 12px; }
+.gc-expectation-row > span:nth-child(2) { display: flex; flex-direction: column; gap: 6px; }
+.gc-expectation-row > small { grid-column: 2/-1; }
+.gc-driver-source { margin-top: 16px; overflow-wrap: anywhere; }
+@media(max-width:1200px) { .gc-horizon-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .gc-driver-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media(max-width:640px) { .gc-horizon-grid,.gc-driver-grid { grid-template-columns: 1fr; } .gc-horizon-card ul { min-height: 0; } .gc-economic-row summary { grid-template-columns: repeat(3,minmax(0,1fr)); } .gc-economic-row summary > span:first-child { grid-column: 1/-1; } .gc-expectation-row { grid-template-columns: 1fr 1fr; } .gc-expectation-row > time { grid-column: 1/-1; } .gc-expectation-row > span:nth-child(2) { grid-column: 1/-1; } .gc-expectation-row > small { grid-column: 1/-1; } }

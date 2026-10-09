@@ -8,6 +8,8 @@ Gate XAU_USDT 已接入 WebSocket 买卖一、公开规格、风险档位、六�
 
 官方信息配置11个通道：Fed/ECB 公告与讲话、BEA 当前发布、BLS CPI/就业/PPI/JOLTS，以及 BLS/BEA/FOMC 日历。信息页展示正文、时间核验与信源质量；旧 BEA 档案单独保留。CF/VLESS 代理为可选备用，订阅只保存在服务器管理私密目录，默认通过直接连接采集。
 
+新增6个公开驱动与日历通道：Gate USIDX/EURUSD/USDJPY 每5秒检查，美国财政部名义和实际收益率每小时检查日频曲线，Forex Factory 本周日历每30分钟检查。Java 提取 CPI、就业、PPI、JOLTS、PCE 和 GDP 的明确数值及修订，生成5–15分钟、15–60分钟、1–4小时和4–48小时结构观察。总览与信息页展示数值、统计日、依据与覆盖缺口，多 AI 共享冻结版本。分钟级美债收益率与商业实时快讯仍未接入。
+
 ## 设计与运行边界
 
 - [系统与模拟规则](docs/system-design.md)

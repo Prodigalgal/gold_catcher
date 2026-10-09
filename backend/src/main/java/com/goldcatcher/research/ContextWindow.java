@@ -54,8 +54,21 @@ final class ContextWindow {
             for(JsonNode article:selected.path("evidence").path("news"))
                 shorten(article,"excerpt",newsLimit,"evidence.news["+(index++)+"].excerpt",changes);
             index=0;
+            for(JsonNode release:selected.path("evidence").path("analysis").path("releases")) {
+                String path="evidence.analysis.releases["+(index++)+"].";
+                shorten(release,"excerpt",newsLimit,path+"excerpt",changes);
+                int revision=0;for(JsonNode row:release.path("revisions"))shorten(row,"excerpt",newsLimit,path+"revisions["+(revision++)+"].excerpt",changes);
+                int metricIndex=0;for(JsonNode metric:release.path("metrics")){
+                    String metricPath=path+"metrics["+(metricIndex++)+"].";shorten(metric,"excerpt",newsLimit,metricPath+"excerpt",changes);
+                    int revisionIndex=0;for(JsonNode row:metric.path("revisions"))shorten(row,"excerpt",newsLimit,metricPath+"revisions["+(revisionIndex++)+"].excerpt",changes);
+                }
+            }
+            index=0;
+            for(JsonNode driver:selected.path("evidence").path("analysis").path("drivers"))shorten(driver,"note",impactLimit,"evidence.analysis.drivers["+(index++)+"].note",changes);
+            index=0;
             for(JsonNode peer:selected.path("peers")) {
                 String path="peers["+(index++)+"].output.";JsonNode output=peer.path("output");
+                shorten(output,"analysisSummary",peerLimit,path+"analysisSummary",changes);
                 shorten(output,"output",peerLimit,path+"output",changes);
                 shorten(output,"changes",changeLimit,path+"changes",changes);
                 int impactIndex=0;

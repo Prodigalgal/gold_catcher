@@ -1,6 +1,7 @@
 package com.goldcatcher;
 
 import com.goldcatcher.information.NewsService;
+import com.goldcatcher.analysis.TrendAnalysis;
 import com.goldcatcher.network.SourceProxyPool;
 import com.goldcatcher.market.MarketFeed;
 import com.goldcatcher.persistence.DocumentStore;
@@ -23,10 +24,11 @@ public class RuntimeApi {
     private final Any2ApiClient ai;private final RuntimeSettings settings;private final EventHub events;private final DocumentStore store;private final Clock clock;
     private final FundingService funding;
     private final SourceProxyPool proxy;
+    private final TrendAnalysis analysis;
     public RuntimeApi(MarketFeed market,NewsService news,SimulationLedger ledger,ResearchService research,Any2ApiClient ai,
-        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy) {
+        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis) {
         this.market=market;this.news=news;this.ledger=ledger;this.research=research;this.ai=ai;this.settings=settings;this.events=events;this.store=store;this.clock=clock;
-        this.funding=funding;this.proxy=proxy;
+        this.funding=funding;this.proxy=proxy;this.analysis=analysis;
     }
     @GetMapping("/session") public Map<String,String> session(Principal principal,CsrfToken token) {
         return Map.of("username",principal.getName(),"csrfHeader",token.getHeaderName(),"csrfToken",token.getToken());
@@ -36,6 +38,7 @@ public class RuntimeApi {
         data.put("serverTime",clock.instant());data.put("market",market.snapshot(symbol));data.put("marketProvenance",market.provenance(symbol));data.put("account",ledger.view(symbol));
         data.put("news",news.news());data.put("calendar",news.calendar());data.put("sources",news.sources());data.put("models",ai.states());
         data.put("sourceProxy",proxy.status());
+        data.put("analysis",analysis.view(symbol));
         data.put("funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));
         data.put("costConfiguration",market.costConfiguration(symbol));
         data.put("budgets",settings.routes().stream().map(route->Map.ofEntries(Map.entry("id",route.id()),Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("characterLimit",route.characterLimit()),

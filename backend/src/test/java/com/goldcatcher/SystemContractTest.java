@@ -65,6 +65,9 @@ class SystemContractTest {
         var invalid=post(client,"/api/research",Map.of("symbol","UNKNOWN","horizon","SHORT"),token);
         assertThat(invalid.statusCode()).isEqualTo(400);assertThat(invalid.body()).contains("UNKNOWN_PRODUCT");
         var cfd=mapper.readTree(get(client,"/api/dashboard?symbol=GATE:XAUUSD").body());
+        assertThat(cfd.path("analysis").path("horizons")).hasSize(4);
+        assertThat(cfd.path("analysis").path("method").asText()).isEqualTo("JAVA_STRUCTURE_V1_UNCALIBRATED");
+        assertThat(cfd.path("analysis").path("sources")).hasSize(6);
         assertThat(cfd.path("market").path("quote").isNull()).isTrue();assertThat(cfd.path("account").path("balance").isNull()).isTrue();
         assertThat(post(client,"/api/auth/logout",Map.of(),null).statusCode()).isEqualTo(403);
         assertThat(post(client,"/api/auth/logout",Map.of(),token).statusCode()).isEqualTo(200);
