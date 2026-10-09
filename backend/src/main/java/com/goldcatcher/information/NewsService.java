@@ -90,7 +90,7 @@ public class NewsService {
             states.put(state.id(),state);
     }
     public void onNews(Consumer<String> trigger){newsTrigger=trigger;}
-    public List<News> news(){return store.list("news",News.class,1000).stream().map(this::decorate)
+    public List<News> news(){return distinctArticles(store.list("news",News.class,1000)).stream().map(this::decorate)
         .sorted(Comparator.comparing((News news)->Boolean.TRUE.equals(news.archived()))
             .thenComparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
             .thenComparing(News::receivedAt,Comparator.nullsLast(Comparator.reverseOrder()))).limit(300).toList();}
@@ -122,18 +122,37 @@ public class NewsService {
             return new SourceState(state.id(),state.url(),state.state(),state.intervalSeconds(),state.lastSuccess(),state.nextPoll(),state.error(),state.entries(),quality,state.route());
         }).toList();
     }
-    public List<News> evidence(Instant cutoff){return store.list("news",News.class,1000).stream()
-        .filter(n->!n.receivedAt().isAfter(cutoff)).map(n->decorate(n,cutoff))
+    public List<News> evidence(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
+        .filter(n->!n.receivedAt().isAfter(cutoff)).toList()).stream().map(n->decorate(n,cutoff))
         .filter(n->verifiedTime(n)&&!n.publishedAt().isAfter(cutoff)&&!Boolean.TRUE.equals(n.archived()))
         .filter(n->n.publishedAt().isAfter(cutoff.minus(Duration.ofDays(7))))
         .sorted(Comparator.comparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
             .thenComparing(News::receivedAt,Comparator.reverseOrder())).limit(12).toList();}
     private boolean verifiedTime(News news){return news.publishedAt()!=null&&!"FEED_TIMESTAMP".equals(news.publishedPrecision());}
-    public List<News> analysisArticles(Instant cutoff){return store.list("news",News.class,1000).stream()
-        .filter(n->!n.receivedAt().isAfter(cutoff)).map(n->decorate(n,cutoff))
+    public List<News> analysisArticles(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
+        .filter(n->!n.receivedAt().isAfter(cutoff)).toList()).stream().map(n->decorate(n,cutoff))
         .filter(n->verifiedTime(n)&&!n.publishedAt().isAfter(cutoff)&&!Boolean.TRUE.equals(n.archived())
             &&n.publishedAt().isAfter(cutoff.minus(Duration.ofDays(90))))
         .sorted(Comparator.comparing(News::publishedAt).reversed()).toList();}
+    private List<News> distinctArticles(List<News> articles) {
+        var known=new LinkedHashMap<String,News>();
+        for(var article:articles) {
+            String link=canonicalBojUrl(article.link());
+            boolean bojAlias=article.source().equals("BOJ_NEWS")&&link.startsWith("https://www.boj.or.jp/")
+                &&(article.id().equals(hash("BOJ_NEWS:"+link))||article.id().equals(hash("BOJ_NEWS:http"+link.substring(5))));
+            String key=bojAlias?"BOJ_NEWS:"+link:article.id();
+            known.merge(key,article,(left,right)->{
+                // Keep first knowledge for unchanged legacy aliases and latest knowledge for actual revisions.
+                int time=left.receivedAt().compareTo(right.receivedAt());
+                if(time==0)return left.version()!=right.version()?(left.version()>right.version()?left:right):left.id().compareTo(right.id())<=0?left:right;
+                var latest=time>0?left:right;var earlier=time<0?left:right;
+                // A revision can restore old content; only first-version aliases reuse earlier knowledge.
+                return Objects.equals(left.contentHash(),right.contentHash())&&latest.version()==1?earlier:latest;
+            });
+        }
+        return List.copyOf(known.values());
+    }
+    private static String canonicalBojUrl(String link){return link.startsWith("http://www.boj.or.jp/")?"https"+link.substring(4):link;}
     public ArticleBody bodyForEvidence(String id,Instant cutoff){return store.find("news",id,News.class).map(n->knownBody(n,cutoff)).orElse(null);}
     private ArticleBody knownBody(News news,Instant cutoff) {
         var body=bodies.get(news.id());
@@ -334,9 +353,10 @@ public class NewsService {
             if(source.startsWith("EIA_")&&!link.isBlank()){
                 try{var target=URI.create("https://www.eia.gov/").resolve(link);if("http".equalsIgnoreCase(target.getScheme())&&Set.of("www.eia.gov","eia.gov").contains(target.getHost()))target=URI.create("https"+target.toString().substring(4));link=target.toString();}catch(IllegalArgumentException invalid){continue;}
             }
-            if(source.equals("BOJ_NEWS")&&link.startsWith("http://www.boj.or.jp/"))link="https"+link.substring(4);
+            if(source.equals("BOJ_NEWS"))link=canonicalBojUrl(link);
             if(title.isBlank()||!safeLink(link))continue;
             String identity=text(item,atom?"id":"guid");if(identity.isBlank())identity=link;
+            if(source.equals("BOJ_NEWS"))identity=canonicalBojUrl(identity);
             String summary=text(item,atom?"content":"description");if(summary.isBlank()&&atom)summary=text(item,"summary");
             String id=hash(source+":"+identity),excerpt=Jsoup.parseBodyFragment(summary).text();
             if(excerpt.length()>1800)excerpt=excerpt.substring(0,1800)+" [来源摘要已截短]";

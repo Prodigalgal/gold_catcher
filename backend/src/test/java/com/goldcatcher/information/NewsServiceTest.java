@@ -8,6 +8,37 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void bojSchemeChangesDoNotCreateNewKnowledgeOrDuplicateEvents() throws Exception {
+        var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
+        String xml="<rss><channel><item><guid>http://www.boj.or.jp/en/decision.pdf</guid><title>Policy</title><link>http://www.boj.or.jp/en/decision.pdf</link><description>Unchanged decision</description><pubDate>Thu, 08 Oct 2026 09:00:00 GMT</pubDate></item></channel></rss>";
+        assertThat(news.parseRss("BOJ_NEWS",bytes(xml))).isEqualTo(1);var first=news.news().getFirst();f.clock.advance(5000);
+        assertThat(news.parseRss("BOJ_NEWS",bytes(xml.replace("http://www.boj.or.jp/","https://www.boj.or.jp/")))).isZero();
+        assertThat(news.news()).hasSize(1);assertThat(news.news().getFirst().receivedAt()).isEqualTo(first.receivedAt());
+        assertThat(f.store.events(first.id(),100)).hasSize(1);
+        assertThat(news.parseRss("BOJ_NEWS",bytes(xml.replace("Unchanged decision","Revised decision")))).isEqualTo(1);
+        assertThat(news.news()).hasSize(1);assertThat(news.news().getFirst().version()).isEqualTo(2);
+    }
+    @Test void legacyBojAliasesMergeAtTheReadCutoffWithoutRewritingHistory() {
+        var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
+        var time=f.clock.instant();String link="https://www.boj.or.jp/en/decision.pdf";
+        var first=new NewsService.News(NewsService.hash("BOJ_NEWS:http"+link.substring(5)),"BOJ_NEWS","Policy","Original",link,time,time,"OFFICIAL_SOURCE",1,"same");
+        var duplicate=new NewsService.News(NewsService.hash("BOJ_NEWS:"+link),"BOJ_NEWS","Policy","Original",link,time,time.plusSeconds(1),"OFFICIAL_SOURCE",1,"same");
+        f.store.save("news",first.id(),first);f.store.save("news",duplicate.id(),duplicate);f.clock.advance(2000);
+        assertThat(news.news()).extracting(NewsService.News::id).containsExactly(first.id());
+        assertThat(news.sources()).filteredOn(s->s.id().equals("BOJ_NEWS")).allSatisfy(s->assertThat(s.quality().records()).isEqualTo(1));
+        var revision=new NewsService.News(duplicate.id(),"BOJ_NEWS","Policy revised","Changed",link,time,time.plusSeconds(3),"OFFICIAL_SOURCE",2,"changed");
+        f.store.save("news",revision.id(),revision);f.clock.advance(2000);
+        assertThat(news.news()).extracting(NewsService.News::id).containsExactly(revision.id());
+        assertThat(news.evidence(time.plusSeconds(2))).extracting(NewsService.News::id).containsExactly(first.id());
+        assertThat(news.analysisArticles(time.plusSeconds(2))).extracting(NewsService.News::id).containsExactly(first.id());
+        assertThat(news.evidence(f.clock.instant())).extracting(NewsService.News::id).containsExactly(revision.id());
+        var restored=new NewsService.News(duplicate.id(),"BOJ_NEWS","Policy","Original",link,time,time.plusSeconds(5),"OFFICIAL_SOURCE",3,"same");
+        f.store.save("news",restored.id(),restored);f.clock.advance(2000);
+        assertThat(news.news().getFirst().receivedAt()).isEqualTo(restored.receivedAt());
+        var distinct=new NewsService.News("opaque-guid","BOJ_NEWS","Different publication","Other",link,time,time,"OFFICIAL_SOURCE",1,"same");
+        f.store.save("news",distinct.id(),distinct);assertThat(news.news()).hasSize(2);
+        assertThat(f.store.list("news",NewsService.News.class,100)).hasSize(3);
+    }
     @Test void newFeedsResolveOfficialRelativeLinksWithoutInventingPublicationTimes() throws Exception {
         var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
         String xml="<rss xmlns:a='http://www.w3.org/2005/Atom'><channel><item><title>EIA release</title><link>/pressroom/releases/press593.php</link><pubDate>Wed, 07 Oct 2026 09:00:00 EST</pubDate></item><item><title>Missing year</title><link>http://www.eia.gov/todayinenergy/detail.php?id=1</link><pubDate>Thu, 08 Oct 09:00:00 EST</pubDate></item></channel></rss>";
