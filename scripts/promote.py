@@ -1,9 +1,35 @@
-"""Change only Gold Catcher's existing, activated GitOps image mappings."""
+"""Promote immutable Gold Catcher images and scoped runtime defaults together."""
 import argparse
 import json
 import re
 from pathlib import Path
 import yaml
+
+
+def runtime_changes(root: Path) -> list[tuple[Path, str]]:
+    """Preserve replicas, placement, credentials and every unrelated application's settings."""
+    source = Path(__file__).resolve().parents[1] / "deploy/gitops/base"
+    target = (root / "gold-catcher/base").resolve()
+    paths = [target / name for name in ("configmap.yaml", "deployments.yaml")]
+    if any(not path.resolve().is_relative_to(root.resolve()) for path in paths):
+        raise ValueError("runtime target escaped repository")
+    config = yaml.safe_load(paths[0].read_text(encoding="utf-8"))
+    template = yaml.safe_load((source / "configmap.yaml").read_text(encoding="utf-8"))
+    if config.get("kind") != "ConfigMap" or config.get("metadata", {}).get("name") != "gold-catcher-config":
+        raise ValueError("unexpected runtime ConfigMap")
+    for key in ("GOLD_DRIVERS_ENABLED", "GOLD_COMPRESSION_ENABLED", "GOLD_COMPRESSION_CHUNKS_PER_PASS", "GOLD_MARKET_ARCHIVE_RETENTION_DAYS"):
+        config["data"][key] = template["data"][key]
+    deployments = list(yaml.safe_load_all(paths[1].read_text(encoding="utf-8")))
+    templates = list(yaml.safe_load_all((source / "deployments.yaml").read_text(encoding="utf-8")))
+    servers = [item for item in deployments if item.get("kind") == "Deployment" and item.get("metadata", {}).get("name") == "gold-catcher-server"]
+    if len(servers) != 1:
+        raise ValueError("expected exactly one Gold Catcher server Deployment")
+    containers = [item for item in servers[0]["spec"]["template"]["spec"]["containers"] if item.get("name") == "server"]
+    if len(containers) != 1:
+        raise ValueError("expected exactly one Gold Catcher server container")
+    server_template = next(item for item in templates if item["metadata"]["name"] == "gold-catcher-server")
+    containers[0]["resources"] = server_template["spec"]["template"]["spec"]["containers"][0]["resources"]
+    return [(paths[0], yaml.safe_dump(config, sort_keys=False)), (paths[1], yaml.safe_dump_all(deployments, sort_keys=False))]
 
 
 def promote(root: Path, inputs: Path, commit: str) -> None:
@@ -30,10 +56,13 @@ def promote(root: Path, inputs: Path, commit: str) -> None:
         entries[0].pop("newTag", None)
         entries[0]["digest"] = record["digest"]
         records.append(record)
-    # Validate every record before changing either file.
+    # Validate images and every scoped runtime mutation before writing any file.
+    updates = runtime_changes(root)
     release = {"sourceCommit": commit, "components": records}
     file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     (target / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
+    for path, text in updates:
+        path.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":

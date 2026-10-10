@@ -92,7 +92,16 @@ public class NewsService {
         this.settings=settings;this.http=http;this.store=store;this.events=events;this.clock=clock;this.proxy=proxy;this.reliability=reliability;this.polling=polling;
     }
     @PostConstruct void recover() {
-        store.list("news-body",ArticleBody.class,1000).forEach(body->bodies.put(body.id(),body));
+        store.list("news-body",ArticleBody.class,1000).forEach(body->{
+            // Parser support changed, not network access: only retry this exact former XLSX error.
+            // HTTP/Retry-After and other failures keep their original deadline across restarts.
+            if(body.source().equals("BOJ_NEWS")&&body.link().split("\\?",2)[0].toLowerCase(Locale.ROOT).endsWith(".xlsx")
+                    &&"ARTICLE_FORMAT_CHANGED".equals(body.error())&&body.format()==null){
+                body=new ArticleBody(body.id(),body.source(),body.link(),body.text(),body.state(),body.hash(),body.receivedAt(),body.checkedAt(),clock.instant(),body.version(),body.error(),body.truncated(),body.feedHash(),body.releaseAt(),body.format());
+                store.save("news-body",body.id(),body);store.event(body.id(),"NEWS_BODY_XLSX_PARSER_RETRY_SCHEDULED",Map.of("at",clock.instant(),"formerError","ARTICLE_FORMAT_CHANGED"));
+            }
+            bodies.put(body.id(),body);
+        });
         for(var state:store.list("source-state",SourceState.class,100))if(Objects.equals(FEEDS.get(state.id()),state.url()))
             states.put(state.id(),new SourceState(state.id(),state.url(),state.state(),pollInterval(state.id()),state.lastSuccess(),
                 state.error()!=null&&state.nextPoll()!=null&&state.nextPoll().isAfter(clock.instant())?state.nextPoll():clock.instant(),state.error(),state.entries(),state.quality(),state.route()));
@@ -201,7 +210,10 @@ public class NewsService {
         Map<String,Object> result=new LinkedHashMap<>();result.put("news",decorate(article));result.put("body",bodies.get(id));return result;
     }
     public List<Map<String,Object>> freezeEvidence(Instant cutoff,String runId,int limit) {
-        var selected=evidence(cutoff).stream().limit(limit).toList();var packet=new ArrayList<Map<String,Object>>();var archive=new ArrayList<Map<String,Object>>();
+        var candidates=evidence(cutoff);var selected=new ArrayList<News>();var families=new HashSet<String>();var links=new HashSet<String>();
+        for(var article:candidates){String family=article.source().split("_")[0];if(selected.size()<limit&&families.add(family)&&links.add(article.link()))selected.add(article);}
+        for(var article:candidates)if(selected.size()<limit&&links.add(article.link()))selected.add(article);
+        var packet=new ArrayList<Map<String,Object>>();var archive=new ArrayList<Map<String,Object>>();
         for(var article:selected) {
             var original=store.find("news",article.id(),News.class).orElseThrow();
             if(original.version()!=article.version()||original.receivedAt().isAfter(cutoff))continue;
@@ -255,7 +267,7 @@ public class NewsService {
             String error=failure instanceof IllegalStateException&&failure.getMessage()!=null&&failure.getMessage().matches("[A-Z0-9_]+")?failure.getMessage():"ARTICLE_FETCH_FAILED";
             reliability.failure(article.source(),"BODY",started,error);
             int retry=article.publishedAt()!=null&&article.publishedAt().isAfter(now.minusSeconds(1800))?30:900;
-            body=new ArticleBody(article.id(),article.source(),article.link(),previous==null?"":previous.text(),previous==null?"FETCH_FAILED":"CACHED_AFTER_FAILURE",
+            body=new ArticleBody(article.id(),article.source(),article.link(),previous==null?"":previous.text(),previous==null||previous.text().isBlank()?"FETCH_FAILED":"CACHED_AFTER_FAILURE",
                 previous==null?null:previous.hash(),previous==null?null:previous.receivedAt(),now,now.plusSeconds(SourcePolling.retrySeconds(failure,now,retry)),previous==null?0:previous.version(),error,
                 previous!=null&&previous.truncated(),previous==null?article.contentHash():previous.feedHash(),previous==null?null:previous.releaseAt(),previous==null?null:previous.format());store.save("news-body",article.id(),body);
         }

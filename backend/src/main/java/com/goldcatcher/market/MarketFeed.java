@@ -23,24 +23,33 @@ public class MarketFeed {
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;
     private final DocumentStore store;private final IndicatorEngine engine;private final EventHub events;private final Clock clock;private final GateCfdFeed gate;
     private final Map<String,List<Candle>> candles=new ConcurrentHashMap<>();private final Map<String,Indicators> calculated=new ConcurrentHashMap<>();
-    private record Inbound(long generation,String raw) {}
+    private record Inbound(long generation,String raw,Instant receivedAt) {}
+    public record StreamFrame(String symbol,String channel,long connectionEpoch,Instant sourceAt,Instant receivedAt,String raw) {}
     private final BlockingQueue<Inbound> incoming=new ArrayBlockingQueue<>(1024);private final AtomicLong generation=new AtomicLong();
     private final Thread processor;private long processedGeneration=-1,lastBookSequence=-1;
     private volatile Quote quote;private volatile Instrument rules;private volatile String error,historyError;
     private volatile WebSocket socket;private volatile Instant lastMessage=Instant.EPOCH,nextFundingTime,lastHistorySuccess;
-    private volatile Consumer<Quote> consumer=q->{};private JsonNode ticker;private Instant tickerTime;private boolean disconnected=true;
+    private final List<Consumer<Quote>> consumers=new CopyOnWriteArrayList<>();
+    private final List<Consumer<StreamFrame>> frameConsumers=new CopyOnWriteArrayList<>();
+    private final GateDepthBook depth=new GateDepthBook();private final java.util.concurrent.atomic.AtomicBoolean depthBootstrap=new java.util.concurrent.atomic.AtomicBoolean();
+    private JsonNode ticker;private Instant tickerTime;private boolean disconnected=true;
     public MarketFeed(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,DocumentStore store,
         IndicatorEngine engine,EventHub events,Clock clock,GateCfdFeed gate) {
         this.settings=settings;this.http=http;this.mapper=mapper;this.store=store;this.engine=engine;this.events=events;this.clock=clock;this.gate=gate;
+        gate.onQuote(q->consumers.forEach(consumer->consumer.accept(q)));
         ticker=mapper.createObjectNode();processor=Thread.ofVirtual().name("gold-market-events").start(()->{
             while(!Thread.currentThread().isInterrupted())try{process(incoming.take());}
             catch(InterruptedException interrupted){Thread.currentThread().interrupt();}
             catch(Exception failure){error="INVALID_MARKET_EVENT";disconnect();}
         });
     }
-    public void onQuote(Consumer<Quote> consumer){this.consumer=consumer;}
+    public void onQuote(Consumer<Quote> consumer){consumers.add(consumer);}
+    public void onFrame(Consumer<StreamFrame> consumer){frameConsumers.add(consumer);}
     public Quote latestQuote(){return quote;}
     public Instrument instrument(){return rules;}
+    public Map<String,Object> depth(){return depth.view(clock.instant());}
+    public List<Candle> candles(String symbol,String frame){if(!FRAMES.containsKey(frame))throw new IllegalArgumentException("UNKNOWN_FRAME");
+        if(GateCfdFeed.PRODUCT.equals(symbol))return gate.candles(frame);if(!PRODUCT.equals(symbol))throw new IllegalArgumentException("UNKNOWN_PRODUCT");return candles.getOrDefault(frame,List.of());}
     public BigDecimal feeRate(String symbol){return PRODUCT.equals(symbol)?settings.decimal("GOLD_TAKER_FEE_RATE",null)!=null?
         settings.decimal("GOLD_TAKER_FEE_RATE",null):rules==null?null:rules.takerFeeRate():null;}
     public Map<String,String> costConfiguration(String symbol) {
@@ -64,6 +73,10 @@ public class MarketFeed {
         info.put("quoteTimestampMeaning","BOOK_TICKER_EVENT_TIME");info.put("depthStatus","L1_VISIBLE_SIZE");info.put("rulesState",rules==null?"UNKNOWN":"PUBLIC_RULES_TAKER_ASSUMPTION");
         info.put("simulationReady",rules!=null&&feeRate(symbol)!=null);info.put("historyError",historyError);info.put("lastHistorySuccess",lastHistorySuccess);
         info.put("quantityUnit","XAU base quantity; native contracts = quantity / quantityMultiplier");
+        info.put("connectionState",socket!=null&&lastMessage.isAfter(clock.instant().minusSeconds(35))?"CONNECTED":"DISCONNECTED");
+        info.put("lastMessageAt",lastMessage);info.put("quoteAgeMillis",quote==null?null:Math.max(0,Duration.between(quote.exchangeTime(),clock.instant()).toMillis()));
+        info.put("quoteFreshness",quote==null?"NO_QUOTE":quote.fresh(clock.instant())?"FRESH":"NO_RECENT_PRICE_EVENT");
+        info.put("executionFreshnessMillis",3000);
         info.put("leverageStepMethod","WHOLE_INTEGER_LEVERAGE_ASSUMPTION");info.put("historyState",calculated.size()==6?"READY":"WARMING_UP");return info;
     }
     @Scheduled(fixedDelay=15000,initialDelay=1000)
@@ -76,7 +89,8 @@ public class MarketFeed {
             socket=http.client.newWebSocketBuilder().header("X-Gate-Size-Decimal","1").connectTimeout(Duration.ofSeconds(10))
                 .buildAsync(URI.create(settings.text("GOLD_GATE_WS_URL","wss://fx-ws.gateio.ws/v4/ws/usdt")),new Listener(epoch)).get(12,TimeUnit.SECONDS);
             lastMessage=clock.instant();
-            for(String channel:List.of("futures.book_ticker","futures.tickers"))socket.sendText("{\"time\":"+clock.instant().getEpochSecond()+",\"channel\":\""+channel+"\",\"event\":\"subscribe\",\"payload\":[\"XAU_USDT\"]}",true);
+            for(String channel:List.of("futures.book_ticker","futures.tickers","futures.trades"))socket.sendText("{\"time\":"+clock.instant().getEpochSecond()+",\"channel\":\""+channel+"\",\"event\":\"subscribe\",\"payload\":[\"XAU_USDT\"]}",true);
+            socket.sendText("{\"time\":"+clock.instant().getEpochSecond()+",\"channel\":\"futures.order_book_update\",\"event\":\"subscribe\",\"payload\":[\"XAU_USDT\",\"100ms\",\"100\"]}",true);
         }catch(Exception failure){error="WEBSOCKET_CONNECT_FAILED";disconnect();}
     }
     @Scheduled(fixedDelay=60000,initialDelay=1000)
@@ -125,18 +139,33 @@ public class MarketFeed {
     }
     private synchronized void process(Inbound inbound) {
         if(inbound.generation()!=generation.get())return;
-        if(processedGeneration!=inbound.generation()){processedGeneration=inbound.generation();disconnected=true;lastBookSequence=-1;ticker=mapper.createObjectNode();tickerTime=null;}
+        if(processedGeneration!=inbound.generation()){processedGeneration=inbound.generation();disconnected=true;lastBookSequence=-1;ticker=mapper.createObjectNode();tickerTime=null;depth.reset();
+            frameConsumers.forEach(c->c.accept(new StreamFrame(PRODUCT,"CONNECTION_EPOCH",inbound.generation(),null,inbound.receivedAt(),"{\"continuity\":\"NEW_CONNECTION\"}")));}
         JsonNode payload=mapper.readTree(inbound.raw());lastMessage=clock.instant();if(payload.hasNonNull("error"))throw new IllegalStateException("GATE_WS_ERROR");
         if(!payload.path("event").asText().equals("update"))return;
         String channel=payload.path("channel").asText();var data=payload.path("result");
+        {
+            var frame=new StreamFrame(PRODUCT,channel,inbound.generation(),payload.path("time_ms").asLong()>0?Instant.ofEpochMilli(payload.path("time_ms").asLong()):null,inbound.receivedAt(),inbound.raw());
+            frameConsumers.forEach(consumer->consumer.accept(frame));
+        }
+        if(channel.equals("futures.order_book_update")){if(depth.update(data,inbound.receivedAt()))bootstrapDepth(inbound.generation());events.changed();return;}
         if(channel.equals("futures.tickers")) {
             for(var row:data)if(row.path("contract").asText().equals(PRODUCT)){ticker=row;tickerTime=Instant.ofEpochMilli(row.path("t").asLong(payload.path("time_ms").asLong()));}
+            var previous=quote;
+            if(previous!=null)quote=new Quote(previous.symbol(),previous.source(),previous.sequence(),previous.exchangeTime(),previous.receivedAt(),previous.bid(),previous.ask(),previous.bidSize(),previous.askSize(),decimal(ticker.path("last")),decimal(ticker.path("mark_price")),tickerTime,decimal(ticker.path("funding_rate")),nextFundingTime,previous.continuous());
+            events.changed();
             return;
         }
         if(!channel.equals("futures.book_ticker")||!data.path("s").asText().equals(PRODUCT)||rules==null)return;
         long sequence=data.path("u").asLong(-1);if(sequence<0)throw new IllegalStateException("INVALID_BOOK_SEQUENCE");if(sequence<=lastBookSequence)return;
-        Quote next=parseBook(data,rules,ticker,tickerTime,nextFundingTime,clock.instant(),!disconnected);
-        quote=next;lastBookSequence=sequence;disconnected=false;error=null;consumer.accept(next);events.changed();
+        Quote next=parseBook(data,rules,ticker,tickerTime,nextFundingTime,inbound.receivedAt(),!disconnected);
+        quote=next;lastBookSequence=sequence;disconnected=false;error=null;consumers.forEach(consumer->consumer.accept(next));events.changed();
+    }
+    private void bootstrapDepth(long epoch){if(rules==null||!depthBootstrap.compareAndSet(false,true))return;
+        Thread.ofVirtual().name("gold-depth-bootstrap").start(()->{try{var body=get("/futures/usdt/order_book?contract=XAU_USDT&limit=100&with_id=true");var received=clock.instant();
+            synchronized(this){if(epoch!=generation.get())return;depth.bootstrap(body,rules.quantityMultiplier(),received);
+                frameConsumers.forEach(c->c.accept(new StreamFrame(PRODUCT,"DEPTH_REST_BASE",epoch,null,received,mapper.writeValueAsString(body))));}}
+            catch(Exception failed){historyError="DEPTH_BOOTSTRAP_FAILED";}finally{depthBootstrap.set(false);}});
     }
     static Quote parseBook(JsonNode book,Instrument rules,JsonNode ticker,Instant tickerTime,Instant nextFundingTime,Instant receivedAt,boolean continuous) {
         return new Quote(PRODUCT,"GATE_WS_BOOK_TICKER",book.path("u").asLong(),Instant.ofEpochMilli(book.path("t").asLong()),receivedAt,
@@ -153,7 +182,7 @@ public class MarketFeed {
         public CompletionStage<?> onText(WebSocket ws,CharSequence chunk,boolean last) {
             frame.append(chunk);if(epoch!=generation.get()){ws.abort();return null;}
             if(frame.length()>200_000){error="WEBSOCKET_FRAME_TOO_LARGE";disconnect(epoch);return null;}
-            if(last){if(!incoming.offer(new Inbound(epoch,frame.toString()))){error="MARKET_QUEUE_OVERFLOW";disconnect(epoch);}frame.setLength(0);}ws.request(1);return null;
+            if(last){if(!incoming.offer(new Inbound(epoch,frame.toString(),clock.instant()))){error="MARKET_QUEUE_OVERFLOW";disconnect(epoch);}frame.setLength(0);}ws.request(1);return null;
         }
         public CompletionStage<?> onClose(WebSocket ws,int code,String reason){disconnect(epoch);return null;}
         public void onError(WebSocket ws,Throwable failure){if(epoch==generation.get()){error="WEBSOCKET_DISCONNECTED";disconnect(epoch);}}

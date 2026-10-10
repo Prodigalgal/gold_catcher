@@ -94,6 +94,22 @@ class SimulationLedgerTest {
         assertThat(current().funding.getFirst().state).isEqualTo("MISSING_BOUNDARY_MARK");assertThat(current().funding.getFirst().charge).isNull();
         assertThat(current().costIncomplete).isTrue();assertThat(current().fundingUnknown).isTrue();
     }
+    @Test void reductionStopsAtRequestedAmountAndTrailingAndExpiryRemainAudited(){
+        var plan=(tools.jackson.databind.node.ObjectNode)plan("1");plan.put("leverage","10");var order=ledger.propose("managed","XAU_USDT",plan);
+        f.clock.advance(300);send(2,"100","101","1");ledger.command(order.id,"REDUCE",f.mapper.readTree("{\"quantity\":\"0.4\"}"));
+        f.clock.advance(10);send(3,"102","103","0.2");f.clock.advance(10);send(4,"102","103","1");
+        assertThat(current().openQuantity).isEqualByComparingTo("0.6");assertThat(current().exitRequested).isFalse();
+        ledger.command(order.id,"MODIFY",f.mapper.readTree("{\"trailingDistance\":\"0.50\",\"trailingActivation\":\"102\"}"));
+        f.clock.advance(300);send(5,"103","104","1");f.clock.advance(10);send(6,"102.5","103.5","1");
+        assertThat(current().exitReason).isEqualTo("TRAILING_STOP");assertThat(current().openQuantity).isEqualByComparingTo("0");
+        var waiting=(tools.jackson.databind.node.ObjectNode)plan("1");waiting.put("entryPrice","90");ledger.propose("expires","XAU_USDT",waiting);
+        f.clock.advance(61000);ledger.expirePending();assertThat(ledger.view("XAU_USDT").orders().get(1).status).isEqualTo("EXPIRED");
+    }
+    @Test void liquidationOverridesAnOutstandingSmallReduction(){
+        var order=ledger.propose("liquidate-reduce","XAU_USDT",plan("1"));f.clock.advance(300);send(2,"100","101","1");
+        ledger.command(order.id,"REDUCE",f.mapper.readTree("{\"quantity\":\"0.1\"}"));f.clock.advance(10);send(3,"90","91","1");
+        assertThat(current().positionStatus).isEqualTo("LIQUIDATED");assertThat(current().openQuantity).isEqualByComparingTo("0");
+    }
     private Quote fundingQuote(long seq,Instant next){return new Quote("XAU_USDT","TEST",seq,f.clock.instant(),f.clock.instant(),d("100"),d("101"),d("1"),d("1"),d("101"),d("101"),f.clock.instant(),d("0.01"),next,true);}
     private tools.jackson.databind.JsonNode plan(String qty){return f.mapper.valueToTree(Map.of("action","CREATE","side","BUY","type","LIMIT","quantity",qty,"leverage","100","entryPrice","101",
         "expiresAt",f.clock.instant().plusSeconds(60).toString(),"holdUntil",f.clock.instant().plusSeconds(120).toString(),"riskAssessment","风险由模型评估","invalidate","证据失效"));}

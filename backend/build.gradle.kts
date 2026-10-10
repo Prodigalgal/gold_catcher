@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.goldcatcher"
-version = "0.3.0"
+version = "0.4.0"
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(25) }
@@ -21,6 +21,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-flyway")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.jsoup:jsoup:1.23.2")
+    implementation("org.yaml:snakeyaml")
     implementation("org.brotli:dec:0.1.2")
     implementation("com.github.luben:zstd-jni:1.5.7-22")
     implementation("org.apache.pdfbox:pdfbox:3.0.8")

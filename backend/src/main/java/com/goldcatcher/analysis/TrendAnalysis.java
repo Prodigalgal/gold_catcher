@@ -84,7 +84,7 @@ public class TrendAnalysis {
         return new View(symbol,cutoff,(System.nanoTime()-start)/1000,"JAVA_STRUCTURE_V1_UNCALIBRATED",List.copyOf(horizons),drivers,releases,sources.expectations(cutoff),sources.sources(),gaps,reactions,market.costConfiguration(symbol),version,extra);
     }
     static List<String> coverage(List<Driver> drivers,Instant cutoff){
-        List<String> gaps=new ArrayList<>();gaps.add("分钟级美国收益率、利率期货及 FedWatch 概率尚未接入");gaps.add("商业实时快讯、GLD/全球ETF流量与期权数据尚未接入");
+        List<String> gaps=new ArrayList<>();gaps.add("分钟级美国收益率、利率期货及 FedWatch 概率尚未接入");gaps.add("授权低延迟商业快讯、全球ETF流量与期权数据尚未接入；GLD/IAU为已接入的日频持仓");
         if(drivers.stream().noneMatch(d->d.id().equals("GATE_USIDX")&&fresh(d,cutoff)))gaps.add("当前美元指数 CFD 观察不可用或已过期");
         if(drivers.stream().noneMatch(d->d.id().equals("US_REAL_10Y")&&dailyFresh(d,cutoff)))gaps.add("美国实际收益率日频背景未取得或统计日过旧");
         return List.copyOf(gaps);

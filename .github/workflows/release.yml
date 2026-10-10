@@ -93,7 +93,7 @@ jobs:
           python3 scripts/check_manifests.py rendered.yaml --active
           git -C gitops config user.name gold-catcher-ci
           git -C gitops config user.email gold-catcher-ci@users.noreply.github.com
-          git -C gitops add gold-catcher/oracle/kustomization.yaml gold-catcher/oracle/release.json
+          git -C gitops add gold-catcher/oracle/kustomization.yaml gold-catcher/oracle/release.json gold-catcher/base/configmap.yaml gold-catcher/base/deployments.yaml
           git -C gitops diff --cached --quiet || git -C gitops commit -m "gold-catcher: release $SOURCE_COMMIT"
           # Reapply only the same release mutation after unrelated GitOps pushes.
           for attempt in 1 2 3; do
@@ -102,7 +102,7 @@ jobs:
             git -C gitops fetch origin main
             git -C gitops reset --hard origin/main
             python3 scripts/promote.py --gitops gitops --inputs release-input --commit "$SOURCE_COMMIT"
-            git -C gitops add gold-catcher/oracle/kustomization.yaml gold-catcher/oracle/release.json
+            git -C gitops add gold-catcher/oracle/kustomization.yaml gold-catcher/oracle/release.json gold-catcher/base/configmap.yaml gold-catcher/base/deployments.yaml
             git -C gitops diff --cached --quiet || git -C gitops commit -m "gold-catcher: release $SOURCE_COMMIT"
           done
           exit 1

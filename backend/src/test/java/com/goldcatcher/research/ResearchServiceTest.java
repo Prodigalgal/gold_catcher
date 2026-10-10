@@ -18,6 +18,7 @@ class ResearchServiceTest {
         f=new TestSupport();var market=mock(MarketFeed.class);ledger=mock(SimulationLedger.class);ai=mock(Any2ApiClient.class);
         var routes=new ArrayList<RuntimeSettings.AiRoute>();for(String id:List.of("p","q","r","j"))routes.add(new RuntimeSettings.AiRoute(id,id,id+"/"+id+"-model","https://localhost/"+id+"/v1","TEST_KEY",10000,14000,30000,2,1000,2,id.equals("j")));
         f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(routes));f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","1");f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","1");
+        when(ai.selectRoutes(anyList(),anyList())).thenAnswer(call->call.getArgument(0));
         var quote=new Quote("XAU_USDT","TEST",1,f.clock.instant(),f.clock.instant(),d("100"),d("101"),d("1"),d("1"),d("100"),d("100"),f.clock.instant(),d("0"),f.clock.instant().plusSeconds(3600),true);
         var rules=new Instrument("XAU_USDT","Trading","USDT",d(".01"),d(".001"),d(".001"),d("1000"),d("1000"),d("1"),d("1"),d("100"),d(".01"),List.of(),f.clock.instant());
         when(market.snapshot("XAU_USDT")).thenReturn(new Snapshot("XAU_USDT","LIVE",quote,rules,Map.of(),List.of(),f.clock.instant(),null));
@@ -79,6 +80,19 @@ class ResearchServiceTest {
         var range=new NewsService.CalendarEvent("c","FED","FOMC",null,"America/New_York","https://www.federalreserve.gov",f.clock.instant(),"2026-10-07","2026-10-08","DATE_RANGE");
         assertThat(ResearchService.inTradingWindow(near,f.clock.instant())).isTrue();assertThat(ResearchService.inTradingWindow(far,f.clock.instant())).isFalse();
         assertThat(ResearchService.inTradingWindow(range,f.clock.instant())).isTrue();assertThat(range.scheduledAt()).isNull();
+    }
+    @Test void cancellationAndExpiredEvidenceCannotReachTheLedger() throws Exception {
+        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        when(ai.complete(any(),anyString(),any())).thenAnswer(call->{entered.countDown();release.await(2,TimeUnit.SECONDS);throw new IllegalStateException("TEST_DELAY");});
+        var run=research.start("XAU_USDT","SHORT");assertThat(entered.await(2,TimeUnit.SECONDS)).isTrue();
+        assertThat(research.cancel(run.id).status).isEqualTo("CANCELED");release.countDown();Thread.sleep(100);
+        verify(ledger,never()).propose(anyString(),anyString(),any());assertThat(research.find(run.id).status).isEqualTo("CANCELED");
+    }
+    @Test void schedulerConfigurationPersistsAndRejectsUnsupportedProducts(){
+        var config=new ResearchService.ScheduleConfig();config.shortIntervalSeconds=60;config.longIntervalSeconds=600;config.automatic=true;
+        research.configure(config);assertThat(research.scheduling().get("automatic")).isEqualTo(true);
+        assertThat(f.store.find("research-scheduling","config",ResearchService.ScheduleConfig.class).orElseThrow().longIntervalSeconds).isEqualTo(600);
+        config.symbols=List.of("BYBIT");assertThatThrownBy(()->research.configure(config)).hasMessage("INVALID_RESEARCH_SCHEDULE");
     }
     private BigDecimal d(String s){return new BigDecimal(s);}
 }

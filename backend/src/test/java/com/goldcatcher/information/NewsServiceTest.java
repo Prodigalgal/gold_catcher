@@ -8,6 +8,14 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void xlsxParserUpgradeRetriesOnlyKnownFormatFailureAndKeepsHttpBackoff(){
+        var f=new TestSupport();var later=f.clock.instant().plusSeconds(900);
+        for(String id:List.of("format","rate")){var body=new NewsService.ArticleBody(id,"BOJ_NEWS","https://www.boj.or.jp/en/"+id+".xlsx","","FETCH_FAILED",null,null,f.clock.instant(),later,0,id.equals("format")?"ARTICLE_FORMAT_CHANGED":"ARTICLE_HTTP_429",false,"feed",null,null);f.store.save("news-body",id,body);}
+        var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);news.recover();
+        assertThat(f.store.find("news-body","format",NewsService.ArticleBody.class).orElseThrow().nextPoll()).isEqualTo(f.clock.instant());
+        assertThat(f.store.find("news-body","rate",NewsService.ArticleBody.class).orElseThrow().nextPoll()).isEqualTo(later);
+        assertThat(f.store.events("format",10)).hasSize(1);assertThat(f.store.events("rate",10)).isEmpty();
+    }
     @Test void bodyThatArrivesAfterCutoffCannotAppearInFrozenEvidence() throws Exception {
         var f=new TestSupport();var remote=mock(RemoteHttp.class);var news=new NewsService(f.settings,remote,f.store,new EventHub(),f.clock);
         news.parseRss("FED_PRESS",bytes("<rss><item><title>Decision</title><link>https://www.federalreserve.gov/newsevents/pressreleases/a.htm</link><pubDate>Thu, 08 Oct 2026 00:00:00 GMT</pubDate></item></rss>"));

@@ -11,7 +11,8 @@ class SourceReliabilityTest {
         var clock=new TestSupport.TestClock();var service=new SourceReliability(clock);var at=clock.instant();
         service.record("news","COLLECTION",true,120,0,null);service.record("news","BODY",false,800,0,"ARTICLE_FETCH_FAILED");
         var inputs=List.of(new SourceReliability.Input("news","News","OFFICIAL","url","CURRENT",5,at,at.plusSeconds(5),null));
-        var report=service.view(inputs);assertThat(report.healthy()).isEqualTo(1);
+        var report=service.view(inputs);assertThat(report.healthy()).isZero();assertThat(report.degraded()).isEqualTo(1);
+        assertThat(report.sources().getFirst().error()).isEqualTo("BODY_ARTICLE_FETCH_FAILED");
         assertThat(report.sources().getFirst().collection().successRatePct()).isEqualTo("100.0");
         assertThat(report.sources().getFirst().bodies().consecutiveFailures()).isEqualTo(1);
         clock.advance(31000);assertThat(service.view(inputs).stale()).isEqualTo(1);

@@ -19,6 +19,9 @@ public class SimulationLedger {
     public static class Order {
         public String id,decisionId,symbol,side,type,status="PENDING",positionStatus="NONE",riskAssessment,invalidate,
             exitReason,ruleProvenance="GATE_PUBLIC_RULES_TAKER_ASSUMPTION",rejection;
+        public String quantityUnit="XAU",evidenceLevel="QUOTE_DEPTH",swapMode,swapTimezone;
+        public Instant lastSwapAt;
+        public JsonNode frozenRules;
         public int version=1;
         public Instant createdAt,activatedAt,expiresAt,holdUntil,closedAt,nextFundingTime,firstFilledAt;
         public long lastSequence=-1;
@@ -28,6 +31,8 @@ public class SimulationLedger {
         public BigDecimal quantity,leverage,entryPrice,triggerPrice,stopLoss,takeProfit,feeRate,
             filled=ZERO,openQuantity=ZERO,averageEntry=ZERO,margin=ZERO,reservation=ZERO,
             realizedGross=ZERO,entryFees=ZERO,exitFees=ZERO,fundingFees=ZERO,netRealized=ZERO;
+        @JsonFormat(shape=JsonFormat.Shape.STRING) public BigDecimal swapFees=ZERO,contractVolume=ONE,commissionPerLot=ZERO,
+            trailingDistance,trailingActivation,trailingAnchor,exitQuantity;
     }
     public static class FundingExposure {
         public Instant scheduledAt,capturedAt,markTime,settledAt;
@@ -38,6 +43,8 @@ public class SimulationLedger {
     public static class Ledger {
         @JsonFormat(shape=JsonFormat.Shape.STRING) public BigDecimal balance;
         public List<Order> orders=new ArrayList<>();
+        public Instant lastMarketAt;
+        public long lastMarketSequence=-1;
         public Ledger() {}
         public Ledger(BigDecimal balance){this.balance=balance;}
     }
@@ -47,8 +54,14 @@ public class SimulationLedger {
     private final DocumentStore store;private final MarketFeed market;private final RuntimeSettings settings;
     private final EventHub events;private final Clock clock;private volatile long observedSequence=-1;
     private volatile Instant observedTime;
+    private final CfdSimulationLedger cfd;
     public SimulationLedger(DocumentStore store,MarketFeed market,RuntimeSettings settings,EventHub events,Clock clock) {
+        this(store,market,settings,events,clock,null);
+    }
+    @org.springframework.beans.factory.annotation.Autowired
+    public SimulationLedger(DocumentStore store,MarketFeed market,RuntimeSettings settings,EventHub events,Clock clock,CfdSimulationLedger cfd) {
         this.store=store;this.market=market;this.settings=settings;this.events=events;this.clock=clock;
+        this.cfd=cfd;
         market.onQuote(this::acceptQuote);
     }
     @PostConstruct void initialize(){store.transaction(()->{if(store.find("ledger","XAU_USDT",Ledger.class).isEmpty()) {
@@ -57,10 +70,10 @@ public class SimulationLedger {
         store.save("ledger","XAU_USDT",new Ledger(initial));store.event("XAU_USDT","ACCOUNT_INITIALIZED",Map.of("balance",initial.toPlainString()));
     }return null;});}
     public synchronized View view(String symbol) {
-        return view(symbol,market.latestQuote());
+        return view(symbol,"GATE:XAUUSD".equals(symbol)&&cfd!=null?market.snapshot(symbol).quote():market.latestQuote());
     }
     public synchronized View view(String symbol,Quote quote) {
-        if(!symbol.equals("XAU_USDT"))return new View(symbol,"USD","WAITING_CFD_SIMULATION",null,null,null,null,null,null,null,List.of(),"UNKNOWN","NOT_CONFIGURED");
+        if(!symbol.equals("XAU_USDT"))return cfd==null?new View(symbol,"USD","WAITING_CFD_SIMULATION",null,null,null,null,null,null,null,List.of(),"UNKNOWN","NOT_CONFIGURED"):cfd.view(quote);
         Ledger ledger=load();
         BigDecimal frozen=reserved(ledger),unrealized=ZERO,exitFees=ZERO;
         boolean priced=quote!=null&&quote.fresh(clock.instant());
@@ -76,6 +89,7 @@ public class SimulationLedger {
             "SIMPLIFIED_ISOLATED_MARK_MARGIN");
     }
     public synchronized Order propose(String decisionId,String symbol,JsonNode plan) {
+        if("GATE:XAUUSD".equals(symbol)&&cfd!=null)return cfd.propose(decisionId,plan);
         return store.transaction(()->{
             if(plan.path("action").asText().equals("WAIT")){store.event(decisionId,"DECISION_WAIT",Map.of("symbol",symbol,"plan",plan));return null;}
             Ledger ledger=load();
@@ -84,12 +98,7 @@ public class SimulationLedger {
             if(duplicate.isPresent())return duplicate.get();
             String action=plan.path("action").asText("WAIT");
             if(action.equals("WAIT"))return null;
-            if(action.equals("CANCEL")||action.equals("CLOSE")) {
-                var order=find(ledger,plan.path("orderId").asText());
-                if(action.equals("CANCEL")){if(!List.of("PENDING","PARTIALLY_FILLED").contains(order.status))fail("ORDER_NOT_CANCELABLE");order.reservation=ZERO;order.status="CANCELED";}
-                else{if(order.openQuantity.signum()<=0)fail("POSITION_NOT_OPEN");order.exitRequested=true;order.exitReason="LLM_CLOSE";}
-                order.version++;persist(ledger,order,action,market.snapshot(symbol).quote());return order;
-            }
+            if(List.of("CANCEL","CLOSE","REDUCE","MODIFY").contains(action))return change(ledger,find(ledger,plan.path("orderId").asText()),action,plan);
             if(!action.equals("CREATE"))throw new IllegalArgumentException("UNSUPPORTED_PLAN_ACTION");
             Order order=new Order();order.id=UUID.randomUUID().toString();order.decisionId=decisionId;order.symbol=symbol;
             order.createdAt=clock.instant();order.activatedAt=order.createdAt.plusMillis(settings.integer("GOLD_EXECUTION_DELAY_MS",250));
@@ -100,6 +109,7 @@ public class SimulationLedger {
                     ||order.riskAssessment.length()>1600||order.invalidate.length()>1600)fail("MISSING_OR_INVALID_RISK_ASSESSMENT");
                 order.quantity=decimal(plan,"quantity");order.leverage=decimal(plan,"leverage");order.entryPrice=decimal(plan,"entryPrice");
                 order.triggerPrice=decimal(plan,"triggerPrice");order.stopLoss=decimal(plan,"stopLoss");order.takeProfit=decimal(plan,"takeProfit");
+                order.trailingDistance=decimal(plan,"trailingDistance");order.trailingActivation=decimal(plan,"trailingActivation");
                 order.expiresAt=Instant.parse(plan.path("expiresAt").asText());order.holdUntil=Instant.parse(plan.path("holdUntil").asText());
                 order.feeRate=feeRate();
                 Snapshot snapshot=market.snapshot(symbol);validate(order,snapshot,ledger);
@@ -112,17 +122,54 @@ public class SimulationLedger {
         });
     }
     public synchronized Order cancel(String id) {
+        if(cfd!=null&&load().orders.stream().noneMatch(order->order.id.equals(id)))return cfd.cancel(id);
         return store.transaction(()->{Ledger ledger=load();Order order=find(ledger,id);
             if(!List.of("PENDING","PARTIALLY_FILLED").contains(order.status))throw new IllegalArgumentException("ORDER_NOT_CANCELABLE");
             order.status="CANCELED";order.reservation=ZERO;order.version++;persist(ledger,order,"CANCELED",null);return order;});
     }
+    public synchronized Order command(String id,String action,JsonNode plan) {
+        if(cfd!=null&&load().orders.stream().noneMatch(order->order.id.equals(id)))return cfd.command(id,action,plan);
+        return store.transaction(()->{var ledger=load();return change(ledger,find(ledger,id),action,plan);});
+    }
+    private Order change(Ledger ledger,Order order,String action,JsonNode plan) {
+        if(action.equals("CANCEL")) {
+            if(!List.of("PENDING","PARTIALLY_FILLED").contains(order.status))fail("ORDER_NOT_CANCELABLE");order.reservation=ZERO;order.status="CANCELED";
+        } else if(action.equals("CLOSE")||action.equals("REDUCE")) {
+            if(order.openQuantity.signum()<=0)fail("POSITION_NOT_OPEN");
+            var amount=action.equals("REDUCE")?decimal(plan,"quantity"):order.openQuantity;
+            var rules=market.instrument();if(rules==null)fail("PRODUCT_RULES_MISSING");
+            if(amount==null||amount.signum()<=0||amount.compareTo(order.openQuantity)>0||!step(amount,rules.qtyStep()))fail("INVALID_REDUCE_QUANTITY");
+            order.exitQuantity=amount;order.exitRequested=true;order.exitReason=action.equals("REDUCE")?"REQUESTED_REDUCE":"REQUESTED_CLOSE";
+            order.activatedAt=clock.instant();if(order.status.equals("PARTIALLY_FILLED")){order.status="CANCELED";order.reservation=ZERO;}
+        } else if(action.equals("MODIFY")) {
+            if(order.closedAt!=null||order.status.equals("REJECTED")||order.openQuantity.signum()==0&&!List.of("PENDING","PARTIALLY_FILLED").contains(order.status))fail("ORDER_NOT_MODIFIABLE");
+            var rules=market.instrument();if(rules==null)fail("PRODUCT_RULES_MISSING");
+            for(String field:List.of("stopLoss","takeProfit","trailingDistance","trailingActivation"))if(plan.has(field)) {
+                var value=decimal(plan,field);if(value!=null&&(value.signum()<=0||!step(value,rules.tickSize())))fail("INVALID_EXIT_PRICE");
+            }
+            Instant hold=plan.hasNonNull("holdUntil")?Instant.parse(plan.path("holdUntil").asText()):order.holdUntil;
+            if(!hold.isAfter(clock.instant())||order.openQuantity.signum()==0&&hold.isBefore(order.expiresAt))fail("INVALID_HOLD_UNTIL");
+            if(plan.has("stopLoss"))order.stopLoss=decimal(plan,"stopLoss");if(plan.has("takeProfit"))order.takeProfit=decimal(plan,"takeProfit");
+            if(plan.has("trailingDistance"))order.trailingDistance=decimal(plan,"trailingDistance");if(plan.has("trailingActivation"))order.trailingActivation=decimal(plan,"trailingActivation");
+            order.trailingAnchor=null;order.holdUntil=hold;order.activatedAt=clock.instant().plusMillis(settings.integer("GOLD_EXECUTION_DELAY_MS",250));
+        } else fail("UNSUPPORTED_PLAN_ACTION");
+        order.version++;persist(ledger,order,action,market.latestQuote());return order;
+    }
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay=1000) public synchronized void expirePending() {
+        store.transaction(()->{var ledger=load();boolean changed=false;
+            for(var order:ledger.orders)if(List.of("PENDING","PARTIALLY_FILLED").contains(order.status)&&order.expiresAt!=null&&!order.expiresAt.isAfter(clock.instant())) {
+                order.status="EXPIRED";order.reservation=ZERO;store.event(order.id,"ORDER_EXPIRED",order);changed=true;
+            }if(changed){store.save("ledger","XAU_USDT",ledger);events.changed();}return null;});
+    }
     public synchronized void acceptQuote(Quote quote) {
+        if(!"XAU_USDT".equals(quote.symbol()))return;
         if(clock instanceof ExchangeClock exchange&&!exchange.verified())return;
         if(!quote.continuous())observedSequence=-1;
         if(quote.sequence()<=observedSequence||!quote.fresh(clock.instant()))return;
         boolean gap=!quote.continuous()||observedTime!=null&&Duration.between(observedTime,quote.exchangeTime()).toSeconds()>3;
         store.transaction(()->{
             Ledger ledger=load();if(ledger.orders.isEmpty())return null;
+            if(ledger.lastMarketAt!=null&&(quote.receivedAt().isBefore(ledger.lastMarketAt)||quote.receivedAt().equals(ledger.lastMarketAt)&&quote.sequence()==ledger.lastMarketSequence))return null;
             BigDecimal bidAvailable=quote.bidSize(),askAvailable=quote.askSize();boolean changed=false;
             var rules=market.instrument();
             if(rules==null)return null;
@@ -131,10 +178,13 @@ public class SimulationLedger {
                     if(gap&&!order.quoteGap){order.quoteGap=true;order.costIncomplete=true;changed=true;}
                     if(captureFunding(order,quote,gap))changed=true;
                     BigDecimal exit=order.side.equals("BUY")?quote.bid():quote.ask();
+                    if(!quote.receivedAt().isBefore(order.activatedAt)&&updateTrailing(order,exit))changed=true;
                     String reason=exitReason(order,quote,rules,ledger);
                     if(reason!=null) {
                         BigDecimal liquidity=order.side.equals("BUY")?bidAvailable:askAvailable;
                         BigDecimal amount=order.openQuantity.min(liquidity);
+                        if(reason.equals("REQUESTED_REDUCE")&&order.exitQuantity!=null)amount=amount.min(order.exitQuantity);
+                        amount=amount.divide(rules.qtyStep(),0,RoundingMode.DOWN).multiply(rules.qtyStep());
                         if(amount.signum()>0) {
                             close(ledger,order,exit,amount,reason,quote);
                             if(order.side.equals("BUY"))bidAvailable=bidAvailable.subtract(amount,MC);else askAvailable=askAvailable.subtract(amount,MC);
@@ -182,7 +232,7 @@ public class SimulationLedger {
                 if(order.side.equals("BUY"))askAvailable=askAvailable.subtract(amount,MC);else bidAvailable=bidAvailable.subtract(amount,MC);
                 changed=true;
             }
-            if(changed){store.save("ledger","XAU_USDT",ledger);events.changed();}return null;
+            if(changed){ledger.lastMarketAt=quote.receivedAt();ledger.lastMarketSequence=quote.sequence();store.save("ledger","XAU_USDT",ledger);events.changed();}return null;
         });
         observedSequence=quote.sequence();observedTime=quote.exchangeTime();
     }
@@ -205,7 +255,7 @@ public class SimulationLedger {
         if(notional.compareTo(rules.minNotional())<0||tier==null||order.leverage.compareTo(tier.maxLeverage())>0
             ||ledger.orders.stream().anyMatch(existing->order.side.equals(existing.side)&&existing.openQuantity.signum()>0&&existing.leverage.compareTo(tier.maxLeverage())>0))fail("INVALID_RISK_TIER");
         if(!order.expiresAt.isAfter(order.activatedAt)||!order.holdUntil.isAfter(order.activatedAt)||order.holdUntil.isBefore(order.expiresAt)||order.riskAssessment.isBlank()||order.invalidate.isBlank())fail("MISSING_LIFETIME_OR_RISK");
-        for(var exit:Arrays.asList(order.stopLoss,order.takeProfit,order.triggerPrice))if(exit!=null&&(exit.signum()<=0||!step(exit,rules.tickSize())))fail("INVALID_EXIT_PRICE");
+        for(var exit:Arrays.asList(order.stopLoss,order.takeProfit,order.triggerPrice,order.trailingDistance,order.trailingActivation))if(exit!=null&&(exit.signum()<=0||!step(exit,rules.tickSize())))fail("INVALID_EXIT_PRICE");
         if(order.type.startsWith("STOP_")&&order.triggerPrice==null)fail("MISSING_TRIGGER");
         if(order.stopLoss!=null&&(order.side.equals("BUY")?order.stopLoss.compareTo(order.entryPrice)>=0:order.stopLoss.compareTo(order.entryPrice)<=0))fail("INVALID_STOP_DIRECTION");
         if(order.takeProfit!=null&&(order.side.equals("BUY")?order.takeProfit.compareTo(order.entryPrice)<=0:order.takeProfit.compareTo(order.entryPrice)>=0))fail("INVALID_TARGET_DIRECTION");
@@ -213,11 +263,6 @@ public class SimulationLedger {
         if(reservation.compareTo(ledger.balance.subtract(reserved(ledger),MC))>0)fail("INSUFFICIENT_VIRTUAL_CASH");
     }
     private String exitReason(Order order,Quote quote,Instrument rules,Ledger ledger) {
-        if(order.exitRequested)return order.exitReason==null?"LLM_CLOSE":order.exitReason;
-        if(!quote.receivedAt().isBefore(order.holdUntil))return "HOLD_EXPIRED";
-        BigDecimal price=order.side.equals("BUY")?quote.bid():quote.ask();
-        if(order.stopLoss!=null&&(order.side.equals("BUY")?price.compareTo(order.stopLoss)<=0:price.compareTo(order.stopLoss)>=0))return "STOP_LOSS";
-        if(order.takeProfit!=null&&(order.side.equals("BUY")?price.compareTo(order.takeProfit)>=0:price.compareTo(order.takeProfit)<=0))return "TAKE_PROFIT";
         if(rules!=null&&quote.mark()!=null&&quote.mark().signum()>0&&quote.markTime()!=null&&quote.markTime().isAfter(clock.instant().minusSeconds(3))&&!quote.markTime().isAfter(clock.instant().plusSeconds(2))) {
             var quantity=sideQuantity(ledger,order.side);var notional=quote.mark().multiply(quantity,MC);var tier=tier(rules,notional);
             if(tier!=null&&tier.maintenanceRate()!=null&&tier.deduction()!=null) {
@@ -227,6 +272,13 @@ public class SimulationLedger {
                 if(order.margin.add(pnl(order,quote.mark(),order.openQuantity),MC).compareTo(maintenance)<=0)return "SIMULATED_LIQUIDATION";
             }
         }
+        if(quote.receivedAt().isBefore(order.activatedAt))return null;
+        if(order.exitRequested)return order.exitReason==null?"LLM_CLOSE":order.exitReason;
+        if(!quote.receivedAt().isBefore(order.holdUntil))return "HOLD_EXPIRED";
+        BigDecimal price=order.side.equals("BUY")?quote.bid():quote.ask();
+        if(order.stopLoss!=null&&(order.side.equals("BUY")?price.compareTo(order.stopLoss)<=0:price.compareTo(order.stopLoss)>=0))return "STOP_LOSS";
+        if(order.trailingDistance!=null&&order.trailingAnchor!=null&&(order.side.equals("BUY")?price.compareTo(order.trailingAnchor.subtract(order.trailingDistance,MC))<=0:price.compareTo(order.trailingAnchor.add(order.trailingDistance,MC))>=0))return "TRAILING_STOP";
+        if(order.takeProfit!=null&&(order.side.equals("BUY")?price.compareTo(order.takeProfit)>=0:price.compareTo(order.takeProfit)<=0))return "TAKE_PROFIT";
         return null;
     }
     private void close(Ledger ledger,Order order,BigDecimal price,BigDecimal amount,String reason,Quote quote) {
@@ -235,11 +287,21 @@ public class SimulationLedger {
         ledger.balance=ledger.balance.add(gross,MC).subtract(fee,MC);order.realizedGross=order.realizedGross.add(gross,MC);
         order.exitFees=order.exitFees.add(fee,MC);order.openQuantity=order.openQuantity.subtract(amount,MC);order.margin=order.margin.subtract(released,MC);
         order.netRealized=net(order);
-        order.exitReason=reason;order.exitRequested=order.openQuantity.signum()>0;order.reservation=ZERO;
+        if(order.exitRequested&&order.exitQuantity!=null)order.exitQuantity=order.exitQuantity.subtract(amount,MC).max(ZERO);
+        boolean reduce=reason.equals("REQUESTED_REDUCE");
+        order.exitReason=reason;order.exitRequested=order.openQuantity.signum()>0&&(!reduce||order.exitQuantity!=null&&order.exitQuantity.signum()>0);order.reservation=ZERO;
+        if(!order.exitRequested)order.exitQuantity=null;
         if(order.status.equals("PARTIALLY_FILLED"))order.status="CANCELED";
         order.positionStatus=order.openQuantity.signum()==0?(reason.equals("SIMULATED_LIQUIDATION")?"LIQUIDATED":"CLOSED"):"PARTIALLY_CLOSED";
         if(order.openQuantity.signum()==0)order.closedAt=quote.receivedAt();
         store.event(order.id,"EXIT_FILL_L1_ASSUMPTION",Map.of("quote",quote,"quantity",money(amount),"price",money(price),"gross",money(gross),"fee",money(fee),"reason",reason));
+    }
+    private boolean updateTrailing(Order order,BigDecimal price) {
+        if(order.trailingDistance==null)return false;
+        if(order.trailingAnchor==null&&order.trailingActivation!=null&&(order.side.equals("BUY")?price.compareTo(order.trailingActivation)<0:price.compareTo(order.trailingActivation)>0))return false;
+        if(order.trailingAnchor==null||order.side.equals("BUY")&&price.compareTo(order.trailingAnchor)>0||order.side.equals("SELL")&&price.compareTo(order.trailingAnchor)<0) {
+            order.trailingAnchor=price;store.event(order.id,"TRAILING_ANCHOR",Map.of("anchor",money(price),"distance",money(order.trailingDistance)));return true;
+        }return false;
     }
     private boolean captureFunding(Order order,Quote quote,boolean gap) {
         var boundary=order.nextFundingTime;if(boundary==null){order.fundingUnknown=true;updateCosts(order);return false;}
@@ -284,7 +346,7 @@ public class SimulationLedger {
     private BigDecimal pnl(Order order,BigDecimal exit,BigDecimal quantity){var change=exit.subtract(order.averageEntry,MC);return (order.side.equals("BUY")?change:change.negate()).multiply(quantity,MC);}
     private RiskTier tier(Instrument rules,BigDecimal notional){return rules.tiers().stream().filter(tier->tier.limit()!=null&&tier.maxLeverage()!=null&&notional.compareTo(tier.limit())<=0).findFirst().orElse(null);}
     private boolean step(BigDecimal value,BigDecimal step){return step!=null&&step.signum()>0&&value.remainder(step).signum()==0;}
-    private BigDecimal decimal(JsonNode node,String field){var value=node.path(field);return value.isMissingNode()||value.isNull()||value.asText().isBlank()?null:new BigDecimal(value.asText());}
+    private BigDecimal decimal(JsonNode node,String field){var value=node.path(field);if(value.isMissingNode()||value.isNull()||value.asText().isBlank())return null;if(!value.asText().matches("-?[0-9]{1,18}(?:\\.[0-9]{1,18})?"))fail("INVALID_NUMERIC_FIELD");return new BigDecimal(value.asText());}
     private void fail(String code){throw new IllegalArgumentException(code);}
     public static String money(BigDecimal value){return value==null?null:value.stripTrailingZeros().toPlainString();}
 }

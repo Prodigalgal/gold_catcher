@@ -47,7 +47,7 @@ class SystemContractTest {
         String basic=Base64.getEncoder().encodeToString("contract-user:contract-only".getBytes(StandardCharsets.UTF_8));
         assertThat(client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/api/session")).header("Authorization","Basic "+basic).build(),HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
         login(client);var response=get(client,"/api/system/status");assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(response.body()).contains("INTERNAL_SIMULATION_ALPHA","JAVA_CLOSED_BAR","WAITING_CFD_SIMULATION","test-commit","GATE","SESSION_CSRF_SHA256_POW");
+        assertThat(response.body()).contains("INTERNAL_SIMULATION_ALPHA","JAVA_CLOSED_BAR","WAITING_CURRENT_CFD_RULES","test-commit","GATE","SESSION_CSRF_SHA256_POW");
     }
     @Test void challengeIsSessionBoundSingleUseAndLoginRotatesSession() throws Exception {
         var client=client();var response=get(client,"/api/auth/challenge");var packet=mapper.readTree(response.body());
@@ -68,7 +68,8 @@ class SystemContractTest {
         assertThat(cfd.path("analysis").path("horizons")).hasSize(4);
         assertThat(cfd.path("analysis").path("method").asText()).isEqualTo("JAVA_STRUCTURE_V1_UNCALIBRATED");
         assertThat(cfd.path("analysis").path("sources")).hasSize(6);
-        assertThat(cfd.path("market").path("quote").isNull()).isTrue();assertThat(cfd.path("account").path("balance").isNull()).isTrue();
+        assertThat(cfd.path("market").path("quote").isNull()).isTrue();assertThat(cfd.path("account").path("balance").asText()).isEqualTo("1000");
+        assertThat(cfd.path("account").path("equity").isNull()).isTrue();assertThat(cfd.path("marketProvenance").path("simulationReady").asBoolean()).isFalse();
         assertThat(post(client,"/api/auth/logout",Map.of(),null).statusCode()).isEqualTo(403);
         assertThat(post(client,"/api/auth/logout",Map.of(),token).statusCode()).isEqualTo(200);
         assertThat(get(client,"/api/dashboard").statusCode()).isEqualTo(401);
