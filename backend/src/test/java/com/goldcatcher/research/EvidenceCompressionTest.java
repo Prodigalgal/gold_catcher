@@ -51,6 +51,8 @@ class EvidenceCompressionTest {
             assertThat(chunk.text().codePointCount(0,chunk.text().length())).isLessThanOrEqualTo(5500);assertThat(chunk.text().getBytes(java.nio.charset.StandardCharsets.UTF_8)).hasSizeLessThanOrEqualTo(14000);}
         assertThat(joined.toString()).isEqualTo(text);
         var tasks=new ArrayList<String>();when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var packet=(Map<?,?>)call.getArgument(2);tasks.add(String.valueOf(packet.get("task")));
+            var expires=(Instant)((Map<?,?>)packet.get("evidence")).get("decisionExpiresAt");
+            assertThat(expires).isAfter(f.clock.instant()).isBeforeOrEqualTo(f.clock.instant().plusSeconds(75));
             var output=f.mapper.valueToTree(Map.of("summary",packet.get("task").equals("MERGE")?"全文要点：4.00不变，未来并无无条件保证。":"局部要点：4.00未变，但不保证未来。"));
             return new Any2ApiClient.Answer("mimo/mimo-v2.6-pro","","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);});
         var partial=compression.process(article,body);assertThat(partial.state()).isEqualTo("PARTIAL");assertThat(partial.processedChunks()).isEqualTo(2);assertThat(tasks).doesNotContain("MERGE");
@@ -77,5 +79,47 @@ class EvidenceCompressionTest {
         ((java.util.concurrent.Future<?>)org.springframework.test.util.ReflectionTestUtils.getField(compression,"pending")).get(2,java.util.concurrent.TimeUnit.SECONDS);
         compression.collect();verify(ai,times(1)).compress(any(),anyString(),any());
         f.clock.advance(61000);compression.collect();verify(ai,timeout(2000).times(2)).compress(any(),anyString(),any());
+    }
+    @Test void timeoutBackoffSurvivesRestartEscalatesAndClearsAfterSuccessfulSummary() throws Exception {
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(20));
+        when(news.evidence(any())).thenReturn(List.of(article));
+        when(ai.compress(any(),anyString(),any())).thenThrow(new java.net.http.HttpTimeoutException("test timeout"));
+        compression.collect();awaitPass();
+        assertThat(compression.status()).containsEntry("consecutiveFailures",1).containsEntry("error","REQUEST_TIMEOUT")
+            .containsEntry("retryAt",f.clock.instant().plusSeconds(60).toString());
+        compression.stop();compression=new EvidenceCompression(f.settings,news,ai,f.store,f.mapper,f.clock,new EventHub());
+        compression.collect();verify(ai,times(1)).compress(any(),anyString(),any());
+        assertThat(compression.status()).containsEntry("consecutiveFailures",1).containsEntry("error","REQUEST_TIMEOUT");
+        // The same failed article keeps its own five-minute retry; the global checkpoint still escalates.
+        f.clock.advance(301000);compression.collect();awaitPass();
+        assertThat(compression.status()).containsEntry("consecutiveFailures",2).containsEntry("retryAt",f.clock.instant().plusSeconds(120).toString());
+        f.clock.advance(301000);reset(ai);answer("{\"summary\":\"利率为4.00%，历史值可能修订，不构成预测。\"}");
+        compression.collect();awaitPass();
+        assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("retryAt","")
+            .containsEntry("error","").containsEntry("lastSuccessfulAt",f.clock.instant());
+        compression.stop();compression=new EvidenceCompression(f.settings,news,ai,f.store,f.mapper,f.clock,new EventHub());
+        assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("lastSuccessfulAt",f.clock.instant());
+    }
+    void awaitPass() throws Exception {
+        var pending=(java.util.concurrent.Future<?>)org.springframework.test.util.ReflectionTestUtils.getField(compression,"pending");
+        assertThat(pending).isNotNull();pending.get(2,java.util.concurrent.TimeUnit.SECONDS);
+    }
+    @Test void failedPartialArticleYieldsToFreshEvidenceAfterProviderCooldown() throws Exception {
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(130));
+        var second=new NewsService.News("b",article.source(),"另一份官方资料",article.excerpt(),article.link(),article.publishedAt(),article.receivedAt(),article.verification(),article.version(),article.contentHash());
+        var shortBody=new NewsService.ArticleBody("b",body.source(),body.link(),"Official rate 4.00. ".repeat(40),body.state(),"short",body.receivedAt(),body.checkedAt(),body.nextPoll(),1,null,false,"feed",null,"HTML");
+        when(news.evidence(any())).thenReturn(List.of(article,second));when(news.bodyForEvidence(eq("b"),any())).thenReturn(shortBody);
+        when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var packet=(Map<?,?>)call.getArgument(2);
+            if(packet.get("title").equals(article.title())&&((Number)packet.get("chunkIndex")).intValue()>0)throw new java.net.http.HttpTimeoutException("test timeout");
+            var output=f.mapper.valueToTree(Map.of("summary","利率4.00，保留原口径。"));
+            return new Any2ApiClient.Answer("mimo/mimo-v2.6-flash","","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
+        });
+        compression.collect();awaitPass();var first=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
+        assertThat(first.state()).isEqualTo("PARTIAL");assertThat(first.nextAttempt()).isEqualTo(f.clock.instant().plusSeconds(300));
+        f.clock.advance(61000);compression.collect();awaitPass();
+        var latest=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
+        assertThat(latest.newsId()).isEqualTo("b");assertThat(latest.state()).isEqualTo("EXTRACTED");
+        assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("retryAt","");
+        verify(ai,times(3)).compress(any(),anyString(),any());
     }
 }

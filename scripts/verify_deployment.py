@@ -61,7 +61,7 @@ if set(api.get('products', [])) != {'XAU_USDT', 'GATE:XAUUSD'}:
 expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION', 'FOUR_STAGE_DIVERSE_RESEARCH',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT'}
-if api.get('version') != '0.4.0' or not expected_features <= set(api.get('features', [])):
+if api.get('version') != '0.4.1' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
