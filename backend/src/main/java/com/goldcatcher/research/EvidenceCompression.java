@@ -45,6 +45,7 @@ public class EvidenceCompression {
     private volatile int consecutiveFailures;
     private final String checkpointId;
     private volatile BooleanSupplier researchBusy=()->false;
+    private java.util.function.LongSupplier nanos=System::nanoTime;
     public EvidenceCompression(RuntimeSettings settings,NewsService news,Any2ApiClient ai,DocumentStore store,ObjectMapper mapper,Clock clock,EventHub events){
         this.settings=settings;this.news=news;this.ai=ai;this.store=store;this.mapper=mapper;this.clock=clock;this.events=events;
         checkpointId=NewsService.hash(VERSION+"|"+INSTRUCTION+"|"+settings.compressionRoute().model());
@@ -103,11 +104,11 @@ public class EvidenceCompression {
     Result process(NewsService.News article,NewsService.ArticleBody body){
         var route=settings.compressionRoute();String cacheKey=key(article,body);var chunks=chunks(body.text(),cacheKey,route);
         var summaries=new ArrayList<String>();var chunkIds=new ArrayList<String>();int processed=0,attempted=0;String error=null;Instant started=clock.instant();
-        int maximum=Math.max(1,Math.min(8,settings.integer("GOLD_COMPRESSION_CHUNKS_PER_PASS",2)));long passDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(100);
+        int maximum=Math.max(1,Math.min(8,settings.integer("GOLD_COMPRESSION_CHUNKS_PER_PASS",2)));long passDeadline=nanos.getAsLong()+TimeUnit.SECONDS.toNanos(100);
         for(var chunk:chunks){
             var saved=store.find("compression-chunk",chunk.id(),ChunkResult.class).orElse(null);
             if(saved==null||!saved.state().equals("VERIFIED")){
-                if(attempted>=maximum||unavailable(passDeadline))break;
+                if(attempted>=maximum||!canRequest(route,passDeadline))break;
                 attempted++;saved=request(chunk.id(),route,Map.of("task","SUMMARIZE","title",article.title(),"chunkIndex",chunk.index(),"totalChunks",chunks.size(),
                     "evidence",Map.of("decisionExpiresAt",expires(route,passDeadline)),"text",chunk.text()));
             }
@@ -122,7 +123,7 @@ public class EvidenceCompression {
                     if(group.size()==1){next.add(group.getFirst());continue;}
                     String mergeKey=NewsService.hash(cacheKey+"|MERGE|"+mapper.writeValueAsString(group));var saved=store.find("compression-chunk",mergeKey,ChunkResult.class).orElse(null);
                     if(saved==null||!saved.state().equals("VERIFIED")){
-                        if(unavailable(passDeadline))break merge;
+                        if(!canRequest(route,passDeadline))break merge;
                         saved=request(mergeKey,route,Map.of("task","MERGE","title",article.title(),"summaries",group,
                             "evidence",Map.of("decisionExpiresAt",expires(route,passDeadline))));
                     }
@@ -138,9 +139,12 @@ public class EvidenceCompression {
             completed.plusSeconds(state.equals("FAILED")||error!=null?300:30),body.text().codePointCount(0,body.text().length()),processed,chunks.size(),body.truncated(),excerpt,List.of(),List.copyOf(chunkIds),error);
         store.transaction(()->{store.save("compression-result",id,result);store.save("compression-cache",cacheKey,result);return result;});events.changed();return result;
     }
-    private boolean unavailable(long deadline){return System.nanoTime()>=deadline||Thread.currentThread().isInterrupted()||researchBusy.getAsBoolean();}
+    private boolean canRequest(RuntimeSettings.AiRoute route,long deadline){
+        return !Thread.currentThread().isInterrupted()&&!researchBusy.getAsBoolean()
+            &&deadline-nanos.getAsLong()>=TimeUnit.SECONDS.toNanos(Math.min(75,route.timeoutSeconds()));
+    }
     private Instant expires(RuntimeSettings.AiRoute route,long passDeadline){
-        long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(passDeadline-System.nanoTime()));
+        long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(passDeadline-nanos.getAsLong()));
         return clock.instant().plusMillis(Math.min(Math.min(75,route.timeoutSeconds())*1000L,remaining));
     }
     private ChunkResult request(String cacheKey,RuntimeSettings.AiRoute route,Map<String,Object> packet){
