@@ -5,6 +5,10 @@ import com.goldcatcher.*;
 import com.goldcatcher.information.NewsService;
 import com.goldcatcher.market.MarketFeed;
 import com.goldcatcher.network.BrowserSourceRequest;
+import com.goldcatcher.network.SourcePolling;
+import com.goldcatcher.network.SourceReliability;
+import com.goldcatcher.network.SourceProxyPool;
+import jakarta.annotation.PostConstruct;
 import com.goldcatcher.persistence.DocumentStore;
 import java.io.ByteArrayInputStream;
 import java.math.*;
@@ -22,6 +26,7 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.jsoup.Jsoup;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.*;
 
 /** Public observations; provenance and limits remain explicit, without changing simulation fills. */
@@ -42,20 +47,26 @@ public class SupplementalSources {
         "CFTC_GOLD","https://publicreporting.cftc.gov/resource/72hh-3qpy.json?%24where=cftc_contract_market_code%3D%27088691%27&%24order=report_date_as_yyyy_mm_dd%20DESC&%24limit=2",
         "TREASURY_AUCTIONS","https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query?sort=-auction_date&page%5Bsize%5D=40",
         "IAU_HOLDINGS","https://www.ishares.com/us/products/239561/ishares-gold-trust-fund",
+        "GLD_HOLDINGS","https://api.spdrgoldshares.com/api/v1/historical-archive?product=gld&exchange=NYSE&lang=en",
         "GATE_DEPTH","https://api.gateio.ws/api/v4/futures/usdt/order_book?contract=XAU_USDT&limit=20&with_id=true",
         "GATE_TRADES","https://api.gateio.ws/api/v4/futures/usdt/trades?contract=XAU_USDT&limit=100");
-    private static final Map<String,String> LABELS=Map.of("DOL_CLAIMS","初请与续请失业金","CENSUS_ECON","零售、住房与贸易官方摘要","CFTC_GOLD","CFTC 黄金期货持仓","TREASURY_AUCTIONS","美国国债拍卖","IAU_HOLDINGS","IAU 发行方黄金持仓","GATE_DEPTH","黄金永续20档盘口","GATE_TRADES","黄金永续近期逐笔样本");
+    private static final Map<String,String> LABELS=Map.of("DOL_CLAIMS","初请与续请失业金","CENSUS_ECON","零售、住房与贸易官方摘要","CFTC_GOLD","CFTC 黄金期货持仓","TREASURY_AUCTIONS","美国国债拍卖","IAU_HOLDINGS","IAU 发行方黄金持仓","GLD_HOLDINGS","GLD 发行方黄金持仓","GATE_DEPTH","黄金永续20档盘口","GATE_TRADES","黄金永续近期逐笔样本");
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final DocumentStore store;
     private final MarketFeed market;private final Clock clock;private final EventHub events;
+    private final SourceProxyPool proxy;private final SourceReliability reliability;
     private final Map<String,SourceCheck> checks=new ConcurrentHashMap<>();private final Set<String> busy=ConcurrentHashMap.newKeySet();
     public SupplementalSources(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,DocumentStore store,MarketFeed market,Clock clock,EventHub events){
-        this.settings=settings;this.http=http;this.mapper=mapper;this.store=store;this.market=market;this.clock=clock;this.events=events;
+        this(settings,http,mapper,store,market,clock,events,null,new SourceReliability(clock));
     }
+    @Autowired public SupplementalSources(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,DocumentStore store,MarketFeed market,Clock clock,EventHub events,SourceProxyPool proxy,SourceReliability reliability){
+        this.settings=settings;this.http=http;this.mapper=mapper;this.store=store;this.market=market;this.clock=clock;this.events=events;this.proxy=proxy;this.reliability=reliability;
+    }
+    @PostConstruct void recover(){store.list("public-source-check",SourceCheck.class,20).stream().filter(c->Objects.equals(URLS.get(c.id()),c.url())).forEach(c->checks.put(c.id(),new SourceCheck(c.id(),c.label(),c.url(),c.state(),interval(c.id()),c.lastSuccess(),c.error()!=null&&c.nextPoll()!=null&&c.nextPoll().isAfter(clock.instant())?c.nextPoll():clock.instant(),c.error(),c.records())));}
     boolean enabled(){return Boolean.parseBoolean(settings.text("GOLD_SUPPLEMENTAL_ENABLED",Boolean.toString(settings.enabled("GOLD_NEWS_ENABLED")||settings.enabled("GOLD_MARKET_ENABLED"))));}
-    int interval(String id){
+    public int interval(String id){
         var local=clock.instant().atZone(ZoneId.of("America/New_York"));int minute=local.getHour()*60+local.getMinute();
         if(id.startsWith("GATE_"))return 2;
-        if(id.equals("IAU_HOLDINGS"))return 3600;
+        if(Set.of("IAU_HOLDINGS","GLD_HOLDINGS").contains(id))return 3600;
         if(id.equals("DOL_CLAIMS"))return local.getDayOfWeek().getValue()<=5&&minute>=480&&minute<=570?15:900;
         if(id.equals("CFTC_GOLD"))return local.getDayOfWeek()==DayOfWeek.FRIDAY&&minute>=900&&minute<=990?30:900;
         if(id.equals("TREASURY_AUCTIONS"))return local.getDayOfWeek().getValue()<=5&&(minute>=680&&minute<=710||minute>=770&&minute<=800)?15:300;
@@ -66,7 +77,7 @@ public class SupplementalSources {
         store.list("public-observation-version",Observation.class,1000).stream().filter(o->!o.receivedAt().isAfter(cutoff)&&!o.receivedAt().isBefore(cutoff.minusSeconds(7776000)))
             .sorted(Comparator.comparing(Observation::receivedAt).reversed()).forEach(o->known.putIfAbsent(o.id(),o));
         var observations=List.copyOf(known.values());
-        var sources=URLS.keySet().stream().sorted().map(id->checks.getOrDefault(id,new SourceCheck(id,LABELS.get(id),URLS.get(id),enabled()?"NOT_YET_FETCHED":"DISABLED",interval(id),null,null,null,0))).toList();
+        var sources=URLS.keySet().stream().sorted().map(id->{var c=checks.getOrDefault(id,new SourceCheck(id,LABELS.get(id),URLS.get(id),"NOT_YET_FETCHED",interval(id),null,null,null,0));return enabled()?c:new SourceCheck(c.id(),c.label(),c.url(),"DISABLED",interval(id),c.lastSuccess(),c.nextPoll(),c.error(),c.records());}).toList();
         var depth=store.find("public-depth","XAU_USDT",Depth.class).filter(d->!d.receivedAt().isAfter(cutoff)).orElse(null);
         var trades=store.find("public-trades","XAU_USDT",Trades.class).filter(t->!t.receivedAt().isAfter(cutoff)).orElse(null);
         return new View(observations,depth,trades,sources,List.of("盘口为20档REST快照；逐笔为近期100条样本，完整连续性尚未验证；CFD没有L2/逐笔接口", "CFTC是周度统计背景；拍卖收益率不是盘中现金国债收益率；IAU持仓不是盘中申赎资金流", "补充视图最多读取最近1000个版本、90天知识时刻范围；每次研究的完整证据单独封存"),coverage());
@@ -77,29 +88,35 @@ public class SupplementalSources {
         new Coverage("COMMERCIAL_FLASH","商业快讯与突发报道","NOT_CONNECTED","未配置金十、Reuters、Bloomberg 等机器服务凭据；官方发布稿不能替代全市场即时报道。","https://mcp.jin10.com/app/doc.html"),
         new Coverage("CONSENSUS","经济数据预期与发布前历史","PARTIAL","仅取得 Forex Factory 提供方预期；不是独立核实的市场一致预期，历史发布前预期不回填。","https://www.forexfactory.com/calendar"),
         new Coverage("MICROSTRUCTURE","完整盘口、逐笔连续性与 CFD 明细","PARTIAL","黄金永续有20档快照/近期100条；未实现全量增量簿及连续成交重放。CFD缺L2、逐笔、可见数量及已核实隔夜费。","https://www.gate.com/docs/developers/futures/ws/en/"),
-        new Coverage("GOLD_SUPPLY","GLD、全球ETF、央行储备、库存与亚洲市场","PARTIAL","IAU发行方日频持仓已实现；GLD动态数据未验证。WGC、SAFE、CME库存、LBMA、上金所仍为待接入。","https://www.spdrgoldshares.com/usa/gld/"),
+        new Coverage("GOLD_SUPPLY","GLD、全球ETF、央行储备、库存与亚洲市场","PARTIAL","IAU与GLD发行方日频持仓已实现；不是盘中申赎流。WGC、SAFE、CME库存、LBMA、上金所仍为待接入。","https://www.spdrgoldshares.com/usa/gld/"),
         new Coverage("PRIVATE_SURVEYS","ISM、PMI、ADP 与地区央行","PARTIAL","联储Board、ECB、BoE新闻/讲话、BoJ发布已接RSS；私营调查、所有地区联储、完整政策日历和现场讲话流尚待实现。","https://www.ismworld.org/supply-management-news-and-reports/reports/ism-report-on-business/"),
         new Coverage("NEWS_POLICY_ENERGY","能源、地缘、平台公告与相关资产","PARTIAL","EIA新闻/能源摘要/产品更新已接RSS；结构化库存、OPEC、外交政策、Gate公告、社交流、股指/油/银独立通道尚待实现。详见45项信源目录。","https://www.eia.gov/petroleum/supply/weekly/"));}
     @Scheduled(fixedDelay=1000,initialDelay=8000) void collect(){
         if(!enabled())return;for(var id:URLS.keySet()){
-            var old=checks.get(id);boolean accelerate=old!=null&&old.error()==null&&interval(id)<old.intervalSeconds()&&old.lastSuccess().plusSeconds(interval(id)).isBefore(clock.instant());
-            if(old!=null&&old.nextPoll().isAfter(clock.instant())&&!accelerate||!busy.add(id))continue;
-            Thread.ofVirtual().name("gold-public-"+id).start(()->{try{
-                int count=fetch(id);checks.put(id,new SourceCheck(id,LABELS.get(id),URLS.get(id),"CURRENT",interval(id),clock.instant(),clock.instant().plusSeconds(interval(id)),null,count));
+            var old=checks.get(id);
+            if(old!=null&&!SourcePolling.due(clock.instant(),old.lastSuccess(),old.nextPoll(),old.error(),old.intervalSeconds(),interval(id))||!busy.add(id))continue;
+            Thread.ofVirtual().name("gold-public-"+id).start(()->{long started=reliability.begin();try{
+                int count=fetch(id);saveCheck(new SourceCheck(id,LABELS.get(id),URLS.get(id),"CURRENT",interval(id),clock.instant(),clock.instant().plusSeconds(interval(id)),null,count));
+                reliability.success(id,"COLLECTION",started,count);
             }catch(Exception failed){String error=failed.getMessage();if(error==null||!error.matches("[A-Z0-9_]+"))error="PUBLIC_FETCH_OR_PARSE_FAILED";
-                checks.put(id,new SourceCheck(id,LABELS.get(id),URLS.get(id),"FETCH_FAILED",interval(id),old==null?null:old.lastSuccess(),clock.instant().plusSeconds(id.startsWith("GATE_")?15:60),error,0));
+                reliability.failure(id,"COLLECTION",started,error);
+                int retry=SourcePolling.retrySeconds(failed,clock.instant(),SourcePolling.backoff(reliability.failures(id),id.startsWith("GATE_")?15:60,id.startsWith("GATE_")?120:3600));
+                saveCheck(new SourceCheck(id,LABELS.get(id),URLS.get(id),"FETCH_FAILED",interval(id),old==null?null:old.lastSuccess(),clock.instant().plusSeconds(retry),error,0));
             }finally{busy.remove(id);events.changed();}});
         }
     }
+    private void saveCheck(SourceCheck check){checks.put(check.id(),check);store.save("public-source-check",check.id(),check);}
     private int fetch(String id) throws Exception {
-        var response=http.send(BrowserSourceRequest.navigation(URI.create(URLS.get(id)),Duration.ofSeconds(15)).GET().build(),4000000);
-        if(response.statusCode()!=200)throw new IllegalStateException("PUBLIC_HTTP_"+response.statusCode());
+        var request=BrowserSourceRequest.navigation(URI.create(URLS.get(id)),Duration.ofSeconds(15)).GET().build();
+        var response=proxy==null||id.startsWith("GATE_")?http.send(request,4000000):proxy.send(id,request,4000000);
+        if(response.statusCode()!=200)throw SourcePolling.failure("PUBLIC_HTTP_",response,clock.instant());
         Instant received=clock.instant();byte[] bytes=response.body();String text;
         if(id.equals("DOL_CLAIMS")){if(bytes.length<5||!new String(bytes,0,5,StandardCharsets.US_ASCII).equals("%PDF-"))throw new IllegalStateException("CLAIMS_NOT_PDF");
             try(var pdf=Loader.loadPDF(bytes)){if(pdf.getNumberOfPages()>30||!pdf.getCurrentAccessPermission().canExtractContent())throw new IllegalStateException("CLAIMS_PDF_UNSUPPORTED");text=new PDFTextStripper().getText(pdf);}
-        }else text=new String(bytes,StandardCharsets.UTF_8);
-        String hash=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));String body=id.equals("DOL_CLAIMS")?Base64.getEncoder().encodeToString(bytes):text;
-        var raw=new Raw(id,URLS.get(id),hash,received,id.equals("DOL_CLAIMS")?"PDF_BASE64":"UTF8",body);
+        }else text=id.equals("GLD_HOLDINGS")?"":new String(bytes,StandardCharsets.UTF_8);
+        boolean binary=Set.of("DOL_CLAIMS","GLD_HOLDINGS").contains(id);
+        String hash=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));String body=binary?Base64.getEncoder().encodeToString(bytes):text;
+        var raw=new Raw(id,URLS.get(id),hash,received,id.equals("DOL_CLAIMS")?"PDF_BASE64":id.equals("GLD_HOLDINGS")?"XLSX_BASE64":"UTF8",body);
         // High-frequency market responses retain the latest sample; macro documents retain immutable versions.
         if(!id.startsWith("GATE_")&&store.find("public-raw-version",id+":"+hash,Raw.class).isEmpty())store.save("public-raw-version",id+":"+hash,raw);
         store.save("public-raw",id,raw);
@@ -110,8 +127,9 @@ public class SupplementalSources {
             case "CFTC_GOLD" -> rows=parseCot(mapper.readTree(text),received,hash);
             case "TREASURY_AUCTIONS" -> rows=parseAuctions(mapper.readTree(text),received,hash);
             case "IAU_HOLDINGS" -> rows=parseIau(text,received,hash);
-            case "GATE_DEPTH" -> {var rules=market.instrument();if(rules==null)throw new IllegalStateException("QUANTITY_MULTIPLIER_NOT_READY");store.save("public-depth","XAU_USDT",parseDepth(mapper.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(text),rules.quantityMultiplier(),received));return 1;}
-            case "GATE_TRADES" -> {var rules=market.instrument();if(rules==null)throw new IllegalStateException("QUANTITY_MULTIPLIER_NOT_READY");store.save("public-trades","XAU_USDT",parseTrades(mapper.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(text),rules.quantityMultiplier(),received));return 1;}
+            case "GLD_HOLDINGS" -> rows=GldArchive.parse(bytes,received,hash,URLS.get(id));
+            case "GATE_DEPTH" -> {var rules=market.instrument();if(rules==null)throw new IllegalStateException("QUANTITY_MULTIPLIER_NOT_READY");var depth=parseDepth(mapper.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(text),rules.quantityMultiplier(),received);store.save("public-depth","XAU_USDT",depth);reliability.arrived(id,"depth:"+depth.sequence(),depth.updatedAt(),received,"ORDER_BOOK_UPDATE_TIME");return 1;}
+            case "GATE_TRADES" -> {var rules=market.instrument();if(rules==null)throw new IllegalStateException("QUANTITY_MULTIPLIER_NOT_READY");var trades=parseTrades(mapper.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(text),rules.quantityMultiplier(),received);store.save("public-trades","XAU_USDT",trades);reliability.arrived(id,"trades:"+trades.lastAt(),trades.lastAt(),received,"RECENT_TRADES_SAMPLE_NOT_CONTINUOUS");return 1;}
             default -> throw new IllegalStateException("PUBLIC_SOURCE_UNKNOWN");
         }
         if(rows.isEmpty())throw new IllegalStateException("PUBLIC_NO_VERIFIED_RECORDS");
@@ -134,7 +152,7 @@ public class SupplementalSources {
     void saveObservations(List<Observation> rows){
         for(var row:rows){String key=NewsService.hash(row.id()+":"+mapper.writeValueAsString(List.of(new TreeMap<>(row.values()),row.period(),Objects.toString(row.publishedAt(),""),row.note())));
             var previous=store.find("public-observation-version",key,Observation.class);var saved=previous.orElse(row);
-            if(previous.isEmpty())store.save("public-observation-version",key,row);store.save("public-observation",row.id(),saved);}
+            if(previous.isEmpty()){store.save("public-observation-version",key,row);reliability.arrived(row.source(),key,row.publishedAt(),row.receivedAt(),row.publishedAt()!=null?"DECLARED_RELEASE_TIME":"PUBLICATION_UNVERIFIED");}store.save("public-observation",row.id(),saved);}
     }
     static List<Observation> parseCot(JsonNode json,Instant at,String hash){
         List<Observation> result=new ArrayList<>();if(!json.isArray())throw new IllegalStateException("COT_FORMAT_INVALID");

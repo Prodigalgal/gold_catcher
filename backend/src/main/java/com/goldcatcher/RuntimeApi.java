@@ -2,6 +2,9 @@ package com.goldcatcher;
 
 import com.goldcatcher.information.NewsService;
 import com.goldcatcher.analysis.TrendAnalysis;
+import com.goldcatcher.analysis.DriverSources;
+import com.goldcatcher.analysis.SupplementalSources;
+import com.goldcatcher.network.SourceReliability;
 import com.goldcatcher.network.SourceProxyPool;
 import com.goldcatcher.market.MarketFeed;
 import com.goldcatcher.persistence.DocumentStore;
@@ -25,10 +28,12 @@ public class RuntimeApi {
     private final FundingService funding;
     private final SourceProxyPool proxy;
     private final TrendAnalysis analysis;
+    private final SourceReliability reliability;private final DriverSources drivers;private final SupplementalSources supplemental;
     public RuntimeApi(MarketFeed market,NewsService news,SimulationLedger ledger,ResearchService research,Any2ApiClient ai,
-        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis) {
+        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis,SourceReliability reliability,DriverSources drivers,SupplementalSources supplemental) {
         this.market=market;this.news=news;this.ledger=ledger;this.research=research;this.ai=ai;this.settings=settings;this.events=events;this.store=store;this.clock=clock;
         this.funding=funding;this.proxy=proxy;this.analysis=analysis;
+        this.reliability=reliability;this.drivers=drivers;this.supplemental=supplemental;
     }
     @GetMapping("/session") public Map<String,String> session(Principal principal,CsrfToken token) {
         return Map.of("username",principal.getName(),"csrfHeader",token.getHeaderName(),"csrfToken",token.getToken());
@@ -36,9 +41,14 @@ public class RuntimeApi {
     @GetMapping("/dashboard") public Map<String,Object> dashboard(@RequestParam(defaultValue="XAU_USDT") String symbol) {
         product(symbol);Map<String,Object> data=new LinkedHashMap<>();
         data.put("serverTime",clock.instant());data.put("market",market.snapshot(symbol));data.put("marketProvenance",market.provenance(symbol));data.put("account",ledger.view(symbol));
-        data.put("news",news.news());data.put("calendar",news.calendar());data.put("sources",news.sources());data.put("models",ai.states());
+        var official=news.sources();data.put("news",news.news());data.put("calendar",news.calendar());data.put("sources",official);data.put("models",ai.states());
         data.put("sourceProxy",proxy.status());
-        data.put("analysis",analysis.view(symbol));
+        var trend=analysis.view(symbol);data.put("analysis",trend);
+        var channels=new ArrayList<SourceReliability.Input>();
+        official.forEach(s->channels.add(new SourceReliability.Input(s.id(),s.id(),"OFFICIAL",s.url(),s.state(),news.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
+        trend.sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"DRIVER",s.url(),s.state(),drivers.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
+        trend.supplemental().sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"SUPPLEMENTAL",s.url(),s.state(),supplemental.interval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
+        data.put("sourceReliability",reliability.view(channels));
         data.put("funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));
         data.put("costConfiguration",market.costConfiguration(symbol));
         data.put("budgets",settings.routes().stream().map(route->Map.ofEntries(Map.entry("id",route.id()),Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("characterLimit",route.characterLimit()),

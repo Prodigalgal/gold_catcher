@@ -54,6 +54,20 @@ body { margin:0; background:#0d1118; }
 .gc-source-quality b { color:var(--gc-text);font-size:11px;overflow-wrap:anywhere; }
 .gc-source-times { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:12px;color:var(--gc-muted);font-size:10px; }
 .gc-source-note { margin-bottom:0;line-height:1.6; }
+.gc-reliability { margin-bottom:20px; }
+.gc-reliability-stats { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:18px 0; }
+.gc-reliability-stats span { display:grid;gap:8px;color:var(--gc-muted);font-size:11px; }
+.gc-reliability-stats b { color:var(--gc-text);font-size:18px;overflow-wrap:anywhere; }
+.gc-reliability-stats span:last-child b { font-size:12px; }
+.gc-reliability-list { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-height:520px;overflow:auto;overscroll-behavior:contain;padding-right:4px; }
+.gc-reliability-list .gc-panel-head { flex-wrap:wrap; }
+.gc-reliability-list .gc-source-quality { margin:14px 0; }
+.gc-reliability-lag { border-top:1px solid var(--gc-line);padding-top:10px; }
+.gc-reliability-details > summary { color:var(--gc-gold);font-size:12px;cursor:pointer;padding:8px 0; }
+.gc-reliability .gc-news-controls { display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:14px 0; }
+.gc-reliability .gc-news-controls label { display:flex;align-items:center;gap:10px;color:var(--gc-muted);font-size:12px; }
+.gc-reliability .gc-news-controls select { background:var(--gc-bg);color:var(--gc-text);border:1px solid var(--gc-line);border-radius:6px;padding:8px 10px;font:inherit;max-width:100%; }
+@media(max-width:600px) { .gc-reliability-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }.gc-reliability-list { grid-template-columns:1fr;max-height:470px; } }
 .gc-article-dialog { max-height:90dvh;overflow-y:auto; }
 .gc-article-dialog h2 { font-size:22px;line-height:1.45; }
 .gc-article-body { white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:13px;line-height:1.85;padding:20px;background:var(--gc-bg);border:1px solid var(--gc-line);border-radius:6px;max-height:46dvh;overflow-y:auto; }

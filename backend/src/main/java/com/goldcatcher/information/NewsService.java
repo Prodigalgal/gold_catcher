@@ -4,6 +4,9 @@ import com.goldcatcher.*;
 import com.goldcatcher.persistence.DocumentStore;
 import com.goldcatcher.network.SourceProxyPool;
 import com.goldcatcher.network.BrowserSourceRequest;
+import com.goldcatcher.network.SourcePolling;
+import com.goldcatcher.network.SourceReliability;
+import com.goldcatcher.network.ReleasePolling;
 import jakarta.annotation.PostConstruct;
 import java.io.ByteArrayInputStream;
 import java.net.URI;
@@ -76,20 +79,26 @@ public class NewsService {
     private final Set<String> bodyInFlight=ConcurrentHashMap.newKeySet();
     private final Map<String,ArticleBody> bodies=new ConcurrentHashMap<>();
     private final SourceProxyPool proxy;
+    private final SourceReliability reliability;
+    private final ReleasePolling polling;
     private volatile Consumer<String> newsTrigger=id->{};
     public NewsService(RuntimeSettings settings,RemoteHttp http,DocumentStore store,EventHub events,Clock clock) {
         this(settings,http,store,events,clock,null);
     }
-    @Autowired public NewsService(RuntimeSettings settings,RemoteHttp http,DocumentStore store,EventHub events,Clock clock,SourceProxyPool proxy) {
-        this.settings=settings;this.http=http;this.store=store;this.events=events;this.clock=clock;this.proxy=proxy;
+    public NewsService(RuntimeSettings settings,RemoteHttp http,DocumentStore store,EventHub events,Clock clock,SourceProxyPool proxy) {
+        this(settings,http,store,events,clock,proxy,new SourceReliability(clock),new ReleasePolling(clock,store));
+    }
+    @Autowired public NewsService(RuntimeSettings settings,RemoteHttp http,DocumentStore store,EventHub events,Clock clock,SourceProxyPool proxy,SourceReliability reliability,ReleasePolling polling) {
+        this.settings=settings;this.http=http;this.store=store;this.events=events;this.clock=clock;this.proxy=proxy;this.reliability=reliability;this.polling=polling;
     }
     @PostConstruct void recover() {
         store.list("news-body",ArticleBody.class,1000).forEach(body->bodies.put(body.id(),body));
-        for(var state:store.list("source-state",SourceState.class,100))if(Objects.equals(FEEDS.get(state.id()),state.url())
-            &&Objects.equals(state.route(),proxy==null?"DIRECT":proxy.routeName(state.id())))
-            states.put(state.id(),state);
+        for(var state:store.list("source-state",SourceState.class,100))if(Objects.equals(FEEDS.get(state.id()),state.url()))
+            states.put(state.id(),new SourceState(state.id(),state.url(),state.state(),pollInterval(state.id()),state.lastSuccess(),
+                state.error()!=null&&state.nextPoll()!=null&&state.nextPoll().isAfter(clock.instant())?state.nextPoll():clock.instant(),state.error(),state.entries(),state.quality(),state.route()));
     }
     public void onNews(Consumer<String> trigger){newsTrigger=trigger;}
+    public int pollInterval(String id){return polling.interval(id,id.endsWith("_CALENDAR")?3600:Math.max(15,settings.integer("GOLD_NEWS_POLL_SECONDS",30)));}
     public List<News> news(){return distinctArticles(store.list("news",News.class,1000)).stream().map(this::decorate)
         .sorted(Comparator.comparing((News news)->Boolean.TRUE.equals(news.archived()))
             .thenComparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
@@ -100,7 +109,7 @@ public class NewsService {
     public List<SourceState> sources(){
         var articles=news();var calendars=calendar();
         return FEEDS.entrySet().stream().sorted(Map.Entry.comparingByKey()).map(feed->{
-            var state=states.getOrDefault(feed.getKey(),new SourceState(feed.getKey(),feed.getValue(),"DISABLED",30,null,null,null,0));
+            var state=states.getOrDefault(feed.getKey(),new SourceState(feed.getKey(),feed.getValue(),settings.enabled("GOLD_NEWS_ENABLED")?"NOT_YET_FETCHED":"DISABLED",pollInterval(feed.getKey()),null,null,null,0));
             var owned=articles.stream().filter(n->n.source().equals(feed.getKey())).toList();
             boolean calendar=feed.getKey().endsWith("_CALENDAR");
             int records=calendar?(int)calendars.stream().filter(e->e.source().equals(feed.getKey())).count():owned.size();
@@ -119,7 +128,7 @@ public class NewsService {
                     feed.getKey().startsWith("EIA_")?"RSS含来源摘要；EST按原文固定偏移解析，不补缺失年份。Feed时间不冒充已核实的库存发布时刻。":
                     feed.getKey().equals("BOJ_NEWS")?"RSS日期/更新时间未独立核实为首发时刻；下载表格与完整政策日历另需接入。":
                     "连接成功不表示新闻刚刚发布；正文和发布时间分别核验。" );
-            return new SourceState(state.id(),state.url(),state.state(),state.intervalSeconds(),state.lastSuccess(),state.nextPoll(),state.error(),state.entries(),quality,state.route());
+            return new SourceState(state.id(),state.url(),settings.enabled("GOLD_NEWS_ENABLED")?state.state():"DISABLED",state.intervalSeconds(),state.lastSuccess(),state.nextPoll(),state.error(),state.entries(),quality,state.route());
         }).toList();
     }
     public List<News> evidence(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
@@ -224,7 +233,7 @@ public class NewsService {
         }
     }
     void enrich(News article) {
-        var previous=bodies.get(article.id());Instant now=clock.instant();ArticleBody body;
+        var previous=bodies.get(article.id());ArticleBody body;long started=reliability.begin();
         try {
             String link=article.link();var extracted=OfficialArticle.extract(article.source(),articleBytes(article.source(),link),link);
             if(extracted.linkedMinutes()!=null) {link=extracted.linkedMinutes();extracted=OfficialArticle.extract("FED_PRESS",articleBytes("FED_PRESS",link),link);}
@@ -233,14 +242,21 @@ public class NewsService {
             if(truncated)text=text.substring(0,text.offsetByCodePoints(0,maximum));
             String fingerprint=hash(text);boolean changed=previous==null||!Objects.equals(previous.hash(),fingerprint);
             boolean revision=changed||previous!=null&&!Objects.equals(previous.feedHash(),article.contentHash());
+            // Knowledge starts after the entire document (including linked minutes) is fetched and parsed.
+            Instant now=clock.instant();
             body=new ArticleBody(article.id(),article.source(),link,text,truncated?"TRUNCATED":"AVAILABLE",fingerprint,
                 revision?now:previous.receivedAt(),now,now.plusSeconds(21600),previous==null?1:previous.version()+(revision?1:0),null,truncated,article.contentHash(),extracted.releaseAt(),extracted.format());
             ArticleBody saved=body;store.transaction(()->{store.save("news-body",article.id(),saved);if(changed)store.event(article.id(),"NEWS_BODY_VERSION",saved);return saved;});
+            reliability.success(article.source(),"BODY",started,1);
+            if(revision)reliability.arrived(article.source(),article.id()+":"+body.hash(),extracted.releaseAt()!=null?extracted.releaseAt():article.publishedAt(),body.receivedAt(),extracted.releaseAt()!=null?"DECLARED_RELEASE_TIME":verifiedTime(article)?"EXACT_PUBLICATION":"PUBLICATION_UNVERIFIED");
             if(changed&&article.publishedAt()!=null&&article.publishedAt().isAfter(now.minusSeconds(1800)))newsTrigger.accept(article.id());
         }catch(Exception failure) {
+            Instant now=clock.instant();
             String error=failure instanceof IllegalStateException&&failure.getMessage()!=null&&failure.getMessage().matches("[A-Z0-9_]+")?failure.getMessage():"ARTICLE_FETCH_FAILED";
+            reliability.failure(article.source(),"BODY",started,error);
+            int retry=article.publishedAt()!=null&&article.publishedAt().isAfter(now.minusSeconds(1800))?30:900;
             body=new ArticleBody(article.id(),article.source(),article.link(),previous==null?"":previous.text(),previous==null?"FETCH_FAILED":"CACHED_AFTER_FAILURE",
-                previous==null?null:previous.hash(),previous==null?null:previous.receivedAt(),now,now.plusSeconds(900),previous==null?0:previous.version(),error,
+                previous==null?null:previous.hash(),previous==null?null:previous.receivedAt(),now,now.plusSeconds(SourcePolling.retrySeconds(failure,now,retry)),previous==null?0:previous.version(),error,
                 previous!=null&&previous.truncated(),previous==null?article.contentHash():previous.feedHash(),previous==null?null:previous.releaseAt(),previous==null?null:previous.format());store.save("news-body",article.id(),body);
         }
         bodies.put(article.id(),body);events.changed();
@@ -252,7 +268,7 @@ public class NewsService {
             var request=BrowserSourceRequest.navigation(target,Duration.ofSeconds(12)).GET().build();
             var response=proxy==null?http.send(request,4_000_000):proxy.send(source,request,4_000_000);
             if(Set.of(301,302,303,307,308).contains(response.statusCode())){target=target.resolve(response.headers().firstValue("location").orElseThrow());continue;}
-            if(response.statusCode()!=200)throw new IllegalStateException("HTTP_"+response.statusCode());return response.body();
+            if(response.statusCode()!=200)throw SourcePolling.failure("HTTP_",response,clock.instant());return response.body();
         }
         throw new IllegalStateException("ARTICLE_REDIRECT_LIMIT");
     }
@@ -261,7 +277,7 @@ public class NewsService {
         if(!settings.enabled("GOLD_NEWS_ENABLED"))return;
         for(var feed:FEEDS.entrySet()) {
             var previous=states.get(feed.getKey());
-            if(previous!=null&&previous.nextPoll()!=null&&previous.nextPoll().isAfter(clock.instant()))continue;
+            if(previous!=null&&!SourcePolling.due(clock.instant(),previous.lastSuccess(),previous.nextPoll(),previous.error(),previous.intervalSeconds(),pollInterval(feed.getKey())))continue;
             if(!inFlight.add(feed.getKey()))continue;
             Thread.ofVirtual().name("gold-source-"+feed.getKey()).start(()->{
                 try{fetch(feed,previous);}finally{inFlight.remove(feed.getKey());}
@@ -269,28 +285,32 @@ public class NewsService {
         }
     }
     private void fetch(Map.Entry<String,String> feed,SourceState previous) {
-            int interval=feed.getKey().endsWith("_CALENDAR")?3600:Math.max(15,settings.integer("GOLD_NEWS_POLL_SECONDS",30));
+            int interval=pollInterval(feed.getKey());long started=reliability.begin();
             try {
                 var builder=BrowserSourceRequest.navigation(URI.create(feed.getValue()),Duration.ofSeconds(12));
                 if(etags.containsKey(feed.getKey()))builder.header("If-None-Match",etags.get(feed.getKey()));
                 var response=proxy==null?http.send(builder.GET().build(),1_500_000):proxy.send(feed.getKey(),builder.GET().build(),1_500_000);
                 if(response.statusCode()==304) {
+                    if(!etags.containsKey(feed.getKey()))throw new IllegalStateException("NOT_MODIFIED_WITHOUT_VALIDATED_VERSION");
+                    reliability.success(feed.getKey(),"COLLECTION",started,0);
                     recordState(new SourceState(feed.getKey(),feed.getValue(),"CURRENT",interval,clock.instant(),
                         clock.instant().plusSeconds(interval),null,0));events.changed();return;
                 }
-                if(response.statusCode()!=200)throw new IllegalStateException("HTTP_"+response.statusCode());
+                if(response.statusCode()!=200)throw SourcePolling.failure("HTTP_",response,clock.instant());
                 int count=feed.getKey().equals("BEA_NEWS")?parseBeaCurrent(response.body(),feed.getValue()):
                     feed.getKey().equals("FOMC_CALENDAR")?parseFomcSchedule(response.body(),feed.getValue()):
                     feed.getKey().equals("BEA_CALENDAR")?parseBeaSchedule(response.body(),feed.getValue()):
                     feed.getKey().endsWith("_CALENDAR")?parseCalendar(feed.getKey(),response.body(),feed.getValue()):parseRss(feed.getKey(),response.body());
                 response.headers().firstValue("etag").ifPresent(value->etags.put(feed.getKey(),value));
+                reliability.success(feed.getKey(),"COLLECTION",started,count);
                 recordState(new SourceState(feed.getKey(),feed.getValue(),"CURRENT",interval,clock.instant(),
                     clock.instant().plusSeconds(interval),null,count));events.changed();
             } catch(Exception failure) {
                 String error=failure instanceof IllegalStateException&&failure.getMessage()!=null&&failure.getMessage().matches("[A-Z0-9_]+")?failure.getMessage():"SOURCE_FETCH_OR_PARSE_FAILED";
                 boolean waiting=error.equals("PROXY_NOT_READY");
-                int delay=waiting?5:previous!=null&&previous.error()!=null?Math.min(previous.intervalSeconds()*2,feed.getKey().endsWith("_CALENDAR")?3600:300):60;
-                recordState(new SourceState(feed.getKey(),feed.getValue(),waiting?"WAITING_PROXY":"FETCH_FAILED",delay,
+                reliability.failure(feed.getKey(),"COLLECTION",started,error);
+                int delay=SourcePolling.retrySeconds(failure,clock.instant(),waiting?5:SourcePolling.backoff(reliability.failures(feed.getKey()),60,feed.getKey().endsWith("_CALENDAR")?3600:300));
+                recordState(new SourceState(feed.getKey(),feed.getValue(),waiting?"WAITING_PROXY":"FETCH_FAILED",interval,
                     previous==null?null:previous.lastSuccess(),clock.instant().plusSeconds(delay),
                     error,0));events.changed();
             }
@@ -311,6 +331,7 @@ public class NewsService {
             if(previous.isPresent()&&previous.get().contentHash().equals(fingerprint)){entries++;continue;}
             var article=new News(id,"BEA_NEWS",title,"",url,published,clock.instant(),"OFFICIAL_SOURCE",previous.map(n->n.version()+1).orElse(1),fingerprint);
             store.transaction(()->{store.save("news",id,article);store.event(id,"NEWS_VERSION",article);return article;});entries++;
+            reliability.arrived(article.source(),article.id()+":"+article.contentHash(),article.publishedAt(),article.receivedAt(),"EXACT_PUBLICATION");
             if(published.isAfter(clock.instant().minusSeconds(1800)))newsTrigger.accept(id);
         }
         if(entries==0)throw new IllegalStateException("BEA_NEWS_FORMAT_CHANGED");return entries;
@@ -371,6 +392,7 @@ public class NewsService {
                 previous.map(n->n.version()+1).orElse(1),fingerprint,published==null?"UNKNOWN":feedTime||source.startsWith("BLS_")&&atom?"FEED_TIMESTAMP":"EXACT",
                 null,null,null,null,null,null,null);
             store.transaction(()->{store.save("news",id,article);store.event(id,"NEWS_VERSION",article);return article;});changed++;
+            reliability.arrived(source,article.id()+":"+fingerprint,published,article.receivedAt(),verifiedTime(article)?"EXACT_PUBLICATION":"PUBLICATION_UNVERIFIED");
             if(previous.isPresent()||(published!=null&&published.isAfter(clock.instant().minusSeconds(1800))))newsTrigger.accept(id);
         }
         return changed;

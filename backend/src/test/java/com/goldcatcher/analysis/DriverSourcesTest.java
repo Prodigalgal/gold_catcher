@@ -10,6 +10,19 @@ import java.time.*;
 import org.junit.jupiter.api.Test;
 
 class DriverSourcesTest {
+    @Test void rateLimitedHistoryWaitsForRetryAfterWhileFreshQuotesContinue() throws Exception {
+        var f=new TestSupport();var gate=mock(GateCfdFeed.class);
+        @SuppressWarnings("unchecked") java.net.http.HttpResponse<byte[]> limited=mock(java.net.http.HttpResponse.class);
+        when(limited.statusCode()).thenReturn(429);when(limited.headers()).thenReturn(java.net.http.HttpHeaders.of(java.util.Map.of("Retry-After",java.util.List.of("120")),(k,v)->true));
+        var rateLimit=com.goldcatcher.network.SourcePolling.failure("GATE_HTTP_",limited,f.clock.instant());
+        when(gate.driverObservation("USIDX",true)).thenThrow(rateLimit);
+        when(gate.driverObservation("USIDX",false)).thenAnswer(call->{var json=f.mapper.createObjectNode().put("timestamp",f.clock.instant().toEpochMilli());json.putObject("data").put("bid_price","100").put("ask_price","101").put("status","open");return json;});
+        var sources=new DriverSources(f.settings,f.store,new RemoteHttp(),f.mapper,gate,new EventHub(),f.clock);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(sources,"collectGate","USIDX");f.clock.advance(30000);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(sources,"collectGate","USIDX");verify(gate,times(1)).driverObservation("USIDX",true);
+        assertThat(sources.drivers(f.clock.instant())).hasSize(1);assertThat(sources.drivers(f.clock.instant()).getFirst().note()).contains("关联1分钟K线未刷新");
+        f.clock.advance(100000);org.springframework.test.util.ReflectionTestUtils.invokeMethod(sources,"collectGate","USIDX");verify(gate,times(2)).driverObservation("USIDX",true);verify(gate,times(3)).driverObservation("USIDX",false);
+    }
     @Test void treasuryRejectsFutureDatesAndNullValuesAndCalculatesBasisPoints() throws Exception {
         var xml="""
             <feed xmlns:d="urn:d"><entry><d:NEW_DATE>2026-10-05T00:00:00</d:NEW_DATE><d:TC_10YEAR>-0.05</d:TC_10YEAR></entry>

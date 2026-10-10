@@ -5,6 +5,9 @@ import com.goldcatcher.*;
 import com.goldcatcher.information.NewsService;
 import com.goldcatcher.market.GateCfdFeed;
 import com.goldcatcher.network.BrowserSourceRequest;
+import com.goldcatcher.network.SourcePolling;
+import com.goldcatcher.network.SourceReliability;
+import com.goldcatcher.network.ReleasePolling;
 import com.goldcatcher.persistence.DocumentStore;
 import jakarta.annotation.PostConstruct;
 import java.io.ByteArrayInputStream;
@@ -17,6 +20,7 @@ import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.w3c.dom.Element;
 import tools.jackson.databind.*;
 
@@ -28,20 +32,26 @@ public class DriverSources {
     private static final MathContext MC=MathContext.DECIMAL128;
     private final RuntimeSettings settings;private final DocumentStore store;private final RemoteHttp http;
     private final ObjectMapper mapper;private final GateCfdFeed gate;private final EventHub events;private final Clock clock;
+    private final SourceReliability reliability;private final ReleasePolling polling;
     private final Map<String,Driver> drivers=new ConcurrentHashMap<>();private final Map<String,SourceCheck> checks=new ConcurrentHashMap<>();
     private final Map<String,List<Price>> histories=new ConcurrentHashMap<>();private final Map<String,Instant> historyAt=new ConcurrentHashMap<>();
+    private final Map<String,Instant> historyNextAttempt=new ConcurrentHashMap<>();
     private final Map<String,String> historyErrors=new ConcurrentHashMap<>();private final Set<String> working=ConcurrentHashMap.newKeySet();
     record Price(Instant at,BigDecimal close) {}
     public DriverSources(RuntimeSettings settings,DocumentStore store,RemoteHttp http,ObjectMapper mapper,GateCfdFeed gate,EventHub events,Clock clock){
-        this.settings=settings;this.store=store;this.http=http;this.mapper=mapper;this.gate=gate;this.events=events;this.clock=clock;
+        this(settings,store,http,mapper,gate,events,clock,new SourceReliability(clock),new ReleasePolling(clock,store));
     }
+    @Autowired public DriverSources(RuntimeSettings settings,DocumentStore store,RemoteHttp http,ObjectMapper mapper,GateCfdFeed gate,EventHub events,Clock clock,SourceReliability reliability,ReleasePolling polling){
+        this.settings=settings;this.store=store;this.http=http;this.mapper=mapper;this.gate=gate;this.events=events;this.clock=clock;this.reliability=reliability;this.polling=polling;
+    }
+    public int pollInterval(String id){return id.startsWith("GATE_")?5:id.equals("FF_EXPECTATIONS")?polling.interval(id,1800):3600;}
     private boolean enabled(){return (settings.enabled("GOLD_NEWS_ENABLED")||settings.enabled("GOLD_MARKET_ENABLED"))&&Boolean.parseBoolean(settings.text("GOLD_DRIVERS_ENABLED","true"));}
-    @PostConstruct void recover(){store.list("gold-driver",Driver.class,20).forEach(d->drivers.put(d.id(),d));store.list("driver-source",SourceCheck.class,20).forEach(c->checks.put(c.id(),new SourceCheck(c.id(),c.label(),c.url(),c.state(),c.intervalSeconds(),c.lastSuccess(),clock.instant(),c.error(),c.records())));}
+    @PostConstruct void recover(){store.list("gold-driver",Driver.class,20).forEach(d->drivers.put(d.id(),d));store.list("driver-source",SourceCheck.class,20).forEach(c->checks.put(c.id(),new SourceCheck(c.id(),c.label(),c.url(),c.state(),pollInterval(c.id()),c.lastSuccess(),c.error()!=null&&c.nextPoll()!=null&&c.nextPoll().isAfter(clock.instant())?c.nextPoll():clock.instant(),c.error(),c.records())));}
     public List<Driver> drivers(Instant cutoff){return drivers.values().stream().filter(d->!d.receivedAt().isAfter(cutoff)).sorted(Comparator.comparing(Driver::id)).toList();}
     public List<SourceCheck> sources(){var result=new ArrayList<SourceCheck>();for(String symbol:List.of("USIDX","EURUSD","USDJPY"))result.add(check("GATE_"+symbol,label(symbol),gateUrl(symbol),5));
         result.add(check("TREASURY_NOMINAL","美国财政部名义收益率",treasuryUrl(false,clock.instant().atZone(ZoneId.of("America/New_York")).getYear()),3600));
         result.add(check("TREASURY_REAL","美国财政部实际收益率",treasuryUrl(true,clock.instant().atZone(ZoneId.of("America/New_York")).getYear()),3600));
-        result.add(check("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,1800));return List.copyOf(result);}
+        result.add(check("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS")));return List.copyOf(result);}
     private SourceCheck check(String id,String label,String url,int interval){var c=checks.getOrDefault(id,new SourceCheck(id,label,url,"NOT_YET_FETCHED",interval,null,null,null,0));
         return enabled()?c:new SourceCheck(id,label,url,"DISABLED",interval,c.lastSuccess(),c.nextPoll(),c.error(),c.records());}
     @Scheduled(fixedDelay=1000,initialDelay=4200) void collect(){
@@ -50,29 +60,32 @@ public class DriverSources {
         int year=clock.instant().atZone(ZoneId.of("America/New_York")).getYear();
         schedule("TREASURY_NOMINAL","美国财政部名义收益率",treasuryUrl(false,year),3600,()->collectTreasury(false));
         schedule("TREASURY_REAL","美国财政部实际收益率",treasuryUrl(true,year),3600,()->collectTreasury(true));
-        schedule("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,1800,this::collectExpectations);
+        schedule("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS"),this::collectExpectations);
     }
     @FunctionalInterface private interface Fetch{int run() throws Exception;}
     private void schedule(String id,String label,String url,int interval,Fetch action){
-        var previous=checks.get(id);if(previous!=null&&previous.nextPoll()!=null&&previous.nextPoll().isAfter(clock.instant())||!working.add(id))return;
-        Thread.ofVirtual().name("gold-driver-"+id).start(()->{try{
+        var previous=checks.get(id);if(previous!=null&&!SourcePolling.due(clock.instant(),previous.lastSuccess(),previous.nextPoll(),previous.error(),previous.intervalSeconds(),interval)||!working.add(id))return;
+        Thread.ofVirtual().name("gold-driver-"+id).start(()->{long started=reliability.begin();try{
             int records=action.run();saveCheck(new SourceCheck(id,label,url,"CURRENT",interval,clock.instant(),clock.instant().plusSeconds(interval),null,records));
+            reliability.success(id,"COLLECTION",started,records);
         }catch(Exception failed){String error=failed.getMessage();if(error==null||!error.matches("[A-Z0-9_]+"))error="DRIVER_FETCH_OR_PARSE_FAILED";
-            int retry=Math.min(id.startsWith("GATE_")?120:3600,Math.max(15,previous!=null&&previous.error()!=null?previous.intervalSeconds()*2:60));
-            saveCheck(new SourceCheck(id,label,url,"FETCH_FAILED",retry,previous==null?null:previous.lastSuccess(),clock.instant().plusSeconds(retry),error,0));
+            reliability.failure(id,"COLLECTION",started,error);
+            int retry=SourcePolling.retrySeconds(failed,clock.instant(),SourcePolling.backoff(reliability.failures(id),id.startsWith("GATE_")?15:60,id.startsWith("GATE_")?120:3600));
+            saveCheck(new SourceCheck(id,label,url,"FETCH_FAILED",interval,previous==null?null:previous.lastSuccess(),clock.instant().plusSeconds(retry),error,0));
         }finally{working.remove(id);events.changed();}});
     }
     private void saveCheck(SourceCheck check){checks.put(check.id(),check);store.save("driver-source",check.id(),check);}
     private int collectGate(String symbol) throws Exception {
         Instant now=clock.instant();var previous=drivers.get("GATE_"+symbol);
         // Quote collection continues if a history refresh fails; the old baseline is explicitly gated.
-        if(historyAt.get(symbol)==null||historyAt.get(symbol).plusSeconds(60).isBefore(now))try{
-            histories.put(symbol,parseHistory(gate.driverObservation(symbol,true),now));historyAt.put(symbol,now);historyErrors.remove(symbol);
-        }catch(Exception failure){historyErrors.put(symbol,"关联1分钟K线未刷新");historyAt.put(symbol,now.minusSeconds(45));}
+        if((historyAt.get(symbol)==null||historyAt.get(symbol).plusSeconds(60).isBefore(now))&&
+            (historyNextAttempt.get(symbol)==null||!historyNextAttempt.get(symbol).isAfter(now)))try{
+            histories.put(symbol,parseHistory(gate.driverObservation(symbol,true),now));historyAt.put(symbol,now);historyNextAttempt.remove(symbol);historyErrors.remove(symbol);
+        }catch(Exception failure){historyErrors.put(symbol,"关联1分钟K线未刷新");historyNextAttempt.put(symbol,clock.instant().plusSeconds(SourcePolling.retrySeconds(failure,clock.instant(),15)));}
         var body=gate.driverObservation(symbol,false);Instant receivedAt=clock.instant();
         var parsed=parseGate(symbol,body,receivedAt,previous==null?1:previous.version()+1,histories.getOrDefault(symbol,List.of()));
         if(historyErrors.containsKey(symbol))parsed=new Driver(parsed.id(),parsed.label(),parsed.family(),parsed.source(),parsed.nativeSymbol(),parsed.url(),parsed.frequency(),parsed.unit(),parsed.value(),parsed.previous(),parsed.change(),parsed.changeUnit(),parsed.asOfDate(),parsed.responseAt(),parsed.receivedAt(),parsed.version(),parsed.marketStatus(),parsed.returnsPct(),parsed.referenceChangePct(),parsed.timestampMeaning(),parsed.note()+"；"+historyErrors.get(symbol));
-        saveDriver(parsed);return 1;
+        saveDriver(parsed);reliability.arrived("GATE_"+symbol,"quote:"+parsed.version(),parsed.responseAt(),parsed.receivedAt(),"SOURCE_RESPONSE_TIME_NOT_TICK");return 1;
     }
     static Driver parseGate(String symbol,JsonNode body,Instant receivedAt,int version,List<Price> history){
         var data=body.path("data");long timestamp=body.path("timestamp").asLong();if(!body.path("label").asText().isBlank()||timestamp<=0)throw new IllegalStateException("GATE_DRIVER_RESPONSE_INVALID");
@@ -104,7 +117,8 @@ public class DriverSources {
         var observations=treasuryDrivers(rows,real,url,clock.instant());if(observations.isEmpty())throw new IllegalStateException("TREASURY_NO_VALID_DATA");
         for(var d:observations){var old=drivers.get(d.id());if(old!=null&&Objects.equals(old.value(),d.value())&&Objects.equals(old.previous(),d.previous())&&Objects.equals(old.asOfDate(),d.asOfDate()))continue;
             String observationUrl=treasuryUrl(real,LocalDate.parse(d.asOfDate()).getYear());
-            saveDriver(new Driver(d.id(),d.label(),d.family(),d.source(),d.nativeSymbol(),observationUrl,d.frequency(),d.unit(),d.value(),d.previous(),d.change(),d.changeUnit(),d.asOfDate(),null,d.receivedAt(),old==null?1:old.version()+1,d.marketStatus(),d.returnsPct(),null,d.timestampMeaning(),d.note()));}
+            saveDriver(new Driver(d.id(),d.label(),d.family(),d.source(),d.nativeSymbol(),observationUrl,d.frequency(),d.unit(),d.value(),d.previous(),d.change(),d.changeUnit(),d.asOfDate(),null,d.receivedAt(),old==null?1:old.version()+1,d.marketStatus(),d.returnsPct(),null,d.timestampMeaning(),d.note()));
+            reliability.arrived(real?"TREASURY_REAL":"TREASURY_NOMINAL",d.id()+":"+d.asOfDate(),null,d.receivedAt(),"AS_OF_DATE_ONLY");}
         return observations.size();
     }
     static SortedMap<LocalDate,Map<String,BigDecimal>> treasuryRows(byte[] bytes,boolean real,LocalDate today) throws Exception {
@@ -139,6 +153,7 @@ public class DriverSources {
             var old=store.find("gold-expectation",id,Expectation.class);if(old.isPresent()&&old.get().hash().equals(hash)){count++;continue;}
             var expectation=new Expectation(id,indicator,title,scheduled,"PROVIDER_TIME_APPROXIMATE",row.path("impact").asText(),unit,forecast,previous,"FOREX_FACTORY_PROVIDER_FORECAST",CALENDAR,clock.instant(),old.map(e->e.version()+1).orElse(1),hash,rawForecast,rawPrevious);
             store.transaction(()->{store.save("gold-expectation",id,expectation);store.save("gold-expectation-version",id+":"+expectation.version(),expectation);return expectation;});count++;
+            reliability.arrived("FF_EXPECTATIONS",id+":"+hash,null,expectation.receivedAt(),"SCHEDULE_AND_FORECAST_NOT_PUBLICATION");
         }
         // Unsupported USD events remain visible, but are excluded from numerical surprise joins.
         return count;
@@ -156,7 +171,7 @@ public class DriverSources {
         return rows.stream().max(Comparator.comparing(Expectation::receivedAt)).orElse(null);
     }
     private byte[] fetch(String url,int maximum) throws Exception {var response=http.send(BrowserSourceRequest.navigation(URI.create(url),Duration.ofSeconds(12)).GET().build(),maximum);
-        if(response.statusCode()!=200)throw new IllegalStateException("DRIVER_HTTP_"+response.statusCode());return response.body();}
+        if(response.statusCode()!=200)throw SourcePolling.failure("DRIVER_HTTP_",response,clock.instant());return response.body();}
     private void saveDriver(Driver driver){drivers.put(driver.id(),driver);store.save("gold-driver",driver.id(),driver);}
     private static String treasuryUrl(boolean real,int year){return TREASURY+"?data="+(real?"daily_treasury_real_yield_curve":"daily_treasury_yield_curve")+"&field_tdr_date_value="+year;}
     private static String gateUrl(String symbol){return "https://api.gateio.ws/api/v4/tradfi/symbols/"+symbol+"/tickers";}

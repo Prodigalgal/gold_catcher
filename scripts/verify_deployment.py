@@ -116,7 +116,7 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Public driver, official numeric release or four-horizon analysis acceptance timed out')
-supplemental_sources = {'DOL_CLAIMS', 'CENSUS_ECON', 'CFTC_GOLD', 'TREASURY_AUCTIONS', 'IAU_HOLDINGS', 'GATE_DEPTH', 'GATE_TRADES'}
+supplemental_sources = {'DOL_CLAIMS', 'CENSUS_ECON', 'CFTC_GOLD', 'TREASURY_AUCTIONS', 'IAU_HOLDINGS', 'GLD_HOLDINGS', 'GATE_DEPTH', 'GATE_TRADES'}
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     extra = snapshot('/api/dashboard?symbol=XAU_USDT').get('analysis', {}).get('supplemental') or {}
@@ -125,7 +125,7 @@ while time.monotonic() < deadline:
     depth, trades = extra.get('depth') or {}, extra.get('trades') or {}
     if (set(channels) == supplemental_sources and all(s['state'] == 'CURRENT' for s in channels.values())
             and {'INITIAL_CLAIMS', 'CONTINUED_CLAIMS'} <= {o['id'] for o in rows}
-            and {'CENSUS_ECON', 'CFTC_GOLD', 'TREASURY_AUCTIONS', 'IAU_HOLDINGS'} <= {o['source'] for o in rows}
+            and {'CENSUS_ECON', 'CFTC_GOLD', 'TREASURY_AUCTIONS', 'IAU_HOLDINGS', 'GLD_HOLDINGS'} <= {o['source'] for o in rows}
             and all(o['receivedAt'] and o['bodyHash'] for o in rows)
             and depth.get('symbol') == 'XAU_USDT' and 1 <= len(depth.get('bids', [])) <= 20
             and 1 <= len(depth.get('asks', [])) <= 20 and depth.get('responseAt') and depth.get('updatedAt')
@@ -138,10 +138,28 @@ while time.monotonic() < deadline:
         assert len(trades['rows']) == trades['count']
         assert len({r['id'] for r in trades['rows']}) == trades['count']
         assert all(Decimal(o['values']['tonnes']) > 0 for o in rows if o['source'] == 'IAU_HOLDINGS' and 'tonnes' in o['values'])
+        assert len([o for o in rows if o['source'] == 'GLD_HOLDINGS']) >= 2
+        assert all(Decimal(o['values']['tonnes']) > 0 and o['publishedAt'] is None for o in rows if o['source'] == 'GLD_HOLDINGS')
         break
     time.sleep(5)
 else:
-    raise SystemExit('Seven supplemental public sources, provenance or microstructure samples acceptance timed out')
+    raise SystemExit('Eight supplemental public sources, provenance or microstructure samples acceptance timed out')
+expected_health = expected_sources | driver_sources | supplemental_sources
+deadline = time.monotonic() + 120
+while time.monotonic() < deadline:
+    health = snapshot('/api/dashboard?symbol=XAU_USDT').get('sourceReliability') or {}
+    checks = health.get('sources', [])
+    if (health.get('channels') == 31 and {c['id'] for c in checks} == expected_health
+            and health.get('healthy') == 31 and health.get('stale') == 0
+            and all(c['collection']['samples'] >= 1 and c['collection']['lastDurationMillis'] is not None for c in checks)
+            and all(c['collection']['samples'] <= 128 for c in checks)
+            and 'POLL_CADENCE_IS_NOT_PUBLICATION_SLA' in health.get('statisticsScope', '')):
+        assert all(c['arrival']['lagMillis'] is None or c['arrival']['timestampMeaning'] in {'EXACT_PUBLICATION', 'DECLARED_RELEASE_TIME'}
+                   for c in checks if c.get('arrival'))
+        break
+    time.sleep(5)
+else:
+    raise SystemExit('Source collection freshness, bounded latency metrics or public timing semantics not verified')
 client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:

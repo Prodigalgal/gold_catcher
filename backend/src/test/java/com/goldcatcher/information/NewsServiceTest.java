@@ -8,6 +8,17 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void bodyThatArrivesAfterCutoffCannotAppearInFrozenEvidence() throws Exception {
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var news=new NewsService(f.settings,remote,f.store,new EventHub(),f.clock);
+        news.parseRss("FED_PRESS",bytes("<rss><item><title>Decision</title><link>https://www.federalreserve.gov/newsevents/pressreleases/a.htm</link><pubDate>Thu, 08 Oct 2026 00:00:00 GMT</pubDate></item></rss>"));
+        var started=f.clock.instant();var cutoff=started.plusSeconds(2);
+        when(remote.send(any(),anyInt())).thenAnswer(call->{f.clock.advance(8000);return response("<div id='article'><p>The monetary policy committee decided to hold interest rates unchanged at 4.25 percent after assessing economic conditions.</p></div>");});
+        news.enrich(news.news().getFirst());
+        assertThat(news.news().getFirst().contentReceivedAt()).isEqualTo(started.plusSeconds(8));
+        assertThat(news.evidence(cutoff).getFirst().excerpt()).doesNotContain("4.25 percent");
+        assertThat(news.evidence(f.clock.instant()).getFirst().excerpt()).contains("4.25 percent");
+        assertThat(news.freezeEvidence(cutoff,"frozen",4).getFirst().get("bodyHash")).isNull();
+    }
     @Test void bojSchemeChangesDoNotCreateNewKnowledgeOrDuplicateEvents() throws Exception {
         var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
         String xml="<rss><channel><item><guid>http://www.boj.or.jp/en/decision.pdf</guid><title>Policy</title><link>http://www.boj.or.jp/en/decision.pdf</link><description>Unchanged decision</description><pubDate>Thu, 08 Oct 2026 09:00:00 GMT</pubDate></item></channel></rss>";

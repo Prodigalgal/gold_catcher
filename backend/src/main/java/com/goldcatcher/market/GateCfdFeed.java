@@ -166,7 +166,7 @@ public class GateCfdFeed {
         paceKlines();
         var response=http.send(HttpRequest.newBuilder(URI.create(settings.text("GOLD_GATE_HTTP_URL","https://api.gateio.ws/api/v4")+resource))
             .header("Accept","application/json").header("Cache-Control","no-cache").timeout(timeout).GET().build(),1_000_000);
-        if(response.statusCode()!=200)throw new IllegalStateException("GATE_HTTP_"+response.statusCode());
+        if(response.statusCode()!=200)throw com.goldcatcher.network.SourcePolling.failure("GATE_HTTP_",response,clock.instant());
         var body=mapper.readTree(response.body());requireSuccess(body);return body;
     }
     public JsonNode driverObservation(String symbol,boolean history) throws Exception {
