@@ -104,4 +104,22 @@ class EvidenceCompressionTest {
         var pending=(java.util.concurrent.Future<?>)org.springframework.test.util.ReflectionTestUtils.getField(compression,"pending");
         assertThat(pending).isNotNull();pending.get(2,java.util.concurrent.TimeUnit.SECONDS);
     }
+    @Test void failedPartialArticleYieldsToFreshEvidenceAfterProviderCooldown() throws Exception {
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(130));
+        var second=new NewsService.News("b",article.source(),"另一份官方资料",article.excerpt(),article.link(),article.publishedAt(),article.receivedAt(),article.verification(),article.version(),article.contentHash());
+        var shortBody=new NewsService.ArticleBody("b",body.source(),body.link(),"Official rate 4.00. ".repeat(40),body.state(),"short",body.receivedAt(),body.checkedAt(),body.nextPoll(),1,null,false,"feed",null,"HTML");
+        when(news.evidence(any())).thenReturn(List.of(article,second));when(news.bodyForEvidence(eq("b"),any())).thenReturn(shortBody);
+        when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var packet=(Map<?,?>)call.getArgument(2);
+            if(packet.get("title").equals(article.title())&&((Number)packet.get("chunkIndex")).intValue()>0)throw new java.net.http.HttpTimeoutException("test timeout");
+            var output=f.mapper.valueToTree(Map.of("summary","利率4.00，保留原口径。"));
+            return new Any2ApiClient.Answer("mimo/mimo-v2.6-flash","","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
+        });
+        compression.collect();awaitPass();var first=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
+        assertThat(first.state()).isEqualTo("PARTIAL");assertThat(first.nextAttempt()).isEqualTo(f.clock.instant().plusSeconds(300));
+        f.clock.advance(61000);compression.collect();awaitPass();
+        var latest=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
+        assertThat(latest.newsId()).isEqualTo("b");assertThat(latest.state()).isEqualTo("EXTRACTED");
+        assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("retryAt","");
+        verify(ai,times(3)).compress(any(),anyString(),any());
+    }
 }
