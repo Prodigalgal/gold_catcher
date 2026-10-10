@@ -122,4 +122,22 @@ class EvidenceCompressionTest {
         assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("retryAt","");
         verify(ai,times(3)).compress(any(),anyString(),any());
     }
+    @Test void slowSuccessfulChunksDeferTheNextRequestAndMergeWithoutCreatingUpstreamFailures() throws Exception {
+        body=body("Official rate is 4.00 and is not a forecast. ".repeat(200));
+        assertThat(EvidenceCompression.chunks(body.text(),"slow",f.settings.compressionRoute())).hasSize(2);
+        var monotonic=new java.util.concurrent.atomic.AtomicLong();
+        org.springframework.test.util.ReflectionTestUtils.setField(compression,"nanos",(java.util.function.LongSupplier)monotonic::get);
+        var tasks=new ArrayList<String>();when(ai.compress(any(),anyString(),any())).thenAnswer(call->{
+            var packet=(Map<?,?>)call.getArgument(2);tasks.add(String.valueOf(packet.get("task")));
+            var expiry=(Instant)((Map<?,?>)packet.get("evidence")).get("decisionExpiresAt");
+            assertThat(Duration.between(f.clock.instant(),expiry)).isEqualTo(Duration.ofSeconds(75));
+            monotonic.addAndGet(java.util.concurrent.TimeUnit.SECONDS.toNanos(35));f.clock.advance(35000);
+            var output=f.mapper.valueToTree(Map.of("summary","利率4.00，不构成预测。"));
+            return new Any2ApiClient.Answer("mimo/mimo-v2.6-flash","","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,35000);
+        });
+        var first=compression.process(article,body);assertThat(first.state()).isEqualTo("PARTIAL");assertThat(first.processedChunks()).isEqualTo(1);assertThat(first.error()).isNull();
+        var second=compression.process(article,body);assertThat(second.state()).isEqualTo("PARTIAL");assertThat(second.processedChunks()).isEqualTo(2);assertThat(second.error()).isNull();
+        var merged=compression.process(article,body);assertThat(merged.state()).isEqualTo("EXTRACTED");assertThat(merged.error()).isNull();
+        assertThat(tasks).containsExactly("SUMMARIZE","SUMMARIZE","MERGE");verify(ai,times(3)).compress(any(),anyString(),any());
+    }
 }
