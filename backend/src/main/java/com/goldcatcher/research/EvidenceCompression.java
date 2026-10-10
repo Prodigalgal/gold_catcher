@@ -104,7 +104,7 @@ public class EvidenceCompression {
             if(saved==null||!saved.state().equals("VERIFIED")){
                 if(attempted>=maximum||unavailable(passDeadline))break;
                 attempted++;saved=request(chunk.id(),route,Map.of("task","SUMMARIZE","title",article.title(),"chunkIndex",chunk.index(),"totalChunks",chunks.size(),
-                    "evidence",Map.of("decisionExpiresAt",clock.instant().plusSeconds(Math.min(45,route.timeoutSeconds()))),"text",chunk.text()));
+                    "evidence",Map.of("decisionExpiresAt",expires(route,passDeadline)),"text",chunk.text()));
             }
             chunkIds.add(saved.id());if(!saved.state().equals("VERIFIED")){error=saved.error();break;}processed++;summaries.add(saved.summary());
         }
@@ -119,7 +119,7 @@ public class EvidenceCompression {
                     if(saved==null||!saved.state().equals("VERIFIED")){
                         if(unavailable(passDeadline))break merge;
                         saved=request(mergeKey,route,Map.of("task","MERGE","title",article.title(),"summaries",group,
-                            "evidence",Map.of("decisionExpiresAt",clock.instant().plusSeconds(Math.min(45,route.timeoutSeconds())))));
+                            "evidence",Map.of("decisionExpiresAt",expires(route,passDeadline))));
                     }
                     chunkIds.add(saved.id());if(!saved.state().equals("VERIFIED")){error=saved.error();break merge;}next.add(saved.summary());
                 }
@@ -134,6 +134,10 @@ public class EvidenceCompression {
         store.transaction(()->{store.save("compression-result",id,result);store.save("compression-cache",cacheKey,result);return result;});events.changed();return result;
     }
     private boolean unavailable(long deadline){return System.nanoTime()>=deadline||Thread.currentThread().isInterrupted()||researchBusy.getAsBoolean();}
+    private Instant expires(RuntimeSettings.AiRoute route,long passDeadline){
+        long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(passDeadline-System.nanoTime()));
+        return clock.instant().plusMillis(Math.min(Math.min(75,route.timeoutSeconds())*1000L,remaining));
+    }
     private ChunkResult request(String cacheKey,RuntimeSettings.AiRoute route,Map<String,Object> packet){
         Any2ApiClient.Answer answer=null;String requestId=UUID.randomUUID().toString();ChunkResult result;
         try{store.save("compression-input",requestId,packet);answer=ai.compress(route,INSTRUCTION,packet);

@@ -9,6 +9,6 @@
   "byteLimit": 24000,
   "messageLimit": 2,
   "outputReserve": 1000,
-  "timeoutSeconds": 45,
+  "timeoutSeconds": 75,
   "judge": false
 }

@@ -51,6 +51,8 @@ class EvidenceCompressionTest {
             assertThat(chunk.text().codePointCount(0,chunk.text().length())).isLessThanOrEqualTo(5500);assertThat(chunk.text().getBytes(java.nio.charset.StandardCharsets.UTF_8)).hasSizeLessThanOrEqualTo(14000);}
         assertThat(joined.toString()).isEqualTo(text);
         var tasks=new ArrayList<String>();when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var packet=(Map<?,?>)call.getArgument(2);tasks.add(String.valueOf(packet.get("task")));
+            var expires=(Instant)((Map<?,?>)packet.get("evidence")).get("decisionExpiresAt");
+            assertThat(expires).isAfter(f.clock.instant()).isBeforeOrEqualTo(f.clock.instant().plusSeconds(75));
             var output=f.mapper.valueToTree(Map.of("summary",packet.get("task").equals("MERGE")?"全文要点：4.00不变，未来并无无条件保证。":"局部要点：4.00未变，但不保证未来。"));
             return new Any2ApiClient.Answer("mimo/mimo-v2.6-pro","","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);});
         var partial=compression.process(article,body);assertThat(partial.state()).isEqualTo("PARTIAL");assertThat(partial.processedChunks()).isEqualTo(2);assertThat(tasks).doesNotContain("MERGE");
