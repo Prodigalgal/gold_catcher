@@ -43,7 +43,8 @@ export default function CompressionPanel({ data, session }: { data?: Compression
     <p className="gc-live-prose">{data.coverage}</p>
     <p className="gc-small">摘要保留关键事实、条件和不确定性。长文章分块压缩后合并；原文和处理记录可展开查看。</p>
     {data.error && <p className="gc-live-error">{data.error}</p>}
-    {data.retryAt && <p className="gc-small">最早重试：{stamp(data.retryAt)}。当前继续使用原文摘录。</p>}
+    {data.retryAt && <p className="gc-small">连续上游失败 {data.consecutiveFailures ?? 1} 次 · 最早重试：{stamp(data.retryAt)}。未完成摘要的文章继续使用原文摘录。</p>}
+    {data.lastSuccessfulAt && <p className="gc-small">最近一次摘要请求成功：{stamp(data.lastSuccessfulAt)}</p>}
     {data.recent.map(result => <div className="gc-compression-row" key={result.id}><div><b>{result.title}</b><small>{result.source} · {stamp(result.completedAt)} · {names[result.state] ?? result.state} · {result.processedChunks}/{result.totalChunks} 分块</small></div><p className="gc-live-prose">{result.excerpt || '未取得可用摘要，继续使用原文摘录。'}</p><CompressionAudit id={result.id} session={session}/></div>)}
     {!data.recent.length && <p className="gc-small">尚无摘要；当前研究使用原文摘录。</p>}
   </section>;

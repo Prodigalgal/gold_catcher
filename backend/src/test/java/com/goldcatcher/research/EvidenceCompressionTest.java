@@ -78,4 +78,28 @@ class EvidenceCompressionTest {
         compression.collect();verify(ai,times(1)).compress(any(),anyString(),any());
         f.clock.advance(61000);compression.collect();verify(ai,timeout(2000).times(2)).compress(any(),anyString(),any());
     }
+    @Test void timeoutBackoffSurvivesRestartEscalatesAndClearsAfterSuccessfulSummary() throws Exception {
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(20));
+        when(news.evidence(any())).thenReturn(List.of(article));
+        when(ai.compress(any(),anyString(),any())).thenThrow(new java.net.http.HttpTimeoutException("test timeout"));
+        compression.collect();awaitPass();
+        assertThat(compression.status()).containsEntry("consecutiveFailures",1).containsEntry("error","REQUEST_TIMEOUT")
+            .containsEntry("retryAt",f.clock.instant().plusSeconds(60).toString());
+        compression.stop();compression=new EvidenceCompression(f.settings,news,ai,f.store,f.mapper,f.clock,new EventHub());
+        compression.collect();verify(ai,times(1)).compress(any(),anyString(),any());
+        assertThat(compression.status()).containsEntry("consecutiveFailures",1).containsEntry("error","REQUEST_TIMEOUT");
+        // The same failed article keeps its own five-minute retry; the global checkpoint still escalates.
+        f.clock.advance(301000);compression.collect();awaitPass();
+        assertThat(compression.status()).containsEntry("consecutiveFailures",2).containsEntry("retryAt",f.clock.instant().plusSeconds(120).toString());
+        f.clock.advance(301000);reset(ai);answer("{\"summary\":\"利率为4.00%，历史值可能修订，不构成预测。\"}");
+        compression.collect();awaitPass();
+        assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("retryAt","")
+            .containsEntry("error","").containsEntry("lastSuccessfulAt",f.clock.instant());
+        compression.stop();compression=new EvidenceCompression(f.settings,news,ai,f.store,f.mapper,f.clock,new EventHub());
+        assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("lastSuccessfulAt",f.clock.instant());
+    }
+    void awaitPass() throws Exception {
+        var pending=(java.util.concurrent.Future<?>)org.springframework.test.util.ReflectionTestUtils.getField(compression,"pending");
+        assertThat(pending).isNotNull();pending.get(2,java.util.concurrent.TimeUnit.SECONDS);
+    }
 }

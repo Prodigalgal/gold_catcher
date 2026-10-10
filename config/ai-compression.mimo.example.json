@@ -1,7 +1,7 @@
 {
   "id": "compressor-mimo",
   "provider": "mimo",
-  "model": "mimo/mimo-v2.6-pro",
+  "model": "mimo/mimo-v2.6-flash",
   "baseUrl": "https://any2api-direct.mnnu.eu.org/mimo/v1",
   "apiKeyEnv": "ANY2API_MIMO_API_KEY",
   "inputEstimateLimit": 8000,

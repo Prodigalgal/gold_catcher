@@ -28,7 +28,7 @@ public class RuntimeSettings {
     public List<AiRoute> fallbackRoutes(){return parseRoutes(text("GOLD_AI_FALLBACK_ROUTES_JSON","[]"),true);}
     public AiRoute compressionRoute(){
         String configured=text("GOLD_AI_COMPRESSION_ROUTE_JSON","");
-        var route=configured.isBlank()?new AiRoute("compressor-mimo","mimo","mimo/mimo-v2.6-pro",
+        var route=configured.isBlank()?new AiRoute("compressor-mimo","mimo","mimo/mimo-v2.6-flash",
             text("GOLD_AI_MIMO_BASE_URL","https://any2api-direct.mnnu.eu.org/mimo/v1"),"ANY2API_MIMO_API_KEY",
             8000,14000,24000,2,1000,45,false):mapper.readValue(configured,AiRoute.class);
         if(!route.id().equals("compressor-mimo")||!route.provider().equals("mimo")||route.judge())
