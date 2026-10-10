@@ -33,6 +33,11 @@ final class OfficialArticle {
     }
 
     static Extracted extract(String source,byte[] bytes,String link) {
+        if(bytes.length>=4&&bytes[0]=='P'&&bytes[1]=='K'&&link.toLowerCase(Locale.ROOT).endsWith(".xlsx")) {
+            try{return new Extracted(SpreadsheetArticle.extract(bytes),null,null,"XLSX_SOURCE_CELLS");}
+            catch(IllegalStateException failure){throw failure;}
+            catch(Exception failure){throw new IllegalStateException("ARTICLE_XLSX_PARSE_FAILED");}
+        }
         if(bytes.length>=5&&new String(bytes,0,5,StandardCharsets.US_ASCII).equals("%PDF-")) {
             try(var pdf=Loader.loadPDF(bytes)) {
                 if(!pdf.getCurrentAccessPermission().canExtractContent())throw new IllegalStateException("ARTICLE_PDF_EXTRACTION_RESTRICTED");

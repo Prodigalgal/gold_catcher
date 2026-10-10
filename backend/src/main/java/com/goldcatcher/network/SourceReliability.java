@@ -55,8 +55,10 @@ public class SourceReliability {
     public View view(List<Input> inputs){
         Instant now=clock.instant();var sources=inputs.stream().map(input->{
             boolean overdue=input.lastSuccess()!=null&&input.lastSuccess().plusSeconds(Math.max(30,input.intervalSeconds()*3L)).isBefore(now);
-            String state=input.state().equals("DISABLED")?"DISABLED":overdue?"STALE":input.error()!=null?"DEGRADED":input.lastSuccess()==null?"PENDING":"HEALTHY";
-            return new Health(input.id(),input.label(),input.category(),input.url(),state,input.intervalSeconds(),input.lastSuccess(),input.nextPoll(),input.error(),metrics(input.id(),"COLLECTION"),metrics(input.id(),"BODY"),arrivals.get(input.id()));
+            var collection=metrics(input.id(),"COLLECTION");var bodies=metrics(input.id(),"BODY");
+            String error=input.error()!=null?input.error():bodies.consecutiveFailures()>0?"BODY_"+bodies.lastError():null;
+            String state=input.state().equals("DISABLED")?"DISABLED":overdue?"STALE":error!=null?"DEGRADED":input.lastSuccess()==null?"PENDING":"HEALTHY";
+            return new Health(input.id(),input.label(),input.category(),input.url(),state,input.intervalSeconds(),input.lastSuccess(),input.nextPoll(),error,collection,bodies,arrivals.get(input.id()));
         }).sorted(Comparator.comparingInt((Health h)->switch(h.state()){case "STALE"->0;case "DEGRADED"->1;case "PENDING"->2;default->3;}).thenComparing(Health::id)).toList();
         return new View(now,startedAt,sources.size(),count(sources,"HEALTHY"),count(sources,"DEGRADED"),count(sources,"STALE"),count(sources,"PENDING"),sources,
             "CURRENT_PROCESS; LAST_128_COMPLETED_CHECKS_PER_SOURCE_AND_STAGE; P95_INCLUDES_FAILURES; POLL_CADENCE_IS_NOT_PUBLICATION_SLA");

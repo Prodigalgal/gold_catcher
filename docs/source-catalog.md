@@ -20,9 +20,9 @@
 | TREASURY_AUCTIONS | [Fiscal Data 拍卖数据](https://fiscaldata.treasury.gov/datasets/treasury-securities-auctions-data/)，通常5分钟；常见截止窗口每15秒 | 公告、竞争性投标截止、发行额、中标收益率、投标倍数；截止不等于公布，未来拍卖不含提前取得的结果 |
 | IAU_HOLDINGS | [iShares 发行方](https://www.ishares.com/us/products/239561/ishares-gold-trust-fund)，每小时 | 金衡盎司、公吨、份额、净资产，按各字段as-of分组；日频持仓不是盘中资金流，不伪造首发时刻 |
 | GLD_HOLDINGS | [SPDR GLD 官方报表](https://www.spdrgoldshares.com/usa/gld/) 的 historical-archive XLSX，每小时 | 严格核验工作表、字段、统计日和正数；取最近两个可用日的黄金持仓、每份额含金量和净资产，保存原数值/哈希/首次知识时刻；不是盘中申赎流，精确首发时刻未知 |
-| GATE_DEPTH / GATE_TRADES | [Gate 官方 Futures REST](https://www.gate.com/docs/developers/apiv4/en/futures/)，每2秒 | 20档快照与最近最多100条成交；张数用quanto_multiplier换算XAU，Java计算失衡、样本量和VWAP。连续全量覆盖/主动成交方向未验证，CFD不共享此数据 |
+| GATE_DEPTH / GATE_TRADES | [Gate 官方 Futures REST](https://www.gate.com/docs/developers/apiv4/en/futures/)，每2秒 | 20档快照与最近最多100条成交；张数用quanto_multiplier换算XAU，Java计算失衡、样本量和VWAP。另有100档增量WS序号核对与原始事件归档；接收范围不代表完整历史/主动成交方向，CFD不共享此数据 |
 | BOE_NEWS / BOE_SPEECH | [英国央行 RSS](https://www.bankofengland.co.uk/rss)，每30秒 | 新闻与讲话原文；单独保留来源发布时间、正文和收到时刻 |
-| BOJ_NEWS | [日本央行官方 RSS](https://www.boj.or.jp/en/rss/whatsnew.xml)，每30秒 | 发布目录与可提取HTML/PDF；Feed时刻未独立核实为首发，表格和完整政策日历仍有缺口 |
+| BOJ_NEWS | [日本央行官方 RSS](https://www.boj.or.jp/en/rss/whatsnew.xml)，每30秒 | 发布目录与HTML/PDF/XLSX源单元格；Feed时刻未独立核实为首发，完整政策日历仍有缺口 |
 | EIA_PRESS / EIA_ENERGY / EIA_NEW | [EIA 官方 RSS](https://www.eia.gov/tools/rssfeeds/)，每30秒 | 新闻稿、能源摘要与产品更新；EST按来源字面固定偏移解析，不补缺失年份；NEW只收摘要/报告链接，不把入口页当新闻全文。结构化库存/油价未完成 |
 
 页面“信息集合 → 补充数据”提供8类实际覆盖清单。仍未完成：盘中美国利率、利率期货/FedWatch/期权、商业快讯、已核实一致预期、连续微观行情、全球ETF/央行储备/库存/亚洲市场、私营调查与地区央行、能源/外交/平台公告/相关资产的剩余通道。具体机构按下表逐条登记，未实现的目标不计入成功通道数。
@@ -58,7 +58,7 @@
 | --- | --- | --- | --- | --- |
 | M01 P0 | Gate XAU_USDT：[官方 Futures WebSocket](https://www.gate.com/docs/developers/futures/ws/en/) 的 futures.book_ticker 与 futures.tickers | 公共 WebSocket，运行已接入 | 连续接收，重连首报价不参与开仓 | 买卖一、可见合约张数、标记价格；Java 按 quanto_multiplier 转成基础 XAU 数量，不能将张数直接当盎司 |
 | M02 P0 | Gate 永续规格、K 线、资金费和风险档：[官方 REST](https://www.gate.com/docs/developers/apiv4/en/futures/) | 公共 REST，运行已接入 | 规格、六周期 K 线及资金费每60秒；时间校准每180秒 | 公布的 Taker 费率用于保守模拟，个人费率仍未验证；资金费使用历史结算记录与边界附近标记价格 |
-| M03 P0 | Gate XAUUSD CFD：[官方 CFD API](https://www.gate.com/docs/developers/apiv4/en/cfd/) | tickers、klines、symbols 公开；detail 与 commissions 需要只读 Key | 买卖报价每秒；K 线每60秒，请求间隔至少300ms，失败退避 | 不需要 MT5；报价没有 tick 时间或可见数量，当前仅形势研究，合约规格与佣金未核实前不模拟成交 |
+| M03 P0 | Gate XAUUSD CFD：[官方 CFD API](https://www.gate.com/docs/developers/apiv4/en/cfd/) | tickers、klines、symbols 公开；detail 与 commissions 需要只读 Key | 买卖报价每秒；K 线每60秒，请求间隔至少300ms，失败退避 | 不需要 MT5；报价没有 tick 时间或可见数量，独立USD手数报价情景账本；合约规格和佣金由只读签名接口核实，swap类型/结算时刻与真实执行仍未知 |
 | M04 P0 通道候选 | [CME 实时期货与期权数据 API](https://www.cmegroup.com/market-data/real-time-futures-and-options-data-api.html)：黄金及相关利率、股指、能源合约 | 商业授权的 WebSocket JSON；接口文档 | 连续接收 | 黄金参考、跨市场反应和利率期货；文档服务含成交、最优报价和日统计，不等同于全深度。合约到期和换月分别处理 |
 | M05 P0 通道候选 | [ICE USDX](https://www.ice.com/forex/usdx)：美元指数及美元指数期货 | ICE 或授权供应商行情，商业通道待确定 | 优先实时流；延迟数据明确标记 | 指数与期货分别记录；不能把单一 EURUSD、广义美元日频指数或其他平台合成值标成 ICE USDX |
 | M06 P1 | [TraderMade 外汇流](https://www.tradermade.com/docs/streaming-data-api)：EURUSD、USDJPY 等关联汇率 | WebSocket JSON、API key、按方案授权；接口文档 | 连续接收 | 外汇联动和必要换算；所选方案品种与 Bid/Ask 需验证，不能根据通用文档认定已覆盖所有贵金属 |

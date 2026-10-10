@@ -23,6 +23,8 @@ public final class TestSupport {
     public TestSupport() {
         var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","");
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V1__durable_runtime.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V2__market_archive.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V3__account_samples.sql")).execute(ds);
         store=new DocumentStore(new JdbcTemplate(ds),mapper,new TransactionTemplate(new DataSourceTransactionManager(ds)),clock);
     }
 }

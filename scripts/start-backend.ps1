@@ -12,6 +12,10 @@ foreach ($goldFile in $KeyFile) {
 }
 if (!$RoutesFile) { $RoutesFile = Join-Path $goldRoot 'config/ai-routes.balanced.example.json' }
 $env:GOLD_AI_ROUTES_JSON = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $RoutesFile).Path)
+if (!$env:GOLD_AI_SHORT_ROUTES_JSON) { $env:GOLD_AI_SHORT_ROUTES_JSON = [IO.File]::ReadAllText((Join-Path $goldRoot 'config/ai-routes.fast.example.json')) }
+if (!$env:GOLD_AI_LONG_ROUTES_JSON) { $env:GOLD_AI_LONG_ROUTES_JSON = [IO.File]::ReadAllText((Join-Path $goldRoot 'config/ai-routes.deep.example.json')) }
+if (!$env:GOLD_AI_FALLBACK_ROUTES_JSON) { $env:GOLD_AI_FALLBACK_ROUTES_JSON = [IO.File]::ReadAllText((Join-Path $goldRoot 'config/ai-routes.fallback.example.json')) }
+if (!$env:GOLD_AI_COMPRESSION_ROUTE_JSON) { $env:GOLD_AI_COMPRESSION_ROUTE_JSON = [IO.File]::ReadAllText((Join-Path $goldRoot 'config/ai-compression.mimo.example.json')) }
 $goldData = Join-Path $goldRoot 'data'
 New-Item -ItemType Directory -Path $goldData -Force | Out-Null
 if (!$env:GOLD_AUTH_USERNAME -or !$env:GOLD_AUTH_PASSWORD) {
@@ -32,6 +36,6 @@ if (!$env:GOLD_DB_URL) { $env:GOLD_DB_URL = 'jdbc:h2:file:' + ($goldData -replac
 Push-Location (Join-Path $goldRoot 'backend')
 try {
     if (!$NoBuild) { & .\gradlew.bat bootJar; if ($LASTEXITCODE -ne 0) { throw 'Backend build failed.' } }
-    & java -jar build/libs/gold-catcher-server-0.3.0.jar
+    & java -jar build/libs/gold-catcher-server-0.4.0.jar
     if ($LASTEXITCODE -ne 0) { throw 'Backend process failed.' }
 } finally { Pop-Location }

@@ -13,6 +13,13 @@ class PromotionContractTest(unittest.TestCase):
         self.root = Path(self.temp.name) / "gitops"
         self.target = self.root / "gold-catcher/oracle"
         self.target.mkdir(parents=True)
+        base = self.root / "gold-catcher/base"
+        base.mkdir()
+        (base / "configmap.yaml").write_text(yaml.safe_dump({"kind":"ConfigMap", "metadata":{"name":"gold-catcher-config"},
+            "data":{"GOLD_RESEARCH_AUTOMATIC":"false", "KEEP":"preserved"}}), encoding="utf-8")
+        (base / "deployments.yaml").write_text(yaml.safe_dump_all([{"kind":"Deployment", "metadata":{"name":"gold-catcher-server"},
+            "spec":{"replicas":1, "template":{"spec":{"nodeSelector":{"custom":"keep"}, "containers":[{"name":"server", "image":"old", "resources":{"requests":{"memory":"256Mi"}}}]}}}},
+            {"kind":"Deployment", "metadata":{"name":"gold-catcher-web"}, "spec":{"replicas":1, "sentinel":"unchanged"}}]), encoding="utf-8")
         self.inputs = Path(self.temp.name) / "inputs"
         self.inputs.mkdir()
         self.commit = "a" * 40
@@ -45,3 +52,25 @@ class PromotionContractTest(unittest.TestCase):
                 promote(self.root, self.inputs, self.commit)
             self.assertEqual(before, self.file.read_bytes())
             self.assertFalse((self.target / "release.json").exists())
+
+    def test_runtime_defaults_are_promoted_without_deactivating_workloads_or_changing_placement(self):
+        promote(self.root, self.inputs, self.commit)
+        base = self.root / "gold-catcher/base"
+        config = yaml.safe_load((base / "configmap.yaml").read_text())["data"]
+        self.assertEqual(config["GOLD_COMPRESSION_ENABLED"], "true")
+        self.assertEqual(config["GOLD_MARKET_ARCHIVE_RETENTION_DAYS"], "3")
+        self.assertEqual(config["GOLD_RESEARCH_AUTOMATIC"], "false")
+        self.assertEqual(config["KEEP"], "preserved")
+        server, web = yaml.safe_load_all((base / "deployments.yaml").read_text())
+        self.assertEqual(server["spec"]["replicas"], 1)
+        self.assertEqual(server["spec"]["template"]["spec"]["nodeSelector"], {"custom":"keep"})
+        self.assertEqual(server["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"], "1Gi")
+        self.assertEqual(web["spec"], {"replicas":1, "sentinel":"unchanged"})
+
+    def test_unexpected_runtime_target_leaves_images_and_release_unchanged(self):
+        before = self.file.read_bytes()
+        (self.root / "gold-catcher/base/configmap.yaml").write_text("kind: Secret\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            promote(self.root, self.inputs, self.commit)
+        self.assertEqual(before, self.file.read_bytes())
+        self.assertFalse((self.target / "release.json").exists())

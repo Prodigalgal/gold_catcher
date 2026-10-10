@@ -32,6 +32,10 @@ public class GateCfdFeed {
     private int failures;
     private long lastKlineRequest;
     private long nextRulesAttempt;
+    private final List<java.util.function.Consumer<Quote>> consumers=new java.util.concurrent.CopyOnWriteArrayList<>();
+    public void onQuote(java.util.function.Consumer<Quote> consumer){consumers.add(consumer);}
+    public JsonNode rules(){return cfdRules;}
+    public Instant rulesReceivedAt(){return rulesReceivedAt;}
     public GateCfdFeed(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,IndicatorEngine engine,
         DocumentStore store,EventHub events,Clock clock) {
         this.settings=settings;this.http=http;this.mapper=mapper;this.engine=engine;this.store=store;this.events=events;this.clock=clock;
@@ -43,13 +47,16 @@ public class GateCfdFeed {
         var presented=new LinkedHashMap<String,Indicators>();calculated.forEach((frame,indicator)->presented.put(frame,engine.present(indicator,clock.instant(),state.equals("MARKET_CLOSED"))));
         return new Snapshot(PRODUCT,state,quote,null,Map.copyOf(presented),candles.getOrDefault("5",List.of()),clock.instant(),quoteError);
     }
+    public List<Candle> candles(String frame){return candles.getOrDefault(frame,List.of());}
     public Map<String,Object> provenance() {
         Map<String,Object> info=new LinkedHashMap<>();
         info.put("venue","GATE");info.put("nativeSymbol","XAUUSD");info.put("transport","REST_POLL");info.put("pollSeconds",1);
         info.put("quoteTimestampMeaning","SERVER_RESPONSE_TIME; last quote tick time is not supplied");
-        info.put("depthStatus","NOT_PROVIDED");info.put("rulesState",ruleState);info.put("simulationReady",false);
+        boolean current=rulesReceivedAt!=null&&!rulesReceivedAt.isBefore(clock.instant().minusSeconds(7200));
+        info.put("depthStatus","NOT_PROVIDED");info.put("rulesState",current?ruleState:cfdRules==null?ruleState:"RULES_STALE");info.put("simulationReady",current&&com.goldcatcher.simulation.CfdRules.available(cfdRules));
         info.put("rulesError",ruleError);info.put("rulesReceivedAt",rulesReceivedAt);info.put("cfdRules",cfdRules);
-        info.put("simulationPending","CFD execution semantics and swap type/time conventions still require verification; authenticated product data alone does not establish these.");
+        info.put("simulationAssumptions","QUOTE_OBSERVATION_ONLY; NO_VISIBLE_SIZE_OR_TICK_TIME; COMMISSION_EACH_FILL_SIDE; UNVERIFIED_SWAP_REMAINS_UNKNOWN");
+        info.put("marginRuleReference",com.goldcatcher.simulation.CfdRules.MARGIN_REFERENCE);
         info.put("marketStatus",marketStatus);info.put("lastQuoteSuccess",lastQuoteSuccess);info.put("nextPoll",nextPoll);
         info.put("lastHistorySuccess",lastHistorySuccess);info.put("historyError",historyError);
         info.put("historyState",calculated.size()==6&&calculated.values().stream().allMatch(i->i.state().equals("READY"))?"READY":"WARMING_UP");
@@ -59,7 +66,7 @@ public class GateCfdFeed {
     public Map<String,String> costConfiguration() {
         return Map.of("takerFeeRate","NOT_APPLICABLE","feePerLot",commissionPerLot==null?"UNKNOWN":commissionPerLot.toPlainString(),
             "source",commissionPerLot==null?"PRODUCT_SPECIFIC_COSTS_REQUIRED":"GATE_AUTHENTICATED_COMMISSION_PER_LOT",
-            "reference","https://www.gate.com/docs/developers/apiv4/en/cfd/","feeUnit","USD_PER_LOT","swapStatus","CONVENTION_UNVERIFIED");
+            "reference",com.goldcatcher.simulation.CfdRules.COST_REFERENCE,"feeUnit","USD_PER_LOT","swapStatus",settings.text("GOLD_CFD_SWAP_MODE","UNVERIFIED"));
     }
     @Scheduled(fixedDelay=10000,initialDelay=3500)
     void refreshAuthenticatedRules() {
@@ -112,6 +119,7 @@ public class GateCfdFeed {
             Quote next=parseQuote(body,clock.instant());
             marketStatus=body.path("data").path("status").asText("unknown");quote=next;
             lastQuoteSuccess=clock.instant();quoteError=null;failures=0;nextPoll=clock.instant();events.changed();
+            consumers.forEach(consumer->consumer.accept(next));
         }catch(Exception failure){quoteError=safe(failure);failures=Math.min(6,failures+1);nextPoll=clock.instant().plusSeconds(1L<<failures);events.changed();}
     }
     @Scheduled(fixedDelay=60000,initialDelay=2200)

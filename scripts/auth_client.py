@@ -5,7 +5,7 @@ import json
 import time
 import urllib.request
 
-USER_AGENT = 'GoldCatcher-release-check/0.3'
+USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0'
 
 
 class SessionClient:

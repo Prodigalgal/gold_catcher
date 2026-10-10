@@ -58,6 +58,11 @@ if api.get("sourceCommit") != commit or api.get("mode") != "INTERNAL_SIMULATION_
     raise SystemExit("API source commit/mode/venue/authentication mismatch")
 if set(api.get('products', [])) != {'XAU_USDT', 'GATE:XAUUSD'}:
     raise SystemExit('unexpected active products')
+expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION', 'FOUR_STAGE_DIVERSE_RESEARCH',
+                     'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
+                     'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT'}
+if api.get('version') != '0.4.0' or not expected_features <= set(api.get('features', [])):
+    raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     perpetual = snapshot('/api/dashboard?symbol=XAU_USDT')
@@ -72,6 +77,37 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Gate data acceptance timed out')
+if (cfd['account']['symbol'] != 'GATE:XAUUSD' or cfd['account']['currency'] != 'USD'
+        or cfd['account']['balance'] is None or not cfd['account']['costStatus'].startswith('CFD_QUOTE_SCENARIO;')
+        or 'SWAP_' not in cfd['account']['costStatus']):
+    raise SystemExit('separate CFD ledger, units or unknown-cost scope mismatch')
+compression = perpetual.get('compression') or {}
+if compression.get('provider') != 'mimo' or compression.get('voting') is not False:
+    raise SystemExit('MIMO preprocessing role mismatch')
+if not any(model['routeId'] == 'compressor-mimo' and model['provider'] == 'mimo'
+           and model['credentialConfigured'] for model in perpetual['models']):
+    raise SystemExit('MIMO preprocessing route is not credential-configured')
+deadline = time.monotonic() + 120
+while time.monotonic() < deadline:
+    runtime = snapshot('/api/dashboard?symbol=XAU_USDT')
+    journal = runtime.get('marketArchive') or {}
+    channels = {row['channel'] for row in journal.get('channels', [])}
+    if (journal.get('state') == 'RECORDING' and runtime.get('liveDepth', {}).get('state') == 'SEQUENCED'
+            and {'CONNECTION_EPOCH', 'DEPTH_REST_BASE', 'futures.order_book_update'} <= channels):
+        page = snapshot('/api/market/archive?symbol=XAU_USDT&after=0&limit=3')
+        assert page['frames'] and page['nextCursor'] == page['frames'][-1]['sequence']
+        assert all(row['receivedAt'] and 'payload' in row for row in page['frames'])
+        break
+    time.sleep(5)
+else:
+    raise SystemExit('sequenced depth or durable archive cursor acceptance timed out')
+for product in ('XAU_USDT', 'GATE:XAUUSD'):
+    sample = snapshot('/api/market/candles?symbol=' + product + '&frame=5')
+    assert sample['symbol'] == product and sample['frame'] == '5' and sample['candles']
+    with client.opener.open(urllib.request.Request(client.base + '/api/simulation/export?symbol=' + product,
+                                                   headers={'User-Agent': USER_AGENT}), timeout=20) as response:
+        csv_text = response.read(1_000_000).decode('utf-8-sig')
+    assert csv_text.startswith('id,symbol,quantityUnit,') and 'costIncomplete,evidenceLevel' in csv_text
 expected_sources = {'FED_PRESS', 'FED_SPEECH', 'ECB_PRESS', 'BEA_NEWS', 'BEA_CALENDAR',
                     'BLS_CPI', 'BLS_EMPLOYMENT', 'BLS_PPI', 'BLS_JOLTS', 'BLS_CALENDAR', 'FOMC_CALENDAR',
                     'BOE_NEWS', 'BOE_SPEECH', 'BOJ_NEWS', 'EIA_PRESS', 'EIA_ENERGY', 'EIA_NEW'}
@@ -91,6 +127,11 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Official feed, article body or calendar acceptance timed out')
+boj_xlsx = [item for item in sources['news'] if item['source'] == 'BOJ_NEWS' and '.xlsx' in item['link'].lower()]
+for item in boj_xlsx[:12]:
+    body = snapshot('/api/news/' + item['id']).get('body') or {}
+    if body.get('format') != 'XLSX_SOURCE_CELLS' or body.get('error') or not body.get('text'):
+        raise SystemExit('BoJ source-cell XLSX body acceptance failed')
 driver_sources = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'TREASURY_NOMINAL', 'TREASURY_REAL', 'FF_EXPECTATIONS'}
 driver_ids = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'US_NOMINAL_2Y', 'US_NOMINAL_10Y', 'US_REAL_10Y'}
 deadline = time.monotonic() + 180
@@ -160,8 +201,12 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Source collection freshness, bounded latency metrics or public timing semantics not verified')
+assert 'sampledMaximumDrawdown' in runtime['review'] and runtime['scheduling'].get('config')
+if runtime['researchHistory']:
+    run_id = runtime['researchHistory'][0]['id']
+    assert snapshot('/api/research/' + run_id + '/export')['id'] == run_id
 client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:
     raise SystemExit("web source commit mismatch")
-print("Argo digests, PoW session, Gate feeds, seventeen official channels, six driver/calendar channels, seven supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified.")
+print("Argo digests, PoW session, Gate feeds, separate CFD ledger, MIMO role, sequenced depth/archive, exports, seventeen official channels, six driver/calendar channels, eight supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified. Live research completion is a separate acceptance.")

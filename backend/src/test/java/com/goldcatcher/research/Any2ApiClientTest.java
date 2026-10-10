@@ -5,6 +5,47 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
+    @SuppressWarnings("unchecked") private java.net.http.HttpResponse<byte[]> response(int status,String body){var result=(java.net.http.HttpResponse<byte[]>)mock(java.net.http.HttpResponse.class);when(result.statusCode()).thenReturn(status);when(result.body()).thenReturn(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));return result;}
+    @Test void availableFallbacksAreFixedDistinctModelsAndEmulatedToolsUseJsonText() throws Exception {
+        var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
+        when(remote.send(any(),eq(500_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);return response(200,"{\"available\":"+!request.uri().getPath().contains("offline")+",\"capabilities\":{\"structured_output\":{\"supported\":true},\"tools\":{\"function_calling\":true,\"strict\":true,\"bridge\":\"emulated_function_bridge\"},\"supported_parameters\":{\"chat_completions\":[\"response_format\"]}}}");});
+        var first=new AiRoute("a","a","a/offline","https://localhost/a/v1","TEST",10000,16000,30000,2,2200,2,false);
+        var second=new AiRoute("b","b","b/second","https://localhost/b/v1","TEST",10000,16000,30000,2,2200,2,false);
+        var judge=new AiRoute("j","j","j/judge","https://localhost/j/v1","TEST",10000,16000,30000,2,2200,2,true);
+        var fallback=new AiRoute("c","c","c/third","https://localhost/c/v1","TEST",10000,16000,30000,2,2200,2,false);
+        var reservedMimo=new AiRoute("m","mimo","mimo/mimo-v2.6-pro","https://localhost/mimo/v1","TEST",10000,16000,30000,2,2200,2,false);
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        assertThat(client.selectRoutes(java.util.List.of(first,second,judge),java.util.List.of(reservedMimo,fallback))).extracting(AiRoute::id).containsExactly("b","c","j");
+        java.util.List<String> bodies=new java.util.ArrayList<>();
+        when(remote.send(any(),eq(1_000_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);var bytes=new java.io.ByteArrayOutputStream();var publisher=request.bodyPublisher().orElseThrow();
+            publisher.subscribe(new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>(){public void onSubscribe(java.util.concurrent.Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(java.nio.ByteBuffer b){var chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}public void onError(Throwable t){throw new AssertionError(t);}public void onComplete(){}});
+            bodies.add(bytes.toString(java.nio.charset.StandardCharsets.UTF_8));if(bodies.size()==1)return response(503,"{\"error\":{\"code\":\"UPSTREAM_BUSY\"}}");
+            String output="{\"title\":\"等待\",\"analysisSummary\":\"摘要\",\"output\":\"保持等待\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"UNKNOWN\",\"plan\":{\"action\":\"WAIT\"}}";
+            return response(200,f.mapper.writeValueAsString(java.util.Map.of("model",second.model(),"choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));});
+        var answer=client.complete(second,"只返回JSON",java.util.Map.of("evidence",java.util.Map.of("decisionExpiresAt",f.clock.instant().plusSeconds(30))));
+        assertThat(answer.attempts()).hasSize(2);assertThat(answer.attempts().getFirst().httpStatus()).isEqualTo(503);
+        for(var body:bodies){assertThat(f.mapper.readTree(body).has("tools")).isFalse();assertThat(f.mapper.readTree(body).path("response_format").path("type").asText()).isEqualTo("json_object");}
+    }
+    @Test void mimoPreprocessingChunksHaveIndependentBudgetsAndCannotSubmitTradingPlans() throws Exception {
+        var f=new TestSupport();f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");var remote=mock(RemoteHttp.class);
+        var catalog=response(200,"{\"available\":true,\"capabilities\":{\"provider_options\":{\"thinking\":\"boolean\",\"web_search_status\":\"string\"},\"parameter_adaptation\":{\"search\":{\"mode\":\"mapped\"}},\"supported_parameters\":{\"chat_completions\":[\"response_format\"]}}}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
+        String output="{\"summary\":\"价格4.00未变，不保证未来增长。\"}";
+        var selectedResponse=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));when(remote.send(any(),eq(1_000_000))).thenReturn(selectedResponse);
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var route=f.settings.compressionRoute();
+        String text=("价格4.00未变化，不保证未来增长，发布时间仅为官方声明。😄 ").repeat(1200);
+        var chunks=EvidenceCompression.chunks(text,"large",route);assertThat(chunks).hasSizeGreaterThan(2);
+        for(var chunk:chunks){var packet=java.util.Map.of("task","SUMMARIZE","title","官方资料","chunkIndex",chunk.index(),"totalChunks",chunks.size(),"evidence",java.util.Map.of("decisionExpiresAt",f.clock.instant().plusSeconds(45)),"text",chunk.text());
+            var answer=client.compress(route,EvidenceCompression.INSTRUCTION,packet);assertThat(answer.budget().utilizationPercent()).isLessThanOrEqualTo(90);
+            assertThat(answer.output().has("plan")).isFalse();assertThat(answer.output().path("summary").asText()).isEqualTo("价格4.00未变，不保证未来增长。");}
+        var captured=org.mockito.ArgumentCaptor.forClass(java.net.http.HttpRequest.class);verify(remote,atLeastOnce()).send(captured.capture(),eq(1_000_000));
+        for(var request:captured.getAllValues()){
+            var bytes=new java.io.ByteArrayOutputStream();request.bodyPublisher().orElseThrow().subscribe(new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>(){public void onSubscribe(java.util.concurrent.Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(java.nio.ByteBuffer b){var chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}public void onError(Throwable t){throw new AssertionError(t);}public void onComplete(){}});
+            var wire=f.mapper.readTree(bytes.toString(java.nio.charset.StandardCharsets.UTF_8));assertThat(wire.has("response_format")).isFalse();assertThat(wire.path("provider_options").size()).isEqualTo(1);
+            assertThat(wire.path("provider_options").path("mimo").path("thinking").asBoolean(true)).isFalse();assertThat(wire.path("provider_options").path("mimo").path("web_search_status").asText()).isEqualTo("disabled");}
+        String invalid="{\"summary\":\"价格4.00未变\",\"shortDirection\":\"BULLISH\"}";
+        var invalidResponse=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",invalid))))));when(remote.send(any(),eq(1_000_000))).thenReturn(invalidResponse);
+        assertThatThrownBy(()->client.compress(route,EvidenceCompression.INSTRUCTION,java.util.Map.of("text",chunks.getFirst().text()))).hasMessage("INVALID_COMPRESSION_OUTPUT");
+    }
     @Test void historicalEightFieldBudgetRemainsReadableAfterUpgrade() {
         var f=new TestSupport();var budget=f.mapper.readValue("{\"bytes\":1500,\"characters\":500,\"gatewayInputEstimate\":500,\"messages\":2,\"outputReserve\":1000,\"inputHash\":\"previous\",\"limitSource\":\"CONFIG\",\"outputEnforcement\":\"NOT_SUPPORTED\"}",Any2ApiClient.Budget.class);
         assertThat(budget.preparation()).isEqualTo("LEGACY_NOT_RECORDED");assertThat(budget.limits()).isNull();

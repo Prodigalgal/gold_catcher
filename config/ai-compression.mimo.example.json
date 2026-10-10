@@ -1,0 +1,14 @@
+{
+  "id": "compressor-mimo",
+  "provider": "mimo",
+  "model": "mimo/mimo-v2.6-pro",
+  "baseUrl": "https://any2api-direct.mnnu.eu.org/mimo/v1",
+  "apiKeyEnv": "ANY2API_MIMO_API_KEY",
+  "inputEstimateLimit": 8000,
+  "characterLimit": 14000,
+  "byteLimit": 24000,
+  "messageLimit": 2,
+  "outputReserve": 1000,
+  "timeoutSeconds": 45,
+  "judge": false
+}

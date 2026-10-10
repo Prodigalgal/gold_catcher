@@ -90,7 +90,7 @@ final class ContextWindow {
         for(Object message:(List<?>)request.get("messages")) {
             var node=mapper.valueToTree(message);Map<String,Object> copy=new LinkedHashMap<>();
             node.properties().forEach(field->copy.put(field.getKey(),field.getValue()));
-            if(node.path("role").asText().equals("user"))copy.put("content",mapper.writeValueAsString(packet));
+            if(node.path("role").asText().equals("user"))copy.put("content",EvidenceWire.encode(mapper,packet));
             messages.add(copy);
         }
         selected.put("messages",messages);return mapper.writeValueAsString(selected);
