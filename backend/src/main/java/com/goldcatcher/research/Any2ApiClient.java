@@ -38,6 +38,8 @@ public class Any2ApiClient {
     public record Attempt(int number,Instant startedAt,long durationMs,Integer httpStatus,String error) {}
     public record ModelState(String routeId,String provider,String model,boolean credentialConfigured,
         JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError,Budget lastBudget,Instant lastBudgetAt,String catalogError) {}
+    public record RouteCheck(String routeId,String provider,String model,boolean judge,String state,Instant catalogRetrievedAt,Instant retryAt) {}
+    public record RouteSelection(String state,List<AiRoute> routes,List<RouteCheck> checks,String basis) {}
     private record Cached(JsonNode catalog,Instant at) {}
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
     private final Map<String,Cached> catalogs=new ConcurrentHashMap<>();
@@ -55,21 +57,51 @@ public class Any2ApiClient {
         for(var route:settings.allRoutes())if(!settings.secret(route).isBlank())try{catalog(route);}catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));}
     }
     public List<AiRoute> selectRoutes(List<AiRoute> preferred,List<AiRoute> fallback) {
+        var selection=selection(preferred,fallback,true);
+        if(!selection.state().equals("READY"))throw new IllegalArgumentException(selection.state());
+        return selection.routes();
+    }
+    /** Read-only readiness: no catalog refresh, inference, semaphore acquisition or failure-state mutation. */
+    public Map<String,Object> routeReadiness(String horizon) {
+        var preferred=settings.routes(horizon);var selection=selection(preferred,settings.fallbackRoutes(),false);
+        String error=ResearchService.configuredRouteError(preferred);
+        return Map.of("horizon",horizon,"state",error==null?selection.state():error,"basis",selection.basis(),"checks",selection.checks(),
+            "selected",selection.routes().stream().map(route->Map.of("routeId",route.id(),"provider",route.provider(),"model",route.model(),"judge",route.judge())).toList());
+    }
+    private RouteSelection selection(List<AiRoute> preferred,List<AiRoute> fallback,boolean refresh) {
         var pool=new ArrayList<>(preferred);for(var route:fallback)if(pool.stream().noneMatch(p->p.id().equals(route.id())))pool.add(route);
+        var checks=new ArrayList<RouteCheck>();var ready=new HashSet<String>();
+        for(var route:pool) {
+            String state="READY";Instant retryAt=null;var cached=catalogs.get(route.id());
+            if(!settings.aiProviderEnabled(route))state="PROVIDER_DISABLED";
+            else if(Boolean.parseBoolean(settings.text("GOLD_COMPRESSION_ENABLED","true"))&&route.provider().equals("mimo"))state="RESERVED_FOR_COMPRESSION";
+            else if(settings.secret(route).isBlank())state="CREDENTIAL_MISSING";
+            else {
+                var failed=failedAt.get(modelKey(route));
+                if(failed!=null&&failed.plusSeconds(settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600)).isAfter(clock.instant())) {
+                    state="FAILURE_COOLDOWN";retryAt=failed.plusSeconds(settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600));
+                } else if(refresh) {
+                    try {if(!catalog(route).path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";cached=catalogs.get(route.id());}
+                    catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));state="CATALOG_QUERY_FAILED";}
+                } else if(cached==null)state=catalogErrors.containsKey(route.id())?"CATALOG_QUERY_FAILED":"CATALOG_NOT_CHECKED";
+                else if(!cached.catalog().path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";
+                else if(!cached.at().isAfter(clock.instant().minusSeconds(300)))state="CATALOG_STALE";
+            }
+            checks.add(new RouteCheck(route.id(),route.provider(),route.model(),route.judge(),state,cached==null?null:cached.at(),retryAt));
+            if(state.equals("READY"))ready.add(route.id());
+        }
         var selected=new ArrayList<AiRoute>();var identities=new HashSet<String>();
-        int desired=(int)preferred.stream().filter(r->!r.judge()).count();
+        int desired=(int)preferred.stream().filter(settings::aiProviderEnabled).filter(r->!r.judge()).count();
         for(boolean judge:List.of(true,false))for(var route:pool) {
-            if(Boolean.parseBoolean(settings.text("GOLD_COMPRESSION_ENABLED","true"))&&route.provider().equals("mimo"))continue;
+            if(!ready.contains(route.id()))continue;
             if(route.judge()!=judge||selected.stream().filter(r->r.judge()==judge).count()>=(judge?1:desired))continue;
             if(identities.contains(ResearchService.modelIdentity(route)))continue;
-            var failed=failedAt.get(modelKey(route));if(failed!=null&&failed.plusSeconds(settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600)).isAfter(clock.instant()))continue;
-            try{if(!catalog(route).path("available").asBoolean(false))continue;}
-            catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));continue;}
             selected.add(route);identities.add(ResearchService.modelIdentity(route));
         }
-        if(selected.stream().noneMatch(AiRoute::judge))throw new IllegalArgumentException("NO_AVAILABLE_INDEPENDENT_JUDGE");
-        if(selected.stream().filter(r->!r.judge()).count()<2)throw new IllegalArgumentException("NO_AVAILABLE_MODEL_QUORUM");
-        return selected.stream().sorted(Comparator.comparing(AiRoute::judge)).toList();
+        String state=selected.stream().noneMatch(AiRoute::judge)?"NO_AVAILABLE_INDEPENDENT_JUDGE":
+            selected.stream().filter(r->!r.judge()).count()<2?"NO_AVAILABLE_MODEL_QUORUM":"READY";
+        return new RouteSelection(state,selected.stream().sorted(Comparator.comparing(AiRoute::judge)).toList(),List.copyOf(checks),
+            "CREDENTIALS_CATALOG_AND_FAILURE_COOLDOWN_ONLY; NOT_INFERENCE_OR_CONTEXT_ACCEPTANCE");
     }
     public Answer complete(AiRoute route,String instruction,Object packet) throws Exception {
         return complete(route,instruction,packet,false);
@@ -79,6 +111,7 @@ public class Any2ApiClient {
         return complete(route,instruction,packet,true);
     }
     private Answer complete(AiRoute route,String instruction,Object packet,boolean compression) throws Exception {
+        if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         long started=System.nanoTime();
         Semaphore lease=leases.computeIfAbsent(route.provider(),key->new Semaphore(1));
         if(!(compression?lease.tryAcquire():lease.tryAcquire(3,java.util.concurrent.TimeUnit.SECONDS)))throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
@@ -168,6 +201,7 @@ public class Any2ApiClient {
         EvidenceCompression.validate(output);
     }
     private JsonNode catalog(AiRoute route) throws Exception {
+        if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         if(settings.secret(route).isBlank())throw new IllegalStateException("CREDENTIAL_NOT_CONFIGURED");
         var cached=catalogs.get(route.id());
         if(cached!=null&&cached.at().isAfter(clock.instant().minusSeconds(cached.catalog().path("available").asBoolean(false)?300:60)))return cached.catalog();

@@ -19,6 +19,7 @@ class ResearchServiceTest {
         var routes=new ArrayList<RuntimeSettings.AiRoute>();for(String id:List.of("p","q","r","j"))routes.add(new RuntimeSettings.AiRoute(id,id,id+"/"+id+"-model","https://localhost/"+id+"/v1","TEST_KEY",10000,14000,30000,2,1000,2,id.equals("j")));
         f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(routes));f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","1");f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","1");
         when(ai.selectRoutes(anyList(),anyList())).thenAnswer(call->call.getArgument(0));
+        when(ai.routeReadiness(anyString())).thenAnswer(call->Map.of("horizon",call.getArgument(0),"state","READY"));
         var quote=new Quote("XAU_USDT","TEST",1,f.clock.instant(),f.clock.instant(),d("100"),d("101"),d("1"),d("1"),d("100"),d("100"),f.clock.instant(),d("0"),f.clock.instant().plusSeconds(3600),true);
         var rules=new Instrument("XAU_USDT","Trading","USDT",d(".01"),d(".001"),d(".001"),d("1000"),d("1000"),d("1"),d("1"),d("100"),d(".01"),List.of(),f.clock.instant());
         when(market.snapshot("XAU_USDT")).thenReturn(new Snapshot("XAU_USDT","LIVE",quote,rules,Map.of(),List.of(),f.clock.instant(),null));
@@ -93,6 +94,13 @@ class ResearchServiceTest {
         research.configure(config);assertThat(research.scheduling().get("automatic")).isEqualTo(true);
         assertThat(f.store.find("research-scheduling","config",ResearchService.ScheduleConfig.class).orElseThrow().longIntervalSeconds).isEqualTo(600);
         config.symbols=List.of("BYBIT");assertThatThrownBy(()->research.configure(config)).hasMessage("INVALID_RESEARCH_SCHEDULE");
+    }
+    @Test void disabledSchedulerReportsItsStateWithoutStartingOrConsumingModels() throws Exception {
+        assertThat(research.scheduling()).containsEntry("automatic",false).containsEntry("state","DISABLED")
+            .containsEntry("disabledProviders",List.of("qwen"));
+        research.automatic();verify(ai,never()).selectRoutes(anyList(),anyList());
+        verify(ai,never()).complete(any(),anyString(),any());verifyNoInteractions(ledger);
+        assertThat(research.history()).isEmpty();
     }
     private BigDecimal d(String s){return new BigDecimal(s);}
 }

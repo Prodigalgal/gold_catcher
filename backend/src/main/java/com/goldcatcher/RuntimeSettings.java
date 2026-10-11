@@ -17,6 +17,15 @@ public class RuntimeSettings {
     public String text(String key, String fallback) { return environment.getProperty(key, fallback); }
     public int integer(String key, int fallback) { return environment.getProperty(key, Integer.class, fallback); }
     public boolean enabled(String key) { return environment.getProperty(key, Boolean.class, false); }
+    public List<String> disabledAiProviders() {
+        var providers=new java.util.TreeSet<String>();providers.add("qwen");
+        java.util.Arrays.stream(text("GOLD_AI_DISABLED_PROVIDERS","").split(","))
+            .map(value->value.strip().toLowerCase(java.util.Locale.ROOT)).filter(value->!value.isBlank()).forEach(providers::add);
+        return List.copyOf(providers);
+    }
+    public boolean aiProviderEnabled(AiRoute route) {
+        return !disabledAiProviders().contains(route.provider().strip().toLowerCase(java.util.Locale.ROOT));
+    }
     public BigDecimal decimal(String key, String fallback) {
         String value = text(key, fallback);
         return value == null || value.isBlank() ? null : new BigDecimal(value);
@@ -43,7 +52,8 @@ public class RuntimeSettings {
         return parseRoutes(json,false);
     }
     private List<AiRoute> parseRoutes(String json,boolean fallback){
-        List<AiRoute> routes=mapper.readValue(json, new TypeReference<List<AiRoute>>() {});
+        List<AiRoute> configured=mapper.readValue(json, new TypeReference<List<AiRoute>>() {});
+        List<AiRoute> routes=configured.stream().filter(this::aiProviderEnabled).toList();
         if(routes.stream().map(AiRoute::id).distinct().count()!=routes.size())throw new IllegalArgumentException("DUPLICATE_ROUTE_ID");
         if(!fallback&&routes.stream().filter(AiRoute::judge).count()>1)throw new IllegalArgumentException("ONE_JUDGE_REQUIRED");
         return routes;

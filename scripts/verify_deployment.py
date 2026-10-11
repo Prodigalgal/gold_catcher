@@ -62,7 +62,7 @@ expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
                      'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS'}
-if api.get('version') != '0.4.3' or not expected_features <= set(api.get('features', [])):
+if api.get('version') != '0.4.4' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -83,6 +83,19 @@ if (cfd['account']['symbol'] != 'GATE:XAUUSD' or cfd['account']['currency'] != '
         or 'SWAP_' not in cfd['account']['costStatus']):
     raise SystemExit('separate CFD ledger, units or unknown-cost scope mismatch')
 compression = perpetual.get('compression') or {}
+schedule = perpetual.get('scheduling') or {}
+if 'qwen' not in schedule.get('disabledProviders', []) or any(model['provider'].strip().lower() == 'qwen' for model in perpetual['models']):
+    raise SystemExit('withdrawn QWEN provider was not excluded')
+readiness = schedule.get('routeReadiness', [])
+if {row.get('horizon') for row in readiness} != {'SHORT', 'LONG'}:
+    raise SystemExit('research route readiness diagnostics missing')
+for row in readiness:
+    if row.get('basis') != 'CREDENTIALS_CATALOG_AND_FAILURE_COOLDOWN_ONLY; NOT_INFERENCE_OR_CONTEXT_ACCEPTANCE':
+        raise SystemExit('research readiness overstates its evidence')
+    assert all(route['provider'].strip().lower() != 'qwen' for route in row['selected'])
+    identities = [route['model'].strip().lower().split('/', 1)[-1] for route in row['selected']]
+    assert len(identities) == len(set(identities))
+assert schedule.get('state') in {'DISABLED', 'RUNNING', 'MONITORING'}
 if compression.get('provider') != 'mimo' or compression.get('voting') is not False:
     raise SystemExit('MIMO preprocessing role mismatch')
 if not any(model['routeId'] == 'compressor-mimo' and model['provider'] == 'mimo'

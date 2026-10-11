@@ -80,13 +80,11 @@ public class ResearchService {
     public Run latest(String symbol){return history().stream().filter(run->run.symbol.equals(symbol)).findFirst().orElse(null);}
     public Run start(String symbol,String horizon) {
         if(!List.of("SHORT","LONG").contains(horizon))throw new IllegalArgumentException("INVALID_HORIZON");
+        String configurationError=configuredRouteError(settings.routes(horizon));
+        if(configurationError!=null)throw new IllegalArgumentException(configurationError);
         List<AiRoute> routes=settings.routes(horizon),researchers=routes.stream().filter(route->!route.judge()).toList();
         AiRoute judge=routes.stream().filter(AiRoute::judge).findFirst().orElseThrow(()->new IllegalArgumentException("JUDGE_NOT_CONFIGURED"));
-        if(researchers.size()<2||researchers.size()>6)
-            throw new IllegalArgumentException("TWO_DISTINCT_MODELS_REQUIRED");
         var identities=researchers.stream().map(ResearchService::modelIdentity).toList();
-        if(new HashSet<>(identities).size()!=researchers.size())throw new IllegalArgumentException("DUPLICATE_RESEARCH_MODEL");
-        if(identities.contains(modelIdentity(judge)))throw new IllegalArgumentException("INDEPENDENT_JUDGE_MODEL_REQUIRED");
         var snapshot=market.snapshot(symbol);
         boolean analysisOnly=symbol.equals("GATE:XAUUSD")&&horizon.equals("LONG")&&snapshot.state().equals("MARKET_CLOSED");
         if(!analysisOnly&&(!snapshot.state().equals("LIVE")||snapshot.quote()==null))throw new IllegalArgumentException("MARKET_NOT_READY");
@@ -238,6 +236,16 @@ public class ResearchService {
         synchronized(run){if(!run.status.equals("RUNNING"))throw new IllegalArgumentException("RESEARCH_NOT_RUNNING");run.status="CANCELED";run.error="CANCELED_BY_USER";run.completedAt=clock.instant();save(run);}return find(id);}
     private void replace(Run run,Message replacement){for(int i=0;i<run.messages.size();i++)if(run.messages.get(i).id().equals(replacement.id())){run.messages.set(i,replacement);return;}}
     static String modelIdentity(AiRoute route){String value=route.model().strip().toLowerCase(Locale.ROOT);int slash=value.indexOf('/');return slash<0?value:value.substring(slash+1);}
+    static String configuredRouteError(List<AiRoute> routes) {
+        var researchers=routes.stream().filter(route->!route.judge()).toList();
+        var judges=routes.stream().filter(AiRoute::judge).toList();
+        if(judges.isEmpty())return "JUDGE_NOT_CONFIGURED";
+        if(judges.size()>1)return "ONE_JUDGE_REQUIRED";
+        if(researchers.size()<2||researchers.size()>6)return "TWO_DISTINCT_MODELS_REQUIRED";
+        var identities=researchers.stream().map(ResearchService::modelIdentity).toList();
+        if(new HashSet<>(identities).size()!=identities.size())return "DUPLICATE_RESEARCH_MODEL";
+        return identities.contains(modelIdentity(judges.getFirst()))?"INDEPENDENT_JUDGE_MODEL_REQUIRED":null;
+    }
     static boolean inTradingWindow(NewsService.CalendarEvent event,Instant cutoff){
         if(event.scheduledAt()!=null)return !event.scheduledAt().isBefore(cutoff)&&event.scheduledAt().isBefore(cutoff.plusSeconds(172800));
         if(event.scheduledDate()==null)return false;
@@ -264,7 +272,9 @@ public class ResearchService {
         if(config.shortIntervalSeconds<30||config.shortIntervalSeconds>86400||config.longIntervalSeconds<60||config.longIntervalSeconds>172800||config.newsDebounceSeconds<1||config.newsDebounceSeconds>300||config.symbols==null||config.symbols.isEmpty()||config.symbols.size()>2||config.symbols.stream().anyMatch(s->!List.of("XAU_USDT","GATE:XAUUSD").contains(s))||new HashSet<>(config.symbols).size()!=config.symbols.size())throw new IllegalArgumentException("INVALID_RESEARCH_SCHEDULE");
         config.updatedAt=clock.instant();store.save("research-scheduling","config",config);store.event("research-scheduling","CONFIG_CHANGED",config);events.changed();return scheduling();}
     public Map<String,Object> scheduling(){var queued=pendingNews.get();var config=scheduleConfig();return Map.of("automatic",config.automatic,"config",config,"running",running.availablePermits()==0,
-        "lastAutomatic",lastAutomatic,"lastByProductHorizon",Map.copyOf(automaticTimes),"queuedNews",queued==null?"":queued.id(),"error",automaticError==null?"":automaticError);}
+        "lastAutomatic",lastAutomatic,"lastByProductHorizon",Map.copyOf(automaticTimes),"queuedNews",queued==null?"":queued.id(),"error",automaticError==null?"":automaticError,
+        "state",!config.automatic?"DISABLED":running.availablePermits()==0?"RUNNING":"MONITORING",
+        "disabledProviders",settings.disabledAiProviders(),"routeReadiness",List.of(ai.routeReadiness("SHORT"),ai.routeReadiness("LONG")));}
     @PreDestroy void stop(){workers.shutdownNow();}
     @Scheduled(fixedDelay=10000,initialDelay=10000)
     void automatic() {

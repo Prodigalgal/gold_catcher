@@ -6,6 +6,39 @@ import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
     @SuppressWarnings("unchecked") private java.net.http.HttpResponse<byte[]> response(int status,String body){var result=(java.net.http.HttpResponse<byte[]>)mock(java.net.http.HttpResponse.class);when(result.statusCode()).thenReturn(status);when(result.body()).thenReturn(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));return result;}
+    @Test void withdrawnProviderNeverReachesCatalogOrInferenceEvenThroughDirectCalls() {
+        var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
+        var withdrawn=new AiRoute("withdrawn","QWEN","qwen/old","https://localhost/qwen/v1","TEST",10000,16000,30000,2,1000,2,false);
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        assertThatThrownBy(()->client.complete(withdrawn,"instruction",java.util.Map.of())).hasMessage("AI_PROVIDER_DISABLED");
+        assertThatThrownBy(()->client.selectRoutes(java.util.List.of(withdrawn),java.util.List.of())).hasMessage("NO_AVAILABLE_INDEPENDENT_JUDGE");
+        verifyNoInteractions(remote);
+    }
+    @Test void readinessUsesCachedCatalogOnlyAndFallbackJudgeRemainsAnIndependentModel() throws Exception {
+        var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
+        var first=new AiRoute("a","a","a/one","https://localhost/a/v1","TEST",10000,16000,30000,2,1000,2,false);
+        var second=new AiRoute("b","b","b/two","https://localhost/b/v1","TEST",10000,16000,30000,2,1000,2,false);
+        var unavailable=new AiRoute("j","arena","arena/offline","https://localhost/arena/v1","TEST",10000,16000,30000,2,1000,2,true);
+        var sharedResearcher=new AiRoute("d","deepseek","deepseek/default","https://localhost/deepseek/v1","TEST",10000,16000,30000,2,1000,2,false);
+        var backup=new AiRoute("backup","deepseek","deepseek/default","https://localhost/deepseek/v1","TEST",10000,16000,30000,2,1000,2,true);
+        var preferred=java.util.List.of(first,second,sharedResearcher,unavailable);
+        f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(preferred));
+        f.environment.setProperty("GOLD_AI_FALLBACK_ROUTES_JSON",f.mapper.writeValueAsString(java.util.List.of(backup)));
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        assertThat(client.routeReadiness("LONG")).containsEntry("state","NO_AVAILABLE_INDEPENDENT_JUDGE");verifyNoInteractions(remote);
+        when(remote.send(any(),eq(500_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);
+            return response(200,"{\"available\":"+!request.uri().getPath().contains("offline")+"}");});
+        client.warmCatalogs();clearInvocations(remote);
+        var preview=f.mapper.valueToTree(client.routeReadiness("LONG"));
+        assertThat(preview.path("state").asText()).isEqualTo("READY");
+        var selectedIds=new java.util.ArrayList<String>();for(var route:preview.path("selected"))selectedIds.add(route.path("routeId").asText());
+        var checkStates=new java.util.ArrayList<String>();for(var check:preview.path("checks"))checkStates.add(check.path("state").asText());
+        assertThat(selectedIds).containsExactly("a","b","backup");
+        assertThat(checkStates).contains("MODEL_NOT_AVAILABLE");verifyNoInteractions(remote);
+        assertThat(client.selectRoutes(preferred,java.util.List.of(backup))).extracting(AiRoute::id).containsExactly("a","b","backup");
+        verifyNoInteractions(remote);
+        f.clock.advance(300001);assertThat(client.routeReadiness("LONG")).containsEntry("state","NO_AVAILABLE_INDEPENDENT_JUDGE");verifyNoInteractions(remote);
+    }
     @Test void availableFallbacksAreFixedDistinctModelsAndEmulatedToolsUseJsonText() throws Exception {
         var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
         when(remote.send(any(),eq(500_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);return response(200,"{\"available\":"+!request.uri().getPath().contains("offline")+",\"capabilities\":{\"structured_output\":{\"supported\":true},\"tools\":{\"function_calling\":true,\"strict\":true,\"bridge\":\"emulated_function_bridge\"},\"supported_parameters\":{\"chat_completions\":[\"response_format\"]}}}");});

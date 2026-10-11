@@ -24,6 +24,9 @@ body { margin:0; background:#0d1118; }
 .gc-badge.gc-negative { color:var(--gc-negative);background:color-mix(in srgb,var(--gc-negative) 10%,var(--gc-surface)); }
 .gc-live-chart { display:block;width:100%;height:auto;min-height:180px; }
 .gc-live-table-wrap { overflow-x:auto;max-width:100%; }
+.gc-readiness-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:14px;margin:16px 0; }
+.gc-readiness-card { border:1px solid var(--gc-line);border-radius:10px;padding:16px;min-width:0;overflow-wrap:anywhere; }
+.gc-readiness-card h4 { margin:0; }.gc-readiness-card p { font-size:12px;line-height:1.7; }.gc-readiness-card .gc-panel-head { flex-wrap:wrap; }
 .gc-live-table { width:100%;border-collapse:collapse;font-size:11px; }
 .gc-live-table th { white-space:nowrap;color:var(--gc-muted);text-align:left; }
 .gc-live-table td { white-space:nowrap; }
