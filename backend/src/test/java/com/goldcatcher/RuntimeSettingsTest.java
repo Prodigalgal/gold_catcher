@@ -40,6 +40,16 @@ class RuntimeSettingsTest {
         assertThat(f.settings.compressionRoute().provider()).isEqualTo("mimo");
         assertThat(f.settings.compressionRoute().model()).isNotEqualTo(f.settings.routes().getFirst().model());
     }
+    @Test void equalRecoveredRoutesKeepCredentialsAndProtocolDuringGarbageCollection()throws Exception{
+        var f=new TestSupport();registerTransientRoute(f.settings);
+        var restored=route("restored","custom");f.settings.registerConfiguredRoute(restored,"configured-test-key","OPENAI_COMPATIBLE","MANUAL");
+        for(int i=0;i<5;i++){
+            System.gc();Thread.sleep(10);
+            assertThat(f.settings.secret(restored)).isEqualTo("configured-test-key");
+            assertThat(f.settings.genericAiEndpoint(restored)).isTrue();assertThat(f.settings.manualAiCatalog(restored)).isTrue();
+        }
+    }
+    private void registerTransientRoute(RuntimeSettings settings){settings.registerConfiguredRoute(route("restored","custom"),"configured-test-key","OPENAI_COMPATIBLE","MANUAL");}
     private RuntimeSettings.AiRoute route(String id,String provider) {
         return new RuntimeSettings.AiRoute(id,provider,id+"-model","https://localhost/v1","TEST",10000,16000,30000,2,1000,2,false);
     }

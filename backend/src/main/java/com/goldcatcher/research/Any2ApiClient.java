@@ -204,7 +204,8 @@ public class Any2ApiClient {
                 finish,budget,(System.nanoTime()-started)/1_000_000);
             if(structuredTool&&!submitted)throw new IllegalStateException("REQUIRED_SUBMISSION_MISSING");
             if(!submitted&&!finish.equals("stop"))throw new IllegalStateException("OUTPUT_NOT_COMPLETE_"+finish.toUpperCase(Locale.ROOT));
-            JsonNode output=ResearchProtocol.text(raw)?ResearchProtocol.parse(mapper,raw,compression,adjudication):parseOutput(raw);
+            Integer phase=packetJson.has("phase")?packetJson.path("phase").asInt():null;
+            JsonNode output=ResearchProtocol.text(raw)?ResearchProtocol.parse(mapper,raw,compression,adjudication,phase):ResearchProtocol.normalize(parseOutput(raw),compression,adjudication,phase);
             if(!compression&&!adjudication&&!output.path("plan").isObject())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT");
             if(compression)validateCompression(output);else validate(output);
             if(adjudication&&(!output.path("selectedCandidateId").isTextual()||output.path("selectedCandidateId").asText().isBlank()))throw new IllegalStateException("MISSING_JUDGE_VOTE");
@@ -288,7 +289,7 @@ public class Any2ApiClient {
             if(!values.isMissingNode()&&(!values.isArray()||values.size()>maximum))throw new IllegalStateException("INVALID_EVIDENCE_ARRAY");
         }
         if(output.path("changes").asText().length()>800)throw new IllegalStateException("OUTPUT_FIELDS_TOO_LONG");
-        for(String field:List.of("riskAssessment","invalidate"))if(output.path("plan").path(field).asText().codePointCount(0,output.path("plan").path(field).asText().length())>(field.equals("riskAssessment")?120:80))throw new IllegalStateException("PLAN_NARRATIVE_TOO_LONG");
+        for(String field:List.of("riskAssessment","invalidate"))if(output.path("plan").path(field).asText().codePointCount(0,output.path("plan").path(field).asText().length())>(field.equals("riskAssessment")?120:80))throw new IllegalStateException("PLAN_NARRATIVE_TOO_LONG_"+field.toUpperCase(Locale.ROOT));
         for(var impact:output.path("impacts"))if(!List.of("SHORT","LONG").contains(impact.path("horizon").asText())
             ||!List.of("BULLISH","BEARISH","UNKNOWN","MIXED").contains(impact.path("direction").asText())
             ||impact.path("reason").asText().length()>500||impact.path("counter").asText().length()>400)throw new IllegalStateException("INVALID_IMPACT");

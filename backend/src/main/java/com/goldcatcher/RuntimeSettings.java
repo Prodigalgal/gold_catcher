@@ -15,7 +15,9 @@ public class RuntimeSettings {
     public record RouteSnapshot(long revision,List<AiRoute> routes) {}
     private volatile ResearchRoutes researchRoutes=new ResearchRoutes(0,java.util.Map.of(),null,null);
     private record ConfiguredCredential(String key,String protocol,String catalogMode) {}
-    private final java.util.Map<AiRoute,ConfiguredCredential> configuredCredentials=java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    // Record-equal replacement routes must retain credentials through recovery and garbage collection.
+    // Historical bindings remain available for frozen in-flight runs for this process lifetime.
+    private final java.util.Map<AiRoute,ConfiguredCredential> configuredCredentials=new java.util.concurrent.ConcurrentHashMap<>();
     public RuntimeSettings(Environment environment, ObjectMapper mapper) {
         this.environment = environment; this.mapper = mapper;
     }

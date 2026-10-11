@@ -35,7 +35,8 @@ public record ResearchPolicy(int maxAttempts,int retryBaseSeconds,int retryMaxSe
         "INVALID_DIRECTION","INVALID_EVIDENCE_ARRAY","PLAN_NARRATIVE_TOO_LONG","INVALID_IMPACT","MISSING_JUDGE_VOTE",
         "INVALID_JUDGE_CANDIDATE","INVALID_PREVIOUS_STAGE_REFERENCE","INVALID_NEWS_REFERENCE","INVALID_EVIDENCE_REFERENCE",
         "REQUIRED_SUBMISSION_MISSING","INSUFFICIENT_CANDIDATE_QUORUM");
-    public static boolean repairable(String code){return code!=null&&(REPAIRABLE.contains(code)||code.startsWith("OUTPUT_NOT_COMPLETE_"));}
+    public static boolean repairable(String code){return code!=null&&(REPAIRABLE.contains(code)||code.startsWith("OUTPUT_NOT_COMPLETE_")
+        ||code.startsWith("INVALID_STRUCTURED_OUTPUT_")||code.startsWith("MISSING_REQUIRED_OUTPUT_")||code.startsWith("PLAN_NARRATIVE_TOO_LONG_"));}
     public static boolean retryable(String code){return code!=null&&(repairable(code)||Set.of("REQUEST_TIMEOUT","PROVIDER_REQUEST_STILL_RUNNING",
         "UPSTREAM_TRANSPORT_FAILED","UPSTREAM_OR_PARSE_FAILED").contains(code)
         ||code.matches("(?:INFERENCE|CATALOG)_HTTP_(?:408|425|429|500|502|503|504)(?:_[A-Z0-9_]+)?"));}
