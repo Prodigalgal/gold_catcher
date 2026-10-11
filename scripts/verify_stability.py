@@ -78,7 +78,7 @@ def main():
             pass
     observations = {
         'durationSeconds': round(time.monotonic() - started), 'samples': len(samples), 'readErrors': len(errors),
-        'healthySourceSamples': sum(s['sources']['healthy'] == s['sources']['channels'] == 31 for s in samples),
+        'healthySourceSamples': sum(s['sources']['healthy'] == s['sources']['channels'] == 37 for s in samples),
         'sequencedDepthSamples': sum(s['depth'] == 'SEQUENCED' for s in samples),
         'freshQuoteSamples': sum(s['market'] == 'LIVE' for s in samples),
         'summaryErrorSamples': sum(bool(s['compression']['error']) for s in samples),

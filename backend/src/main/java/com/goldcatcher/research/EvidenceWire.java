@@ -11,12 +11,13 @@ final class EvidenceWire {
     static String encode(ObjectMapper mapper,JsonNode packet){
         String json=mapper.writeValueAsString(packet);var options=new DumperOptions();options.setDefaultFlowStyle(DumperOptions.FlowStyle.FLOW);
         options.setExplicitStart(true);options.setAllowUnicode(true);options.setSplitLines(false);options.setWidth(1000000);
-        String yaml=new Yaml(options).dump(value(packet)).stripTrailing();
+        // Equal collection subtrees share YAML anchors. Distinct peer IDs/plans remain distinct.
+        String yaml=new Yaml(options).dump(value(packet,new HashMap<>())).stripTrailing();
         return mapper.writeValueAsString(yaml).length()<mapper.writeValueAsString(json).length()?yaml:json;
     }
-    private static Object value(JsonNode node){
-        if(node.isObject()){var result=new LinkedHashMap<String,Object>();node.properties().forEach(field->result.put(field.getKey(),value(field.getValue())));return result;}
-        if(node.isArray()){var result=new ArrayList<>();node.forEach(item->result.add(value(item)));return result;}
+    private static Object value(JsonNode node,Map<Object,Object> shared){
+        if(node.isObject()){var result=new LinkedHashMap<String,Object>();node.properties().forEach(field->result.put(field.getKey(),value(field.getValue(),shared)));return shared.computeIfAbsent(result,key->result);}
+        if(node.isArray()){var result=new ArrayList<>();node.forEach(item->result.add(value(item,shared)));return shared.computeIfAbsent(result,key->result);}
         if(node.isTextual())return node.asText();if(node.isIntegralNumber())return node.bigIntegerValue();if(node.isFloatingPointNumber())return node.decimalValue();
         if(node.isBoolean())return node.asBoolean();if(node.isNull())return null;throw new IllegalArgumentException("UNSUPPORTED_EVIDENCE_VALUE");
     }

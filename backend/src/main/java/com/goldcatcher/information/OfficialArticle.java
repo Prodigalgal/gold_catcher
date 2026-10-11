@@ -27,6 +27,7 @@ final class OfficialArticle {
             case "BOJ_NEWS" -> Set.of("www.boj.or.jp");
             case "EIA_PRESS","EIA_ENERGY","EIA_NEW" -> Set.of("www.eia.gov","eia.gov");
             case "BLS_NEWS" -> Set.of("www.bls.gov","bls.gov");
+            case "CNBC_TOP","CNBC_ECONOMY","CNBC_WORLD" -> Set.of("www.cnbc.com");
             default -> Set.of();
         };
         return hosts.contains(uri.getHost().toLowerCase(java.util.Locale.ROOT));

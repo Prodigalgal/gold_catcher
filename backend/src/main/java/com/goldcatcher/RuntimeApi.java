@@ -50,7 +50,7 @@ public class RuntimeApi {
         data.put("sourceProxy",proxy.status());
         var trend=analysis.view(symbol);data.put("analysis",trend);
         var channels=new ArrayList<SourceReliability.Input>();
-        official.forEach(s->channels.add(new SourceReliability.Input(s.id(),s.id(),"OFFICIAL",s.url(),s.state(),news.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
+        official.forEach(s->channels.add(new SourceReliability.Input(s.id(),s.id(),NewsService.mediaSource(s.id())?"MEDIA":"OFFICIAL",s.url(),s.state(),news.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
         trend.sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"DRIVER",s.url(),s.state(),drivers.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
         trend.supplemental().sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"SUPPLEMENTAL",s.url(),s.state(),supplemental.interval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
         data.put("sourceReliability",reliability.view(channels));

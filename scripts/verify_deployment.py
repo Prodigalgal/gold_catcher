@@ -60,8 +60,9 @@ if set(api.get('products', [])) != {'XAU_USDT', 'GATE:XAUUSD'}:
     raise SystemExit('unexpected active products')
 expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION', 'FOUR_STAGE_DIVERSE_RESEARCH',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
-                     'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT'}
-if api.get('version') != '0.4.2' or not expected_features <= set(api.get('features', [])):
+                     'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
+                     'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS'}
+if api.get('version') != '0.4.3' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -110,7 +111,8 @@ for product in ('XAU_USDT', 'GATE:XAUUSD'):
     assert csv_text.startswith('id,symbol,quantityUnit,') and 'costIncomplete,evidenceLevel' in csv_text
 expected_sources = {'FED_PRESS', 'FED_SPEECH', 'ECB_PRESS', 'BEA_NEWS', 'BEA_CALENDAR',
                     'BLS_CPI', 'BLS_EMPLOYMENT', 'BLS_PPI', 'BLS_JOLTS', 'BLS_CALENDAR', 'FOMC_CALENDAR',
-                    'BOE_NEWS', 'BOE_SPEECH', 'BOJ_NEWS', 'EIA_PRESS', 'EIA_ENERGY', 'EIA_NEW'}
+                    'BOE_NEWS', 'BOE_SPEECH', 'BOJ_NEWS', 'EIA_PRESS', 'EIA_ENERGY', 'EIA_NEW',
+                    'CNBC_TOP', 'CNBC_ECONOMY', 'CNBC_WORLD'}
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     sources = snapshot('/api/dashboard?symbol=XAU_USDT')
@@ -127,13 +129,19 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Official feed, article body or calendar acceptance timed out')
+assert all(states[key]['intervalSeconds'] == 30 and states[key]['quality']['publication'] == 'PROVIDER_REPORTED_TIME'
+           for key in {'CNBC_TOP', 'CNBC_ECONOMY', 'CNBC_WORLD'})
+media = [item for item in sources['news'] if item['source'].startswith('CNBC_')]
+assert media and all(item['verification'] == 'MEDIA_REPORT' and item['publishedPrecision'] == 'PROVIDER_REPORTED_TIME'
+                     and item['contentState'] == 'PUBLIC_FEED_SUMMARY' and item['bodyHash'] is None for item in media)
+assert len({item['link'] for item in media}) == len(media)
 boj_xlsx = [item for item in sources['news'] if item['source'] == 'BOJ_NEWS' and '.xlsx' in item['link'].lower()]
 for item in boj_xlsx[:12]:
     body = snapshot('/api/news/' + item['id']).get('body') or {}
     if body.get('format') != 'XLSX_SOURCE_CELLS' or body.get('error') or not body.get('text'):
         raise SystemExit('BoJ source-cell XLSX body acceptance failed')
-driver_sources = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'TREASURY_NOMINAL', 'TREASURY_REAL', 'FF_EXPECTATIONS'}
-driver_ids = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'US_NOMINAL_2Y', 'US_NOMINAL_10Y', 'US_REAL_10Y'}
+driver_sources = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'TREASURY_NOMINAL', 'TREASURY_REAL', 'FF_EXPECTATIONS', 'CNBC_US2Y', 'CNBC_US10Y', 'CNBC_US10YTIPS'}
+driver_ids = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'US_NOMINAL_2Y', 'US_NOMINAL_10Y', 'US_REAL_10Y', 'US_INTRADAY_NOMINAL_2Y', 'US_INTRADAY_NOMINAL_10Y', 'US_INTRADAY_REAL_10Y'}
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     analysis = snapshot('/api/dashboard?symbol=XAU_USDT').get('analysis', {})
@@ -157,6 +165,14 @@ while time.monotonic() < deadline:
     time.sleep(5)
 else:
     raise SystemExit('Public driver, official numeric release or four-horizon analysis acceptance timed out')
+public_rates = {'US_INTRADAY_NOMINAL_2Y', 'US_INTRADAY_NOMINAL_10Y', 'US_INTRADAY_REAL_10Y'}
+assert all(channels[key]['intervalSeconds'] == 60 for key in {'CNBC_US2Y', 'CNBC_US10Y', 'CNBC_US10YTIPS'})
+assert all(observations[key]['frequency'] == 'INTRADAY_PUBLIC_WEB' and observations[key]['unit'] == 'PERCENT'
+           and observations[key]['changeUnit'] == 'BASIS_POINTS' and observations[key]['asOfDate']
+           and observations[key]['responseAt'] and observations[key]['receivedAt']
+           and observations[key]['timestampMeaning'] == 'PROVIDER_LAST_TIME_WITH_DATE_AND_OFFSET; RECEIPT_IS_NOT_QUOTE_TIME'
+           and isinstance(observations[key]['changesBp'], dict) and not observations[key]['returnsPct']
+           and Decimal('-20') <= Decimal(observations[key]['value']) <= Decimal('50') for key in public_rates)
 supplemental_sources = {'DOL_CLAIMS', 'CENSUS_ECON', 'CFTC_GOLD', 'TREASURY_AUCTIONS', 'IAU_HOLDINGS', 'GLD_HOLDINGS', 'GATE_DEPTH', 'GATE_TRADES'}
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -190,12 +206,12 @@ deadline = time.monotonic() + 120
 while time.monotonic() < deadline:
     health = snapshot('/api/dashboard?symbol=XAU_USDT').get('sourceReliability') or {}
     checks = health.get('sources', [])
-    if (health.get('channels') == 31 and {c['id'] for c in checks} == expected_health
-            and health.get('healthy') == 31 and health.get('stale') == 0
+    if (health.get('channels') == 37 and {c['id'] for c in checks} == expected_health
+            and health.get('healthy') == 37 and health.get('stale') == 0
             and all(c['collection']['samples'] >= 1 and c['collection']['lastDurationMillis'] is not None for c in checks)
             and all(c['collection']['samples'] <= 128 for c in checks)
             and 'POLL_CADENCE_IS_NOT_PUBLICATION_SLA' in health.get('statisticsScope', '')):
-        assert all(c['arrival']['lagMillis'] is None or c['arrival']['timestampMeaning'] in {'EXACT_PUBLICATION', 'DECLARED_RELEASE_TIME'}
+        assert all(c['arrival']['lagMillis'] is None or c['arrival']['timestampMeaning'] in {'EXACT_PUBLICATION', 'DECLARED_RELEASE_TIME', 'PROVIDER_DATED_QUOTE_TIME; PUBLIC_WEB_NOT_SLA', 'PROVIDER_REPORTED_PUBLICATION'}
                    for c in checks if c.get('arrival'))
         break
     time.sleep(5)
@@ -209,4 +225,4 @@ client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:
     raise SystemExit("web source commit mismatch")
-print("Argo digests, PoW session, Gate feeds, separate CFD ledger, MIMO role, sequenced depth/archive, exports, seventeen official channels, six driver/calendar channels, eight supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified. Live research completion is a separate acceptance.")
+print("Argo digests, PoW session, Gate feeds, separate CFD ledger, MIMO role, sequenced depth/archive, exports, seventeen official and three public media channels, nine driver/calendar channels, eight supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified. Live research completion is a separate acceptance.")

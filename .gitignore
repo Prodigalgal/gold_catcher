@@ -25,4 +25,5 @@ data/
 __pycache__/
 .DS_Store
 Thumbs.db
+*.tsbuildinfo
 web/prototype-dist/

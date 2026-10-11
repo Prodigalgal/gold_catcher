@@ -67,7 +67,7 @@ class SystemContractTest {
         var cfd=mapper.readTree(get(client,"/api/dashboard?symbol=GATE:XAUUSD").body());
         assertThat(cfd.path("analysis").path("horizons")).hasSize(4);
         assertThat(cfd.path("analysis").path("method").asText()).isEqualTo("JAVA_STRUCTURE_V1_UNCALIBRATED");
-        assertThat(cfd.path("analysis").path("sources")).hasSize(6);
+        assertThat(cfd.path("analysis").path("sources")).hasSize(9);
         assertThat(cfd.path("market").path("quote").isNull()).isTrue();assertThat(cfd.path("account").path("balance").asText()).isEqualTo("1000");
         assertThat(cfd.path("account").path("equity").isNull()).isTrue();assertThat(cfd.path("marketProvenance").path("simulationReady").asBoolean()).isFalse();
         assertThat(post(client,"/api/auth/logout",Map.of(),null).statusCode()).isEqualTo(403);

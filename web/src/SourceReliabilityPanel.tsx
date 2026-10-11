@@ -2,8 +2,8 @@ import { useState } from 'react';
 import type { SourceReliability } from './api';
 
 const status: Record<string,string> = { HEALTHY: '检查正常', DEGRADED: '最近获取失败', STALE: '采集检查过期', PENDING: '等待首次采集', DISABLED: '未启用' };
-const category: Record<string,string> = { OFFICIAL: '官方新闻与日历', DRIVER: '价格驱动与预期', SUPPLEMENTAL: '官方数据与微观行情' };
-const official: Record<string,string> = { FED_PRESS:'美联储公告',FED_SPEECH:'美联储讲话',ECB_PRESS:'欧洲央行公告',BEA_NEWS:'BEA 经济数据',BEA_CALENDAR:'BEA 发布日历',BLS_CPI:'BLS 消费者物价',BLS_EMPLOYMENT:'BLS 就业报告',BLS_PPI:'BLS 生产者物价',BLS_JOLTS:'BLS 职位空缺',BLS_CALENDAR:'BLS 发布日历',FOMC_CALENDAR:'FOMC 会议日期',BOE_NEWS:'英国央行公告',BOE_SPEECH:'英国央行讲话',BOJ_NEWS:'日本央行发布',EIA_PRESS:'EIA 新闻稿',EIA_ENERGY:'EIA 能源摘要',EIA_NEW:'EIA 产品更新' };
+const category: Record<string,string> = { OFFICIAL: '官方新闻与日历', MEDIA: '公开财经媒体', DRIVER: '价格驱动与预期', SUPPLEMENTAL: '官方数据与微观行情' };
+const official: Record<string,string> = { CNBC_TOP: 'CNBC 财经头条', CNBC_ECONOMY: 'CNBC 经济新闻', CNBC_WORLD: 'CNBC 全球新闻', FED_PRESS:'美联储公告',FED_SPEECH:'美联储讲话',ECB_PRESS:'欧洲央行公告',BEA_NEWS:'BEA 经济数据',BEA_CALENDAR:'BEA 发布日历',BLS_CPI:'BLS 消费者物价',BLS_EMPLOYMENT:'BLS 就业报告',BLS_PPI:'BLS 生产者物价',BLS_JOLTS:'BLS 职位空缺',BLS_CALENDAR:'BLS 发布日历',FOMC_CALENDAR:'FOMC 会议日期',BOE_NEWS:'英国央行公告',BOE_SPEECH:'英国央行讲话',BOJ_NEWS:'日本央行发布',EIA_PRESS:'EIA 新闻稿',EIA_ENERGY:'EIA 能源摘要',EIA_NEW:'EIA 产品更新' };
 const time = (v?: string | null) => v ? new Date(v).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '尚未取得';
 const duration = (ms?: number | null) => ms == null ? '尚未测量' : ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms/1000).toFixed(1)} 秒` : ms < 3600000 ? `${(ms/60000).toFixed(1)} 分钟` : `${(ms/3600000).toFixed(1)} 小时`;
 const problem = (s: SourceReliability['sources'][number]) => ['DEGRADED','STALE','PENDING'].includes(s.state) || !!s.bodies.lastError;
