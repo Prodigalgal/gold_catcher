@@ -6,7 +6,8 @@ import org.junit.jupiter.api.Test;
 
 class ResearchPolicyTest {
     @Test void transportAndFormatErrorsAreRetryableButCredentialsBudgetsAndCancellationAreNot(){
-        for(String code:new String[]{"REQUEST_TIMEOUT","UPSTREAM_TRANSPORT_FAILED","INFERENCE_HTTP_429_RATE_LIMITED","INFERENCE_HTTP_503","INVALID_DIRECTION","INVALID_JUDGE_CANDIDATE","PLAN_NARRATIVE_TOO_LONG"})assertThat(ResearchPolicy.retryable(code)).isTrue();
+        for(String code:new String[]{"REQUEST_TIMEOUT","UPSTREAM_TRANSPORT_FAILED","INFERENCE_HTTP_429_RATE_LIMITED","INFERENCE_HTTP_503","INVALID_DIRECTION","INVALID_JUDGE_CANDIDATE","PLAN_NARRATIVE_TOO_LONG",
+            "PLAN_NARRATIVE_TOO_LONG_INVALIDATE","INVALID_STRUCTURED_OUTPUT_CONFLICT_PLAN_ACTION","MISSING_REQUIRED_OUTPUT_PLAN_ACTION"})assertThat(ResearchPolicy.retryable(code)).isTrue();
         for(String code:new String[]{"INFERENCE_HTTP_401","INFERENCE_HTTP_403","CONTEXT_INSUFFICIENT","MODEL_NOT_AVAILABLE","REQUEST_CANCELED","WORKFLOW_DEADLINE"})assertThat(ResearchPolicy.retryable(code)).isFalse();
         assertThat(ResearchPolicy.retryable(null)).isFalse();
     }

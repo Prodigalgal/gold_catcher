@@ -52,7 +52,8 @@ class RuntimeSnapshotBudgetTest {
    Map<String,Object> request=new LinkedHashMap<>();request.put("model",route.model());
    request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(packet.path("phase").asInt()==3,false,ResearchProtocol.onlyWait(packet))),Map.of("role","user","content","")));request.put("max_tokens",route.outputReserve());
    var limits=ContextWindow.limits(route,f.mapper.createObjectNode());var result=ContextWindow.prepare(f.mapper,request,packet,limits);prepared.add(result);
-   var retryPacket=(tools.jackson.databind.node.ObjectNode)packet.deepCopy();retryPacket.putObject("formatCorrection").put("error","INVALID_EVIDENCE_REFERENCE").put("instruction",ResearchProtocol.REPAIR_INSTRUCTION);
+   String correction="PLAN_NARRATIVE_TOO_LONG_RISKASSESSMENT";
+   var retryPacket=(tools.jackson.databind.node.ObjectNode)packet.deepCopy();retryPacket.putObject("formatCorrection").put("error",correction).put("instruction",ResearchProtocol.repairInstruction(correction));
    var repair=ContextWindow.prepare(f.mapper,request,retryPacket,limits);repaired.add(repair);assertThat(ContextWindow.fits(repair.sent(),limits,true)).isTrue();
    Files.writeString(Path.of("../artifacts/offline-request-"+route.id()+"-"+packet.path("phase").asInt()+".json"),result.body());
    System.out.println(route.id()+" phase="+packet.path("phase").asInt()+" chars="+result.sent().characters()+" bytes="+result.sent().bytes()+" utilization="+ContextWindow.utilization(result.sent(),limits));
@@ -99,7 +100,7 @@ class RuntimeSnapshotBudgetTest {
     var request=new LinkedHashMap<String,Object>();request.put("model",route.model());request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(false,false,ResearchProtocol.onlyWait(f.mapper.valueToTree(packet)))),Map.of("role","user","content","")));
     var limits=ContextWindow.limits(route,f.mapper.createObjectNode());
     for(boolean repair:List.of(false,true)){
-     if(repair)packet.put("formatCorrection",Map.of("error","INVALID_STRUCTURED_OUTPUT","instruction",ResearchProtocol.REPAIR_INSTRUCTION));
+     if(repair)packet.put("formatCorrection",Map.of("error","INVALID_STRUCTURED_OUTPUT_CONFLICT_PLAN_RISKASSESSMENT","instruction",ResearchProtocol.repairInstruction("PLAN_NARRATIVE_TOO_LONG_RISKASSESSMENT")));
      var result=ContextWindow.prepare(f.mapper,request,packet,limits);assertThat(ContextWindow.fits(result.sent(),limits,true)).as(route.id()+" real CFD correction="+repair+" chars="+result.sent().characters()).isTrue();
      assertThat(result.packet().path("evidence")).isNotNull();assertThat(result.packet().path("peers").size()).isEqualTo(peers.size());
      System.out.println("ACTUAL_CFD "+route.id()+" repair="+repair+" utilization="+ContextWindow.utilization(result.sent(),limits));
