@@ -18,4 +18,4 @@ COPY --from=proxy-core /usr/local/bin/sing-box /usr/local/bin/sing-box
 RUN /usr/local/bin/sing-box version
 USER 10001
 EXPOSE 8080
-ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-XX:MaxRAMPercentage=65", "-jar", "/app/app.jar"]
+ENTRYPOINT ["java", "--enable-native-access=ALL-UNNAMED", "-XX:MaxRAMPercentage=50", "-jar", "/app/app.jar"]
