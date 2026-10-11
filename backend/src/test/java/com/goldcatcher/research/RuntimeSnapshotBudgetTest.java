@@ -75,7 +75,7 @@ class RuntimeSnapshotBudgetTest {
    while(research.find(run.id).status.equals("RUNNING")&&System.nanoTime()<deadline)Thread.sleep(20);
    assertThat(research.find(run.id).status).isEqualTo("COMPLETED");assertThat(prepared).hasSize(10);
    var limits=ContextWindow.limits(f.settings.routes().getFirst(),f.mapper.createObjectNode());for(var packet:prepared)assertThat(ContextWindow.fits(packet.sent(),limits,true)).isTrue();
-   assertThat(run.evidence.path("analysis").path("drivers").path("csv").asText().split("\n")).hasSize(6);
+   assertThat(run.evidence.path("analysis").path("drivers").path("csv").asText().split("\n")).hasSize(dashboard.path("analysis").path("drivers").size());
    assertThat(run.evidence.path("analysis").path("horizons").isMissingNode()).isTrue();
    assertThat(run.evidence.path("analysis").path("publicFacts").path("csv").asText().split("\n").length).isGreaterThanOrEqualTo(8);
    assertThat(f.store.find("research-analysis",run.id,View.class).orElseThrow().horizons()).hasSize(4);

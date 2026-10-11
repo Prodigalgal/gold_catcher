@@ -64,6 +64,9 @@ public class NewsService {
         Map.entry("EIA_PRESS","https://www.eia.gov/rss/press_rss.xml"),
         Map.entry("EIA_ENERGY","https://www.eia.gov/rss/todayinenergy.xml"),
         Map.entry("EIA_NEW","https://www.eia.gov/about/new/WNtest3.php"),
+        Map.entry("CNBC_TOP","https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+        Map.entry("CNBC_ECONOMY","https://www.cnbc.com/id/10000664/device/rss/rss.html"),
+        Map.entry("CNBC_WORLD","https://www.cnbc.com/id/100727362/device/rss/rss.html"),
         Map.entry("BEA_CALENDAR","https://www.bea.gov/news/schedule"),
         Map.entry("BLS_CPI","https://www.bls.gov/feed/cpi.rss"),
         Map.entry("BLS_EMPLOYMENT","https://www.bls.gov/feed/empsit.rss"),
@@ -107,7 +110,8 @@ public class NewsService {
                 state.error()!=null&&state.nextPoll()!=null&&state.nextPoll().isAfter(clock.instant())?state.nextPoll():clock.instant(),state.error(),state.entries(),state.quality(),state.route()));
     }
     public void onNews(Consumer<String> trigger){newsTrigger=trigger;}
-    public int pollInterval(String id){return polling.interval(id,id.endsWith("_CALENDAR")?3600:Math.max(15,settings.integer("GOLD_NEWS_POLL_SECONDS",30)));}
+    public static boolean mediaSource(String id){return id.startsWith("CNBC_");}
+    public int pollInterval(String id){return mediaSource(id)?30:polling.interval(id,id.endsWith("_CALENDAR")?3600:Math.max(15,settings.integer("GOLD_NEWS_POLL_SECONDS",30)));}
     public List<News> news(){return distinctArticles(store.list("news",News.class,1000)).stream().map(this::decorate)
         .sorted(Comparator.comparing((News news)->Boolean.TRUE.equals(news.archived()))
             .thenComparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
@@ -116,10 +120,10 @@ public class NewsService {
         .filter(event->calendarEnd(event).isAfter(clock.instant().minus(Duration.ofDays(2))))
         .sorted(Comparator.comparing(this::calendarStart)).limit(120).toList();}
     public List<SourceState> sources(){
-        var articles=news();var calendars=calendar();
+        var articles=store.list("news",News.class,1000).stream().map(this::decorate).toList();var calendars=calendar();
         return FEEDS.entrySet().stream().sorted(Map.Entry.comparingByKey()).map(feed->{
             var state=states.getOrDefault(feed.getKey(),new SourceState(feed.getKey(),feed.getValue(),settings.enabled("GOLD_NEWS_ENABLED")?"NOT_YET_FETCHED":"DISABLED",pollInterval(feed.getKey()),null,null,null,0));
-            var owned=articles.stream().filter(n->n.source().equals(feed.getKey())).toList();
+            var owned=distinctArticles(articles.stream().filter(n->n.source().equals(feed.getKey())).toList());
             boolean calendar=feed.getKey().endsWith("_CALENDAR");
             int records=calendar?(int)calendars.stream().filter(e->e.source().equals(feed.getKey())).count():owned.size();
             int dated=(int)owned.stream().filter(this::verifiedTime).count();
@@ -128,9 +132,10 @@ public class NewsService {
             var quality=new SourceQuality(records,dated,full,excluded,max(owned.stream().filter(this::verifiedTime).map(News::publishedAt).toList()),
                 max(owned.stream().map(News::receivedAt).toList()),max(owned.stream().map(News::contentReceivedAt).toList()),
                 state.lastSuccess()==null?"UNVERIFIED":state.lastSuccess().plusSeconds(Math.max(90,state.intervalSeconds()*3L)).isBefore(clock.instant())?"DELAYED":"RECENT_FETCH",
-                calendar?"SCHEDULE_ONLY":dated==0?"UNKNOWN":dated==records?"VERIFIED":"PARTIAL",
+                calendar?"SCHEDULE_ONLY":dated==0?"UNKNOWN":mediaSource(feed.getKey())?"PROVIDER_REPORTED_TIME":dated==records?"VERIFIED":"PARTIAL",
                 calendar?"SCHEDULE_ONLY":full==0?"HEADLINES_ONLY":full==records-excluded?"TEXT_AVAILABLE":"PARTIAL_TEXT",
-                feed.getKey().startsWith("BLS_")&&!calendar?"Feed 时间可能早于正式公布；需用正文声明的发布时间核验。":
+                mediaSource(feed.getKey())?"出版方公开RSS标题/摘要，每30秒检查；时间由出版方报告，未经独立首发核验；同一出版方同链接合并，不代表授权低延迟新闻线，也不抓取付费正文。":
+                    feed.getKey().startsWith("BLS_")&&!calendar?"Feed 时间可能早于正式公布；需用正文声明的发布时间核验。":
                     feed.getKey().equals("BEA_NEWS")?"当前发布列表已替换旧 RSS；历史且时间未知的旧记录隔离。":
                     feed.getKey().equals("FOMC_CALENDAR")?"官方会议日期范围；未给出决议时刻，不推定为14:00。":
                     feed.getKey().equals("EIA_NEW")?"产品更新目录：保留来源摘要与官方报告链接，未把报表入口当新闻全文；结构化库存与油价另需接入。":
@@ -158,7 +163,7 @@ public class NewsService {
             String link=canonicalBojUrl(article.link());
             boolean bojAlias=article.source().equals("BOJ_NEWS")&&link.startsWith("https://www.boj.or.jp/")
                 &&(article.id().equals(hash("BOJ_NEWS:"+link))||article.id().equals(hash("BOJ_NEWS:http"+link.substring(5))));
-            String key=bojAlias?"BOJ_NEWS:"+link:article.id();
+            String key=bojAlias?"BOJ_NEWS:"+link:mediaSource(article.source())?"CNBC:"+link:article.id();
             known.merge(key,article,(left,right)->{
                 // Keep first knowledge for unchanged legacy aliases and latest knowledge for actual revisions.
                 int time=left.receivedAt().compareTo(right.receivedAt());
@@ -184,7 +189,7 @@ public class NewsService {
             news.publishedPrecision()==null?(published==null?"UNKNOWN":"EXACT"):news.publishedPrecision();
         String freshness=archive?"QUARANTINED":published==null?"TIME_UNKNOWN":"FEED_TIMESTAMP".equals(precision)?"TIME_UNVERIFIED":
             published.isAfter(cutoff)?"FUTURE":published.isAfter(cutoff.minus(Duration.ofDays(2)))?"RECENT":"BACKGROUND";
-        String content=body==null?"PENDING":body.state();
+        String content=body==null?(mediaSource(news.source())?"PUBLIC_FEED_SUMMARY":"PENDING"):body.state();
         if(body==null&&news.publishedAt()!=null&&news.publishedAt().isBefore(cutoff.minus(Duration.ofDays(90))))content="BACKGROUND_FEED_ONLY";
         if(archive)content="QUARANTINED";
         var pending=bodies.get(news.id());if(body==null&&pending!=null&&Objects.equals(pending.feedHash(),news.contentHash()))content=pending.state();
@@ -226,7 +231,7 @@ public class NewsService {
             evidence.put("source",article.source());evidence.put("publishedAt",article.publishedAt());evidence.put("receivedAt",article.receivedAt());
             evidence.put("publishedPrecision",article.publishedPrecision());evidence.put("sourcePublishedAt",article.sourcePublishedAt());
             evidence.put("version",article.version());evidence.put("bodyHash",body==null?null:body.hash());
-            evidence.put("contentState",body==null?"HEADLINE_OR_FEED_SUMMARY":body.state());packet.add(evidence);
+            evidence.put("contentState",body==null?(mediaSource(article.source())?"PUBLIC_FEED_SUMMARY":"HEADLINE_OR_FEED_SUMMARY"):body.state());packet.add(evidence);
             Map<String,Object> snapshot=new LinkedHashMap<>();snapshot.put("news",original);snapshot.put("body",body);archive.add(snapshot);
         }
         store.save("research-news",runId,Map.of("cutoff",cutoff,"articles",archive));return packet;
@@ -234,7 +239,7 @@ public class NewsService {
     @Scheduled(fixedDelay=3000,initialDelay=5000) void collectBodies() {
         if(!settings.enabled("GOLD_NEWS_ENABLED"))return;
         for(var article:news()) {
-            if(article.source().equals("EIA_NEW"))continue;
+            if(article.source().equals("EIA_NEW")||mediaSource(article.source()))continue;
             if(article.publishedAt()==null||Boolean.TRUE.equals(article.archived())||article.publishedAt().isAfter(clock.instant())
                 ||article.publishedAt().isBefore(clock.instant().minus(Duration.ofDays(90))))continue;
             var previous=bodies.get(article.id());
@@ -388,6 +393,7 @@ public class NewsService {
             }
             if(source.equals("BOJ_NEWS"))link=canonicalBojUrl(link);
             if(title.isBlank()||!safeLink(link))continue;
+            if(mediaSource(source)&&!OfficialArticle.allowed(source,URI.create(link)))continue;
             String identity=text(item,atom?"id":"guid");if(identity.isBlank())identity=link;
             if(source.equals("BOJ_NEWS"))identity=canonicalBojUrl(identity);
             String summary=text(item,atom?"content":"description");if(summary.isBlank()&&atom)summary=text(item,"summary");
@@ -400,11 +406,11 @@ public class NewsService {
             var previous=store.find("news",id,News.class);
             if(previous.isPresent()&&previous.get().contentHash().equals(fingerprint))continue;
             Instant published=date(source.startsWith("EIA_")?publication.replaceFirst(" EST$"," -0500").replaceFirst(" EDT$"," -0400"):publication);
-            var article=new News(id,source,title,excerpt,link,published,clock.instant(),"OFFICIAL_SOURCE",
-                previous.map(n->n.version()+1).orElse(1),fingerprint,published==null?"UNKNOWN":feedTime||source.startsWith("BLS_")&&atom?"FEED_TIMESTAMP":"EXACT",
+            var article=new News(id,source,title,excerpt,link,published,clock.instant(),mediaSource(source)?"MEDIA_REPORT":"OFFICIAL_SOURCE",
+                previous.map(n->n.version()+1).orElse(1),fingerprint,published==null?"UNKNOWN":mediaSource(source)?"PROVIDER_REPORTED_TIME":feedTime||source.startsWith("BLS_")&&atom?"FEED_TIMESTAMP":"EXACT",
                 null,null,null,null,null,null,null);
             store.transaction(()->{store.save("news",id,article);store.event(id,"NEWS_VERSION",article);return article;});changed++;
-            reliability.arrived(source,article.id()+":"+fingerprint,published,article.receivedAt(),verifiedTime(article)?"EXACT_PUBLICATION":"PUBLICATION_UNVERIFIED");
+            reliability.arrived(source,article.id()+":"+fingerprint,published,article.receivedAt(),mediaSource(source)?"PROVIDER_REPORTED_PUBLICATION":verifiedTime(article)?"EXACT_PUBLICATION":"PUBLICATION_UNVERIFIED");
             if(previous.isPresent()||(published!=null&&published.isAfter(clock.instant().minusSeconds(1800))))newsTrigger.accept(id);
         }
         return changed;

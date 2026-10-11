@@ -8,6 +8,35 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void publisherColumnsDeduplicateKnowledgeAndKeepPublicSummarySemantics() throws Exception {
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var news=new NewsService(f.settings,remote,f.store,new EventHub(),f.clock);
+        String xml="<rss><channel><item><guid>story</guid><title>Treasury yields fall</title><link>https://www.cnbc.com/2026/10/07/treasury.html</link><description>Published public summary</description><pubDate>Wed, 07 Oct 2026 23:58:00 GMT</pubDate></item></channel></rss>";
+        news.parseRss("CNBC_TOP",bytes(xml));var first=news.news().getFirst();f.clock.advance(5000);
+        news.parseRss("CNBC_ECONOMY",bytes(xml));news.parseRss("CNBC_WORLD",bytes(xml));
+        assertThat(f.store.list("news",NewsService.News.class,20)).hasSize(3);
+        assertThat(news.news()).singleElement().satisfies(n->{
+            assertThat(n.receivedAt()).isEqualTo(first.receivedAt());assertThat(n.verification()).isEqualTo("MEDIA_REPORT");
+            assertThat(n.publishedPrecision()).isEqualTo("PROVIDER_REPORTED_TIME");assertThat(n.contentState()).isEqualTo("PUBLIC_FEED_SUMMARY");
+            assertThat(n.contentCharacters()).isZero();assertThat(n.bodyHash()).isNull();
+        });
+        assertThat(news.freezeEvidence(f.clock.instant(),"media-cutoff",4)).hasSize(1);
+        assertThat(news.sources().stream().filter(s->s.id().startsWith("CNBC_"))).allSatisfy(s->{
+            assertThat(s.quality().records()).isEqualTo(1);assertThat(s.quality().publication()).isEqualTo("PROVIDER_REPORTED_TIME");
+            assertThat(s.intervalSeconds()).isEqualTo(30);
+        });
+        news.collectBodies();verifyNoInteractions(remote);
+        f.clock.advance(5000);news.parseRss("CNBC_WORLD",bytes(xml.replace("Published public summary","Corrected public summary")));
+        assertThat(news.news()).singleElement().satisfies(n->{assertThat(n.version()).isEqualTo(2);assertThat(n.excerpt()).isEqualTo("Corrected public summary");});
+        assertThat(news.evidence(first.receivedAt())).singleElement().satisfies(n->assertThat(n.excerpt()).isEqualTo("Published public summary"));
+    }
+    @Test void publicMediaRejectForeignLinksAndFutureStoriesStayOutsideResearch() throws Exception {
+        var f=new TestSupport();var news=new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock);
+        String xml="<rss><item><title>News</title><link>%s</link><pubDate>Fri, 09 Oct 2026 00:00:00 GMT</pubDate></item></rss>";
+        assertThat(news.parseRss("CNBC_TOP",bytes(xml.formatted("https://www.cnbc.com.attacker.example/story")))).isZero();
+        assertThat(news.parseRss("CNBC_TOP",bytes(xml.formatted("https://www.cnbc.com/2026/10/09/story.html")))).isEqualTo(1);
+        assertThat(news.news()).singleElement().satisfies(n->assertThat(n.freshness()).isEqualTo("FUTURE"));
+        assertThat(news.freezeEvidence(f.clock.instant(),"future-media",4)).isEmpty();
+    }
     @Test void xlsxParserUpgradeRetriesOnlyKnownFormatFailureAndKeepsHttpBackoff(){
         var f=new TestSupport();var later=f.clock.instant().plusSeconds(900);
         for(String id:List.of("format","rate")){var body=new NewsService.ArticleBody(id,"BOJ_NEWS","https://www.boj.or.jp/en/"+id+".xlsx","","FETCH_FAILED",null,null,f.clock.instant(),later,0,id.equals("format")?"ARTICLE_FORMAT_CHANGED":"ARTICLE_HTTP_429",false,"feed",null,null);f.store.save("news-body",id,body);}

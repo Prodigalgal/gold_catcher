@@ -84,7 +84,8 @@ public class TrendAnalysis {
         return new View(symbol,cutoff,(System.nanoTime()-start)/1000,"JAVA_STRUCTURE_V1_UNCALIBRATED",List.copyOf(horizons),drivers,releases,sources.expectations(cutoff),sources.sources(),gaps,reactions,market.costConfiguration(symbol),version,extra);
     }
     static List<String> coverage(List<Driver> drivers,Instant cutoff){
-        List<String> gaps=new ArrayList<>();gaps.add("分钟级美国收益率、利率期货及 FedWatch 概率尚未接入");gaps.add("授权低延迟商业快讯、全球ETF流量与期权数据尚未接入；GLD/IAU为已接入的日频持仓");
+        List<String> gaps=new ArrayList<>();gaps.add("公开盘中美债/TIPS报价已实现60秒检查；未验证开市连续性和端到端延迟，利率期货/FedWatch仍未接入");gaps.add("公开商业媒体RSS已接入；授权低延迟新闻线、全球ETF流量与期权仍缺失，GLD/IAU为日频持仓");
+        for(String id:List.of("US_INTRADAY_NOMINAL_2Y","US_INTRADAY_NOMINAL_10Y","US_INTRADAY_REAL_10Y"))if(drivers.stream().noneMatch(d->d.id().equals(id)&&rateFresh(d,cutoff)))gaps.add(id+" 当前报价过期、休市或尚未取得");
         if(drivers.stream().noneMatch(d->d.id().equals("GATE_USIDX")&&fresh(d,cutoff)))gaps.add("当前美元指数 CFD 观察不可用或已过期");
         if(drivers.stream().noneMatch(d->d.id().equals("US_REAL_10Y")&&dailyFresh(d,cutoff)))gaps.add("美国实际收益率日频背景未取得或统计日过旧");
         return List.copyOf(gaps);
@@ -104,12 +105,14 @@ public class TrendAnalysis {
         String direction=!price||ready!=frames.size()||!gaps.isEmpty()?"UNKNOWN":flat==frames.size()?"RANGE":up==frames.size()?"BULLISH":down==frames.size()?"BEARISH":"MIXED";
         int context=0;boolean background=id.equals("H4_48");
         for(var driver:drivers){
-            String value=null;boolean inverse=false;
+            String value=null;boolean inverse=false;boolean rate=false;
             if(!background&&driver.id().equals("GATE_USIDX")&&fresh(driver,at)){value=driver.returnsPct().get(id.equals("H1_4")?"60":"15");inverse=true;}
             if(background&&driver.id().equals("US_REAL_10Y")&&dailyFresh(driver,at)){value=driver.change();inverse=true;}
+            if(!background&&(driver.id().equals("US_INTRADAY_NOMINAL_10Y")||driver.id().equals("US_INTRADAY_REAL_10Y"))&&rateFresh(driver,at)){
+                value=driver.changesBp().get(id.equals("H1_4")?"60":id.equals("M5_15")?"5":"15");inverse=true;rate=true;}
             if(value==null)continue;int change=new BigDecimal(value).signum();if(change==0)continue;context++;refs.add(driver.id());boolean bullish=inverse&&change<0;
             String displayed=plain(new BigDecimal(value).setScale(4,RoundingMode.HALF_EVEN));
-            String fact=driver.label()+(background?"上一统计日变化 "+displayed+"bp":"观察窗口变化约 "+displayed+"%");
+            String fact=driver.label()+(background?"上一统计日变化 "+displayed+"bp":"观察窗口变化约 "+displayed+(rate?"bp":"%"));
             if(bullish)support.add(fact+"；常见关系支持黄金，需市场确认");else counter.add(fact+"；常见关系压制黄金，需市场确认");
             if(direction.equals("BULLISH")&&!bullish||direction.equals("BEARISH")&&bullish)direction="MIXED";
         }
@@ -132,16 +135,19 @@ public class TrendAnalysis {
         return new Reaction(release.id(),release.label(),release.publishedAt(),changes.isEmpty()?"WAITING_RESPONSE":"OBSERVED",Map.copyOf(changes),"BID_ASK_MID",symbol.equals("GATE:XAUUSD")?"CFD 响应时刻的报价观察；最后 tick 时刻未知，不能据此归因或推断成交。":"记录已收到的中间价变化；相关反应不证明因果或可成交盈利。");
     }
     static boolean fresh(Driver d,Instant at){return d.marketStatus().equals("open")&&!d.receivedAt().isAfter(at)&&Duration.between(d.receivedAt(),at).toSeconds()<=15&&d.responseAt()!=null&&!d.responseAt().isAfter(at.plusSeconds(2))&&Duration.between(d.responseAt(),at).toSeconds()<=15;}
+    static boolean rateFresh(Driver d,Instant at){return d.frequency().equals("INTRADAY_PUBLIC_WEB")&&!d.receivedAt().isAfter(at)&&Duration.between(d.receivedAt(),at).toSeconds()<=180&&CnbcRates.recent(d.responseAt(),at);}
     static boolean dailyFresh(Driver d,Instant at){try{long days=d.asOfDate()==null?-1:ChronoUnit.DAYS.between(LocalDate.parse(d.asOfDate()),at.atZone(ZoneId.of("America/New_York")).toLocalDate());return !d.receivedAt().isAfter(at)&&days>=0&&days<=5;}catch(RuntimeException invalid){return false;}}
     public Map<String,Object> freeze(String symbol,Instant cutoff,String runId){
         var view=view(symbol,cutoff);store.save("research-analysis",runId,view);Map<String,Object> packet=new LinkedHashMap<>();
         packet.put("method","FROZEN_OFFICIAL_FACTS_V1");
         var refs=new ArrayList<String>();var referenceMap=new LinkedHashMap<String,String>();
         var compactDrivers=mapper.valueToTree(view.drivers());for(int i=0;i<view.drivers().size();i++){var d=(tools.jackson.databind.node.ObjectNode)compactDrivers.path(i);var original=view.drivers().get(i);refs.add(original.id());referenceMap.put(original.id(),original.id());
-            d.put("freshness",original.frequency().equals("DAILY")?(dailyFresh(original,cutoff)?"DAILY_BACKGROUND":"AS_OF_DATE_STALE"):(fresh(original,cutoff)?"RECENT_RESPONSE_TICK_TIME_UNKNOWN":"STALE_OR_CLOSED"));}
-        for(var node:compactDrivers){var d=(tools.jackson.databind.node.ObjectNode)node;for(String minutes:List.of("5","15","60")){var value=d.path("returnsPct").path(minutes);if(!value.isMissingNode()&&!value.isNull())d.put("return"+minutes+"Pct",plain(new BigDecimal(value.asText()).setScale(8,RoundingMode.HALF_EVEN)));}}
-        packet.put("drivers",EvidenceTable.pack(mapper,compactDrivers,List.of("id","source","frequency","unit","value","previous","change","changeUnit","asOfDate","responseAt","receivedAt","marketStatus","freshness","return5Pct","return15Pct","return60Pct")));
-        packet.put("driverTimeMeaning","Gate timestamp是响应时刻，tick未知；Treasury日频；USIDX基准未核实。");
+            d.put("freshness",original.frequency().equals("DAILY")?(dailyFresh(original,cutoff)?"DAILY_BACKGROUND":"AS_OF_DATE_STALE"):original.frequency().equals("INTRADAY_PUBLIC_WEB")?(rateFresh(original,cutoff)?"RECENT_PROVIDER_DATED_QUOTE; LATENCY_NOT_SLA":"STALE_OR_CLOSED"):(fresh(original,cutoff)?"RECENT_RESPONSE_TICK_TIME_UNKNOWN":"STALE_OR_CLOSED"));}
+        for(var node:compactDrivers){var d=(tools.jackson.databind.node.ObjectNode)node;for(String minutes:List.of("5","15","60")){
+            var value=d.path("returnsPct").path(minutes);if(!value.isMissingNode()&&!value.isNull())d.put("return"+minutes+"Pct",plain(new BigDecimal(value.asText()).setScale(8,RoundingMode.HALF_EVEN)));
+            var bp=d.path("changesBp").path(minutes);if(!bp.isMissingNode()&&!bp.isNull())d.put("change"+minutes+"Bp",bp.asText());}}
+        packet.put("drivers",EvidenceTable.pack(mapper,compactDrivers,List.of("id","source","frequency","unit","value","previous","change","changeUnit","asOfDate","responseAt","receivedAt","marketStatus","freshness","return5Pct","return15Pct","return60Pct","change5Bp","change15Bp","change60Bp")));
+        packet.put("driverTimeMeaning","Gate timestamp是响应时刻，tick未知；Treasury日频；CNBC responseAt是带日期/偏移的提供方报价时刻，bp窗口仅用已观察样本；USIDX基准未核实。");
         var revisionRows=mapper.createArrayNode();
         Map<String,Map<String,Object>> grouped=new LinkedHashMap<>();for(var release:view.releases()){
             String key=release.newsId()+":"+release.bodyHash()+":"+release.extractedAt()+":"+release.precision()+":"+release.extractionVersion();var group=grouped.computeIfAbsent(key,k->{Map<String,Object> row=new LinkedHashMap<>();String id="s"+(grouped.size()+1);row.put("id",id);referenceMap.put(id,release.newsId());row.put("source",release.source());row.put("period",release.period());row.put("publishedAt",release.publishedAt());row.put("receivedAt",release.receivedAt());row.put("extractedAt",release.extractedAt());row.put("precision",release.precision());row.put("extractionVersion",release.extractionVersion());row.put("metrics",new ArrayList<>());return row;});

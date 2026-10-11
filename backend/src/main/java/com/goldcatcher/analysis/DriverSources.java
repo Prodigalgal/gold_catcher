@@ -37,6 +37,7 @@ public class DriverSources {
     private final Map<String,List<Price>> histories=new ConcurrentHashMap<>();private final Map<String,Instant> historyAt=new ConcurrentHashMap<>();
     private final Map<String,Instant> historyNextAttempt=new ConcurrentHashMap<>();
     private final Map<String,String> historyErrors=new ConcurrentHashMap<>();private final Set<String> working=ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.Semaphore ratesSlots=new java.util.concurrent.Semaphore(2);
     record Price(Instant at,BigDecimal close) {}
     public DriverSources(RuntimeSettings settings,DocumentStore store,RemoteHttp http,ObjectMapper mapper,GateCfdFeed gate,EventHub events,Clock clock){
         this(settings,store,http,mapper,gate,events,clock,new SourceReliability(clock),new ReleasePolling(clock,store));
@@ -44,14 +45,15 @@ public class DriverSources {
     @Autowired public DriverSources(RuntimeSettings settings,DocumentStore store,RemoteHttp http,ObjectMapper mapper,GateCfdFeed gate,EventHub events,Clock clock,SourceReliability reliability,ReleasePolling polling){
         this.settings=settings;this.store=store;this.http=http;this.mapper=mapper;this.gate=gate;this.events=events;this.clock=clock;this.reliability=reliability;this.polling=polling;
     }
-    public int pollInterval(String id){return id.startsWith("GATE_")?5:id.equals("FF_EXPECTATIONS")?polling.interval(id,1800):3600;}
+    public int pollInterval(String id){return id.startsWith("GATE_")?5:id.startsWith("CNBC_")?60:id.equals("FF_EXPECTATIONS")?polling.interval(id,1800):3600;}
     private boolean enabled(){return (settings.enabled("GOLD_NEWS_ENABLED")||settings.enabled("GOLD_MARKET_ENABLED"))&&Boolean.parseBoolean(settings.text("GOLD_DRIVERS_ENABLED","true"));}
     @PostConstruct void recover(){store.list("gold-driver",Driver.class,20).forEach(d->drivers.put(d.id(),d));store.list("driver-source",SourceCheck.class,20).forEach(c->checks.put(c.id(),new SourceCheck(c.id(),c.label(),c.url(),c.state(),pollInterval(c.id()),c.lastSuccess(),c.error()!=null&&c.nextPoll()!=null&&c.nextPoll().isAfter(clock.instant())?c.nextPoll():clock.instant(),c.error(),c.records())));}
-    public List<Driver> drivers(Instant cutoff){return drivers.values().stream().filter(d->!d.receivedAt().isAfter(cutoff)).sorted(Comparator.comparing(Driver::id)).toList();}
+    public List<Driver> drivers(Instant cutoff){return drivers.values().stream().filter(d->!d.receivedAt().isAfter(cutoff)).map(d->CnbcRates.at(d,cutoff)).sorted(Comparator.comparing(Driver::id)).toList();}
     public List<SourceCheck> sources(){var result=new ArrayList<SourceCheck>();for(String symbol:List.of("USIDX","EURUSD","USDJPY"))result.add(check("GATE_"+symbol,label(symbol),gateUrl(symbol),5));
         result.add(check("TREASURY_NOMINAL","美国财政部名义收益率",treasuryUrl(false,clock.instant().atZone(ZoneId.of("America/New_York")).getYear()),3600));
         result.add(check("TREASURY_REAL","美国财政部实际收益率",treasuryUrl(true,clock.instant().atZone(ZoneId.of("America/New_York")).getYear()),3600));
-        result.add(check("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS")));return List.copyOf(result);}
+        result.add(check("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS")));
+        for(String symbol:CnbcRates.SYMBOLS)result.add(check("CNBC_"+symbol,CnbcRates.label(symbol),CnbcRates.url(symbol),60));return List.copyOf(result);}
     private SourceCheck check(String id,String label,String url,int interval){var c=checks.getOrDefault(id,new SourceCheck(id,label,url,"NOT_YET_FETCHED",interval,null,null,null,0));
         return enabled()?c:new SourceCheck(id,label,url,"DISABLED",interval,c.lastSuccess(),c.nextPoll(),c.error(),c.records());}
     @Scheduled(fixedDelay=1000,initialDelay=4200) void collect(){
@@ -61,6 +63,7 @@ public class DriverSources {
         schedule("TREASURY_NOMINAL","美国财政部名义收益率",treasuryUrl(false,year),3600,()->collectTreasury(false));
         schedule("TREASURY_REAL","美国财政部实际收益率",treasuryUrl(true,year),3600,()->collectTreasury(true));
         schedule("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS"),this::collectExpectations);
+        for(String symbol:CnbcRates.SYMBOLS)schedule("CNBC_"+symbol,CnbcRates.label(symbol),CnbcRates.url(symbol),60,()->collectCnbc(symbol));
     }
     @FunctionalInterface private interface Fetch{int run() throws Exception;}
     private void schedule(String id,String label,String url,int interval,Fetch action){
@@ -75,6 +78,23 @@ public class DriverSources {
         }finally{working.remove(id);events.changed();}});
     }
     private void saveCheck(SourceCheck check){checks.put(check.id(),check);store.save("driver-source",check.id(),check);}
+    private int collectCnbc(String symbol) throws Exception {
+        ratesSlots.acquire();
+        try{return ingestCnbc(symbol,fetch(CnbcRates.url(symbol),3_000_000));}finally{ratesSlots.release();}
+    }
+    int ingestCnbc(String symbol,byte[] page){
+        var received=clock.instant();var quote=CnbcRates.parse(symbol,page,mapper,received);
+        String channel="CNBC_"+symbol;var cached=store.find("cnbc-rate-quote",channel,CnbcRates.Observed.class);
+        if(cached.isPresent()&&quote.sourceAt().isBefore(cached.get().sourceAt()))throw new IllegalStateException("CNBC_RATE_TIMESTAMP_REGRESSION");
+        if(cached.isPresent()&&cached.get().fingerprint().equals(quote.fingerprint()))return 1;
+        var history=new ArrayList<>(store.find("cnbc-rate-history",symbol,new tools.jackson.core.type.TypeReference<List<CnbcRates.Point>>(){}).orElse(List.of()));
+        history.removeIf(p->p.sourceAt().isBefore(quote.sourceAt().minusSeconds(14400))||p.sourceAt().equals(quote.sourceAt()));
+        history.add(new CnbcRates.Point(quote.sourceAt(),received,quote.value()));history.sort(Comparator.comparing(CnbcRates.Point::sourceAt));
+        var old=drivers.get(CnbcRates.id(symbol));var driver=CnbcRates.driver(quote,received,old==null?1:old.version()+1,history);
+        store.transaction(()->{store.save("cnbc-rate-quote-version",channel+":"+quote.fingerprint(),quote);store.save("cnbc-rate-quote",channel,quote);
+            store.save("cnbc-rate-history",symbol,history);saveDriver(driver);return driver;});
+        reliability.arrived(channel,quote.fingerprint(),quote.sourceAt(),received,"PROVIDER_DATED_QUOTE_TIME; PUBLIC_WEB_NOT_SLA");return 1;
+    }
     private int collectGate(String symbol) throws Exception {
         Instant now=clock.instant();var previous=drivers.get("GATE_"+symbol);
         // Quote collection continues if a history refresh fails; the old baseline is explicitly gated.

@@ -83,9 +83,9 @@ public class SupplementalSources {
         return new View(observations,depth,trades,sources,List.of("盘口为20档REST快照；逐笔为近期100条样本，完整连续性尚未验证；CFD没有L2/逐笔接口", "CFTC是周度统计背景；拍卖收益率不是盘中现金国债收益率；IAU持仓不是盘中申赎资金流", "补充视图最多读取最近1000个版本、90天知识时刻范围；每次研究的完整证据单独封存"),coverage());
     }
     static List<Coverage> coverage(){return List.of(
-        new Coverage("US_RATES_INTRADAY","分钟级美债收益率与实际利率","NOT_CONNECTED","已接入财政部日频曲线及拍卖事件；缺少盘中现金债券/实际利率报价。","https://home.treasury.gov/treasury-daily-interest-rate-xml-feed"),
+        new Coverage("US_RATES_INTRADAY","分钟级美债收益率与实际利率","PARTIAL","CNBC公开2年/10年名义和10年TIPS报价已接入，60秒检查、保留真实报价时间及Java bp计算；公开网页无接口SLA，开市连续性/延迟尚未验证。当前时效看趋势因子卡片，不能用轮询时间替代报价时间。","https://www.cnbc.com/quotes/US10YTIPS"),
         new Coverage("CME_RATES_OPTIONS","利率期货、FedWatch 与黄金期权","NOT_CONNECTED","交易所实时行情、隐含波动率与会议概率尚无已验证的数据通道。","https://www.cmegroup.com/market-data/real-time-futures-and-options-data-api.html"),
-        new Coverage("COMMERCIAL_FLASH","商业快讯与突发报道","NOT_CONNECTED","未配置金十、Reuters、Bloomberg 等机器服务凭据；官方发布稿不能替代全市场即时报道。","https://mcp.jin10.com/app/doc.html"),
+        new Coverage("COMMERCIAL_FLASH","商业快讯与突发报道","PARTIAL","CNBC头条/经济/全球公开RSS已接入，每30秒检查出版方标题和摘要，同一链接合并；不抓付费正文。金十MCP、Reuters/Bloomberg低延迟授权新闻线未配置，公开RSS不能视为完整实时新闻线。","https://www.cnbc.com/id/100003114/device/rss/rss.html"),
         new Coverage("CONSENSUS","经济数据预期与发布前历史","PARTIAL","仅取得 Forex Factory 提供方预期；不是独立核实的市场一致预期，历史发布前预期不回填。","https://www.forexfactory.com/calendar"),
         new Coverage("MICROSTRUCTURE","完整盘口、逐笔连续性与 CFD 明细","PARTIAL","黄金永续有20档快照/近期100条；未实现全量增量簿及连续成交重放。CFD缺L2、逐笔、可见数量及已核实隔夜费。","https://www.gate.com/docs/developers/futures/ws/en/"),
         new Coverage("GOLD_SUPPLY","GLD、全球ETF、央行储备、库存与亚洲市场","PARTIAL","IAU与GLD发行方日频持仓已实现；不是盘中申赎流。WGC、SAFE、CME库存、LBMA、上金所仍为待接入。","https://www.spdrgoldshares.com/usa/gld/"),

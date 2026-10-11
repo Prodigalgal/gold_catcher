@@ -36,6 +36,6 @@ if (!$env:GOLD_DB_URL) { $env:GOLD_DB_URL = 'jdbc:h2:file:' + ($goldData -replac
 Push-Location (Join-Path $goldRoot 'backend')
 try {
     if (!$NoBuild) { & .\gradlew.bat bootJar; if ($LASTEXITCODE -ne 0) { throw 'Backend build failed.' } }
-    & java -jar build/libs/gold-catcher-server-0.4.2.jar
+    & java -jar build/libs/gold-catcher-server-0.4.3.jar
     if ($LASTEXITCODE -ne 0) { throw 'Backend process failed.' }
 } finally { Pop-Location }

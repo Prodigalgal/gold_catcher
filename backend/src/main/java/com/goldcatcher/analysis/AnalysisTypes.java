@@ -9,7 +9,16 @@ public final class AnalysisTypes {
     public record Driver(String id,String label,String family,String source,String nativeSymbol,String url,
         String frequency,String unit,String value,String previous,String change,String changeUnit,
         String asOfDate,Instant responseAt,Instant receivedAt,int version,String marketStatus,
-        Map<String,String> returnsPct,String referenceChangePct,String timestampMeaning,String note) {}
+        Map<String,String> returnsPct,String referenceChangePct,String timestampMeaning,String note,Map<String,String> changesBp) {
+        public Driver { changesBp=changesBp==null?Map.of():Map.copyOf(changesBp); }
+        public Driver(String id,String label,String family,String source,String nativeSymbol,String url,
+            String frequency,String unit,String value,String previous,String change,String changeUnit,
+            String asOfDate,Instant responseAt,Instant receivedAt,int version,String marketStatus,
+            Map<String,String> returnsPct,String referenceChangePct,String timestampMeaning,String note) {
+            this(id,label,family,source,nativeSymbol,url,frequency,unit,value,previous,change,changeUnit,
+                asOfDate,responseAt,receivedAt,version,marketStatus,returnsPct,referenceChangePct,timestampMeaning,note,Map.of());
+        }
+    }
     public record SourceCheck(String id,String label,String url,String state,int intervalSeconds,
         Instant lastSuccess,Instant nextPoll,String error,int records) {}
     public record Expectation(String id,String indicator,String title,Instant scheduledAt,String timingPrecision,
