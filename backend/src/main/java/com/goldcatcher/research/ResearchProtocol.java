@@ -7,29 +7,22 @@ import tools.jackson.databind.node.ObjectNode;
 /** One logical result schema; text adapters never infer financial values or evidence identities. */
 final class ResearchProtocol {
     static final String VERSION="GOLD_RESEARCH_V1",COMPRESSION_VERSION="GOLD_COMPRESSION_V1";
+    static final String REPAIR_INSTRUCTION="按统一协议重新提交，保持冻结证据与原ID，不补造数值。";
     static final List<String> PLAN_FIELDS=List.of("action","orderId","side","type","quantity","leverage","entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation","expiresAt","holdUntil","riskAssessment","invalidate");
     private static final Set<String> TEXT_FIELDS=Set.of("title","analysisSummary","output","shortDirection","longDirection","changes","selectedCandidateId");
     private static final Set<String> ARRAY_FIELDS=Set.of("quotedMessages","evidenceRefs");
     private static final List<String> IMPACT_FIELDS=List.of("newsId","horizon","direction","reason","counter");
     private ResearchProtocol(){}
     static String instruction(boolean judging,boolean nativeTool){
-        String common="统一逻辑协议 GOLD_RESEARCH_V1，字段名区分大小写，方向仅 BULLISH/BEARISH/UNKNOWN/MIXED。title≤80字，analysisSummary≤300，output≤400，changes≤120；plan.riskAssessment≤120字，invalidate≤80字，详情写output。";
+        return instruction(judging,nativeTool,false);
+    }
+    static boolean onlyWait(JsonNode packet){var allowed=packet.path("evidence").path("allowedActions");return allowed.isArray()&&allowed.size()==1&&allowed.path(0).asText().equals("WAIT");}
+    static String instruction(boolean judging,boolean nativeTool,boolean waitOnly){
+        String common="GOLD_RESEARCH_V1，字段名区分大小写，方向BULLISH/BEARISH/UNKNOWN/MIXED。字数上限：title80/analysisSummary300/output400/changes120/plan.riskAssessment120/plan.invalidate80，详情写output。";
         if(nativeTool)return common+"只调用 submit_research，用函数 arguments 按声明字段提交，不输出其他正文。";
-        return common+"""
-
-            文本输出每行一个 key=value，不用JSON括号、引号、转义，不写解释或Markdown；每个value单行，等号后原文保留。首行protocol=GOLD_RESEARCH_V1。
-            必填title/output/shortDirection/longDirection，其余叙述可省略；列表直接用英文逗号隔开的原始id，空列表留空。参考：
-            protocol=GOLD_RESEARCH_V1
-            title=形势观察
-            analysisSummary=依据摘要
-            output=依据、反证和采纳理由
-            shortDirection=UNKNOWN
-            longDirection=UNKNOWN
-            quotedMessages=
-            evidenceRefs=market:quote
-            changes=修订说明
-            """+(judging?"裁决必填 selectedCandidateId=WAIT 或一个原始 peers.id，不输出任何 plan 字段。\n":"研究必填 plan.action=WAIT 或allowedActions中的动作；WAIT只需action和原因。CREATE/管理动作按需输出 plan."+String.join(" / plan.",PLAN_FIELDS)+"。价格、数量、杠杆原样写十进制，不加单位，不适用字段省略或写null，0不能写成空。参考：\nplan.action=WAIT\nplan.riskAssessment=费用或证据不足\nplan.invalidate=取得新证据后复核\n")+
-            "新闻判断最多4组，每组五行 impact.1.newsId=原始news.id、impact.1.horizon=SHORT或LONG、impact.1.direction=方向、impact.1.reason=依据、impact.1.counter=反证；其他组将1改为2/3/4，没有判断则全部省略。quotedMessages≤6，evidenceRefs≤14；不得猜补id或数值。";
+        return common+"\n每行一个 key=value，值单行不加引号，不写JSON/Markdown。首行protocol=GOLD_RESEARCH_V1。必填title/output/shortDirection/longDirection，可选analysisSummary/changes；quotedMessages/evidenceRefs用英文逗号隔开id，无项留空。\n"+
+            (judging?"必填selectedCandidateId=WAIT或原始peers.id；禁止plan字段。\n":waitOnly?"本轮只允许plan.action=WAIT，可选plan.riskAssessment/plan.invalidate，禁止订单或价格字段。\n":"必填plan.action=WAIT或allowedActions动作，WAIT仅action与原因。其他plan字段按需："+String.join(",",PLAN_FIELDS.subList(1,PLAN_FIELDS.size()))+"；字段加plan.前缀，例plan.entryPrice=4096.123。数值十进制无单位，不适用省略/null，0保留。\n")+
+            "新闻判断：impact.1.newsId/horizon/direction/reason/counter各一行，组号1至4，horizon=SHORT/LONG，newsId抄news.id，无判断省略。quotedMessages≤6，evidenceRefs≤14，不猜补数值/id。";
     }
     static String compressionInstruction(){return "只返回两行，不用JSON或Markdown，每个value单行：\nprotocol=GOLD_COMPRESSION_V1\nsummary=中文精华摘要\n";}
     static Map<String,Object> schema(boolean adjudication){

@@ -23,7 +23,8 @@ public class ResearchService {
     public static final int RESEARCH_MODEL_COUNT=3;
     public record Actor(String id,String role,String routeId,String provider,String model) {}
     public record Message(String id,String actorId,String role,int stage,String state,Instant startedAt,
-        Instant completedAt,String error,List<String> readingOrder,Any2ApiClient.Answer answer,int attempt,Instant retryAt) {
+        Instant completedAt,String error,List<String> readingOrder,Any2ApiClient.Answer answer,Integer attempt,Instant retryAt) {
+        public Message{if(attempt==null||attempt<1)attempt=1;}
         public Message(String id,String actorId,String role,int stage,String state,Instant startedAt,Instant completedAt,String error,List<String> readingOrder,Any2ApiClient.Answer answer){this(id,actorId,role,stage,state,startedAt,completedAt,error,readingOrder,answer,1,null);}
     }
     public static class Run {
@@ -53,8 +54,8 @@ public class ResearchService {
         只选择一个完整候选：selectedCandidateId为peers.id之一或字面量WAIT。候选无plan、违反allowedActions、报价/成本/规则不可靠、扣费无机会时选WAIT。
         不生成或修改plan，不拼接/平均价格、杠杆、数量、止损、止盈。参数、风险说明与失效条件均相同的候选可任选其id，Java按同一完整方案计票。
         Java需至少3份不同模型有效裁决，严格多数采纳同一候选；没有多数就WAIT。不同模型仍可能相关犯错，票数不是盈利概率。
-        方向BULLISH/BEARISH/UNKNOWN/MIXED，按SHORT与LONG分别判断。quotedMessages≤6抄peers.id；evidenceRefs≤14抄evidenceIds/news/calendar.id/csv.id，无前缀。
-        impacts≤4，格式{"newsId":"news.id","horizon":"SHORT|LONG","direction":"UNKNOWN","reason":"依据","counter":"反证"}，只引用evidence.news内id。
+        按SHORT与LONG分别判断。quotedMessages抄peers.id；evidenceRefs抄evidenceIds/news/calendar.id/csv.id，无前缀。
+        impacts只引用evidence.news内id，以reason说明依据、counter说明反证。
         休市CFD只做形势观察，不能提出成交；过期结论不能执行。估计未校准。
         """;
     private final RuntimeSettings settings;private final DocumentStore store;private final MarketFeed market;
@@ -270,7 +271,7 @@ public class ResearchService {
                     String id=run.id+"-"+stage+"-"+actor.id()+"-"+attempt;Instant started=clock.instant();
                     var packet=new LinkedHashMap<String,Object>(frozenPacket);
                     packet.put("execution",Map.of("at",started,"attempt",attempt,"decisionExpired",run.decisionExpired,"missingPreviousActors",run.actors.stream().filter(a->!a.id().startsWith("J")&&stage>0&&previous.stream().noneMatch(message->message.actorId().equals(a.id()))).map(Actor::id).toList()));
-                    if(!correction.isBlank())packet.put("formatCorrection",Map.of("error",correction,"instruction","只修复所报格式/引用错误，保持冻结证据；方向仅BULLISH/BEARISH/UNKNOWN/MIXED；riskAssessment≤120字，invalidate≤80字，详情写output；不得补造数值或引用。"));
+                    if(!correction.isBlank())packet.put("formatCorrection",Map.of("error",correction,"instruction",ResearchProtocol.REPAIR_INSTRUCTION));
                     synchronized(run){run.messages.add(new Message(id,actor.id(),actor.role(),stage,"WAITING_RESPONSE",started,null,null,reading,null,attempt,null));save(run);}
                     Message completed;Any2ApiClient.Answer provided=null;long retryAfter=0;
                     try {

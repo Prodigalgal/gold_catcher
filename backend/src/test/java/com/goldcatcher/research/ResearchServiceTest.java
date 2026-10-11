@@ -237,5 +237,10 @@ class ResearchServiceTest {
         var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("FAILED");assertThat(saved.error).isEqualTo("CHECKPOINT_SAVE_FAILED");assertThat(saved.orderId).isNull();
         assertThat(f.store.find("ledger-checkpoint-test","change",Map.class)).isEmpty();verify(ledger,times(1)).propose(eq(saved.id),eq("XAU_USDT"),any());
     }
+    @Test void persistedPreRetryMessagesRemainReadableWithTheStrictMapper(){
+        var legacy=(tools.jackson.databind.node.ObjectNode)f.mapper.valueToTree(new ResearchService.Message("old-id","A","研究",0,"FAILED",f.clock.instant(),f.clock.instant(),"REQUEST_TIMEOUT",List.of(),null));
+        legacy.remove("attempt");legacy.remove("retryAt");var decoded=f.mapper.treeToValue(legacy,ResearchService.Message.class);assertThat(decoded.attempt()).isEqualTo(1);assertThat(decoded.retryAt()).isNull();assertThat(decoded.error()).isEqualTo("REQUEST_TIMEOUT");
+        legacy.putNull("attempt");assertThat(f.mapper.treeToValue(legacy,ResearchService.Message.class).attempt()).isEqualTo(1);
+    }
     private BigDecimal d(String s){return new BigDecimal(s);}
 }

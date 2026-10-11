@@ -143,7 +143,7 @@ public class Any2ApiClient {
                 &&capabilities.path("tools").path("strict").asBoolean(false)&&!capabilities.path("tools").path("bridge").asText().equals("emulated_function_bridge");
             boolean jsonMode=capabilities.path("structured_output").asBoolean(false)||capabilities.path("structured_output").path("supported").asBoolean(false);
             if(!structuredTool&&jsonMode&&!unified)for(var parameter:parameters)if(parameter.asText().equals("response_format"))request.put("response_format",Map.of("type","json_object"));
-            if(unified&&!compression)request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(adjudication,structuredTool)),Map.of("role","user","content",mapper.writeValueAsString(packet))));
+            if(unified&&!compression)request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(adjudication,structuredTool,ResearchProtocol.onlyWait(mapper.valueToTree(packet)))),Map.of("role","user","content",mapper.writeValueAsString(packet))));
             var sourceOptions=new LinkedHashMap<String,Object>();
             if(capabilities.path("provider_options").has("web_search_status")&&capabilities.path("parameter_adaptation").path("search").path("mode").asText().equals("mapped"))sourceOptions.put("web_search_status","disabled");
             if(compression&&capabilities.path("provider_options").has("thinking"))sourceOptions.put("thinking",false);
