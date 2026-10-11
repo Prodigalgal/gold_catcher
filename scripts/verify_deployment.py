@@ -66,7 +66,7 @@ expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION',
                      'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS',
                      'DIVERSE_NEWS_CANDIDATE_POOL', 'PREEMPTIBLE_MIMO_COMPRESSION', 'ANY2API_CIRCUIT_RECOVERY', 'IMMEDIATE_SOURCE_PREPROCESSING',
                      'SUMMARY_ONLY_NEWS_ADMISSION', 'CONFIGURABLE_COMPRESSION_REPROCESSING', 'BOUNDED_PRE_RESEARCH_PREPARATION'}
-if api.get('version') != '0.4.11' or not expected_features <= set(api.get('features', [])):
+if api.get('version') != '0.4.12' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:

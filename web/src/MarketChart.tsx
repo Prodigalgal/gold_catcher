@@ -10,6 +10,7 @@ const frames = [
   ['240', '4小时'],
   ['D', '日线'],
 ];
+const chartWidth = 730;
 
 export default function MarketChart({ market }: { market: Market }) {
   const [frame, setFrame] = useState('5');
@@ -147,7 +148,7 @@ export default function MarketChart({ market }: { market: Market }) {
 
           <svg
             className="gc-price-chart gc-live-chart"
-            viewBox="0 0 680 215"
+            viewBox={`0 0 ${chartWidth} 215`}
             role="img"
             aria-label={`${market.symbol} ${
               frames.find((f) => f[0] === frame)?.[1]
@@ -156,7 +157,7 @@ export default function MarketChart({ market }: { market: Market }) {
             onMouseMove={(event) => {
               const bounds = event.currentTarget.getBoundingClientRect();
               const cursorX =
-                ((event.clientX - bounds.left) * 680) / bounds.width - 25;
+                ((event.clientX - bounds.left) * chartWidth) / bounds.width - 25;
               const idx = Math.max(
                 0,
                 Math.min(
