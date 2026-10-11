@@ -18,7 +18,7 @@ public class SystemController {
     @GetMapping("/api/system/status")
     public Map<String, Object> status() {
         Map<String,Object> status=new java.util.LinkedHashMap<>();
-        status.put("application","gold-catcher");status.put("version","0.4.8");status.put("sourceCommit",sourceCommit);status.put("mode","INTERNAL_SIMULATION_ALPHA");
+        status.put("application","gold-catcher");status.put("version","0.4.9");status.put("sourceCommit",sourceCommit);status.put("mode","INTERNAL_SIMULATION_ALPHA");
         status.put("venue","GATE");status.put("products",java.util.List.of("XAU_USDT","GATE:XAUUSD"));
         status.put("marketData",market.snapshot("XAU_USDT").state());status.put("indicators","JAVA_CLOSED_BAR");
         status.put("research",settings.routes("SHORT").isEmpty()?"ROUTES_NOT_CONFIGURED":"MULTI_MODEL_STAGED");status.put("simulation","INTERNAL_L1_ASSUMPTION");

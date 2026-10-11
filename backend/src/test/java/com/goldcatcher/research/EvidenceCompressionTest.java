@@ -6,6 +6,7 @@ import com.goldcatcher.*;
 import com.goldcatcher.information.NewsService;
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.*;
 import org.junit.jupiter.api.*;
 
 class EvidenceCompressionTest {
@@ -111,6 +112,7 @@ class EvidenceCompressionTest {
         assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("lastSuccessfulAt",f.clock.instant());
     }
     void awaitPass() throws Exception {
+        var notifications=(java.util.concurrent.ExecutorService)org.springframework.test.util.ReflectionTestUtils.getField(compression,"notifications");notifications.submit(()->{}).get(2,java.util.concurrent.TimeUnit.SECONDS);
         var pending=(java.util.concurrent.Future<?>)org.springframework.test.util.ReflectionTestUtils.getField(compression,"pending");
         assertThat(pending).isNotNull();pending.get(2,java.util.concurrent.TimeUnit.SECONDS);
     }
@@ -224,5 +226,29 @@ class EvidenceCompressionTest {
         var frozen=Map.<String,Object>of("id","a","bodyHash",body.hash(),"sourceTextHash",body.hash(),"excerpt","archived original","actual","4.00");
         var admitted=compression.apply(List.of(frozen),cutoff,"frozen-race").getFirst();assertThat(admitted).containsEntry("excerpt",first.excerpt()).containsEntry("actual","4.00");
         assertThat(admitted).doesNotContainKey("sourceTextHash");assertThat(f.mapper.valueToTree(compression.status()).path("recent").size()).isEqualTo(1);
+    }
+    @Test void arrivalNotificationsReturnWithoutWaitingForTheDatabaseScanAndCoalesceBursts()throws Exception{
+        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        when(news.compressionCandidates(any())).thenAnswer(call->{entered.countDown();assertThat(release.await(2,TimeUnit.SECONDS)).isTrue();return List.of();});
+        var callback=org.mockito.ArgumentCaptor.forClass(java.util.function.Consumer.class);verify(news).onText(callback.capture());
+        CompletableFuture.runAsync(()->callback.getValue().accept("a")).get(1,TimeUnit.SECONDS);assertThat(entered.await(1,TimeUnit.SECONDS)).isTrue();
+        CompletableFuture.runAsync(()->{for(int i=0;i<100;i++)callback.getValue().accept("arrival-"+i);}).get(1,TimeUnit.SECONDS);
+        verify(news,times(1)).compressionCandidates(any());release.countDown();
+        var notifications=(ExecutorService)org.springframework.test.util.ReflectionTestUtils.getField(compression,"notifications");notifications.submit(()->{}).get(2,TimeUnit.SECONDS);
+    }
+    @Test void gracefulShutdownArchivesInterruptedCompressionBeforeReturning()throws Exception{
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");when(news.compressionCandidates(any())).thenReturn(List.of(article));
+        var entered=new CountDownLatch(1);when(ai.compress(any(),anyString(),any())).thenAnswer(call->{entered.countDown();Thread.sleep(30000);throw new AssertionError("Expected shutdown interruption");});
+        compression.collect();assertThat(entered.await(1,TimeUnit.SECONDS)).isTrue();compression.stop();
+        var result=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();assertThat(result.state()).isEqualTo("DEFERRED");
+        assertThat(result.error()).isEqualTo("REQUEST_CANCELED");assertThat(compression.detail(result.id()).toString()).contains("REQUEST_CANCELED","SUMMARIZE");
+    }
+    @Test void longerConfiguredCompressionTimeoutAlsoGetsACompleteBoundedPreparationWindow()throws Exception{
+        var route=new RuntimeSettings.AiRoute("compressor-mimo","mimo","mimo/mimo-v2.6-flash","https://localhost/v1","TEST",8000,14000,24000,2,1000,180,false);
+        f.environment.setProperty("GOLD_AI_COMPRESSION_ROUTE_JSON",f.mapper.writeValueAsString(route));assertThat(compression.preparationSeconds()).isEqualTo(180);
+        when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var packet=(Map<?,?>)call.getArgument(2);
+            assertThat(((Map<?,?>)packet.get("evidence")).get("decisionExpiresAt")).isEqualTo(f.clock.instant().plusSeconds(180));
+            var output=f.mapper.valueToTree(Map.of("summary","官方事实摘要。"));return new Any2ApiClient.Answer(route.model(),"","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);});
+        assertThat(compression.process(article,body).state()).isEqualTo("EXTRACTED");
     }
 }

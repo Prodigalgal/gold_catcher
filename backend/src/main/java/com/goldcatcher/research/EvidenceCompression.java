@@ -43,6 +43,8 @@ public class EvidenceCompression {
     private final RuntimeSettings settings;private final NewsService news;private final Any2ApiClient ai;
     private final DocumentStore store;private final ObjectMapper mapper;private final Clock clock;private final EventHub events;
     private final ExecutorService worker=Executors.newSingleThreadExecutor(Thread.ofVirtual().name("gold-source-compression").factory());
+    private final ExecutorService notifications=Executors.newSingleThreadExecutor(Thread.ofVirtual().name("gold-compression-queue").factory());
+    private final java.util.concurrent.atomic.AtomicBoolean scanQueued=new java.util.concurrent.atomic.AtomicBoolean();
     private volatile Future<?> pending;private volatile String workingOn,lastError;
     private volatile Instant retryAt=Instant.EPOCH,lastSuccessfulAt;
     private volatile int consecutiveFailures;
@@ -51,7 +53,11 @@ public class EvidenceCompression {
     private java.util.function.LongSupplier nanos=System::nanoTime;
     public EvidenceCompression(RuntimeSettings settings,NewsService news,Any2ApiClient ai,DocumentStore store,ObjectMapper mapper,Clock clock,EventHub events){
         this.settings=settings;this.news=news;this.ai=ai;this.store=store;this.mapper=mapper;this.clock=clock;this.events=events;
-        loadRuntime(settings.compressionRoute());news.onText(id->collect());
+        loadRuntime(settings.compressionRoute());news.onText(id->signal());
+    }
+    private void signal(){if(!scanQueued.compareAndSet(false,true))return;
+        try{notifications.execute(()->{try{collect();}catch(RuntimeException failure){lastError=Any2ApiClient.safeError(failure);}finally{scanQueued.set(false);}});}
+        catch(RejectedExecutionException stopping){scanQueued.set(false);}
     }
     private String runtimeKey(RuntimeSettings.AiRoute route){return NewsService.hash(VERSION+"|"+INSTRUCTION+"|"+route.provider()+"|"+route.model()+"|"+route.baseUrl()+"|"+settings.genericAiEndpoint(route));}
     private synchronized void loadRuntime(RuntimeSettings.AiRoute route){String key=runtimeKey(route);if(key.equals(checkpointId))return;
@@ -60,7 +66,7 @@ public class EvidenceCompression {
     }
     public boolean enabled(){return Boolean.parseBoolean(settings.text("GOLD_COMPRESSION_ENABLED","true"));}
     public String configurationKey(){return runtimeKey(settings.compressionRoute());}
-    public int preparationSeconds(){return Math.max(1,Math.min(75,settings.compressionRoute().timeoutSeconds()));}
+    public int preparationSeconds(){return requestSeconds(settings.compressionRoute());}
     /** A bounded preparation window starts before research freezes fresh market evidence. */
     public boolean needsPreparation(int newsLimit){
         var route=settings.compressionRoute();Instant cutoff=clock.instant();
@@ -82,12 +88,12 @@ public class EvidenceCompression {
         return store.list("compression-result",Result.class,1000).stream().filter(r->r.cacheKey().equals(key)&&r.state().equals("EXTRACTED")&&!r.completedAt().isAfter(cutoff))
             .max(Comparator.comparing(Result::completedAt)).orElse(null);
     }
-    public synchronized Job reprocess(String newsId){
+    public Job reprocess(String newsId){
         var article=store.find("news",newsId,NewsService.News.class).orElseThrow(()->new IllegalArgumentException("NEWS_NOT_FOUND"));
         var text=news.textForCompression(newsId,clock.instant());if(!suitable(text))throw new IllegalArgumentException("NO_COMPRESSIBLE_SOURCE_TEXT");
         String key=key(article,text,settings.compressionRoute());var job=new Job(key,newsId,UUID.randomUUID().toString(),clock.instant());
         store.transaction(()->{store.save("compression-job",key,job);store.event(newsId,"COMPRESSION_REPROCESS_REQUESTED",job);return job;});
-        collect();events.changed();return job;
+        signal();events.changed();return job;
     }
     public Result find(String id){return store.find("compression-result",id,Result.class).orElseThrow(()->new IllegalArgumentException("COMPRESSION_NOT_FOUND"));}
     public Map<String,Object> detail(String id){var result=find(id);return Map.of("result",result,"chunks",result.chunkIds().stream().map(chunk->{var row=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(store.find("compression-chunk-result",chunk,ChunkResult.class).orElseThrow());row.set("input",store.find("compression-input",chunk,JsonNode.class).orElse(null));return row;}).toList());}
@@ -244,5 +250,8 @@ public class EvidenceCompression {
         }
         return List.copyOf(chunks);
     }
-    @PreDestroy void stop(){worker.shutdownNow();}
+    @PreDestroy void stop(){notifications.shutdownNow();worker.shutdownNow();
+        try{notifications.awaitTermination(5,TimeUnit.SECONDS);worker.awaitTermination(5,TimeUnit.SECONDS);}
+        catch(InterruptedException interrupted){Thread.currentThread().interrupt();}
+    }
 }
