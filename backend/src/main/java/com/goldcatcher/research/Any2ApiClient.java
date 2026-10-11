@@ -216,7 +216,7 @@ public class Any2ApiClient {
                 finish,budget,(System.nanoTime()-started)/1_000_000,List.copyOf(attempts));
         }catch(Exception failure) {
             inference.put(route.id(),"FAILED");failures.put(route.id(),safeError(failure));
-            if(!compression&&!(failure instanceof InterruptedException))failedAt.put(modelKey(route),new FailureAt(clock.instant(),safeError(failure)));
+            if(!compression&&!(failure instanceof InterruptedException)&&!safeError(failure).equals("CONTEXT_INSUFFICIENT"))failedAt.put(modelKey(route),new FailureAt(clock.instant(),safeError(failure)));
             if(captured!=null)throw new InferenceFailure(safeError(failure),new Answer(captured.model(),captured.analysis(),captured.analysisSource(),captured.raw(),captured.output(),
                 captured.usage(),captured.usageSource(),captured.finishReason(),captured.budget(),(System.nanoTime()-started)/1_000_000,List.copyOf(attempts)),retryAfter);throw failure;
         }finally{lease.release();}

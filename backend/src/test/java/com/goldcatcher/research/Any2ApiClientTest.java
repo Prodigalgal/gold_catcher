@@ -172,6 +172,17 @@ class Any2ApiClientTest {
         var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var packet=java.util.Map.of("protocol",ResearchProtocol.VERSION,"phase",3,"evidence",java.util.Map.of());
         assertThat(client.complete(route,"冻结证据。",packet,f.clock.instant().plusSeconds(2)).output()).isEqualTo(canonical);
     }
+    @Test void oversizedLocalPacketDoesNotCoolDownAProviderThatWasNeverCalled()throws Exception{
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var routes=new java.util.ArrayList<AiRoute>();
+        for(String provider:java.util.List.of("aa","bb","cc"))for(boolean judge:java.util.List.of(false,true)){
+            var route=new AiRoute(provider+(judge?"-judge":"-research"),provider,provider+"/model-"+provider,"https://localhost/"+provider+"/v1","UI",10000,16000,30000,2,1000,2,judge);routes.add(route);
+            f.settings.registerConfiguredRoute(route,"test-credential","OPENAI_COMPATIBLE","MANUAL");
+        }
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        assertThatThrownBy(()->client.complete(routes.getFirst(),"冻结证据",java.util.Map.of("protectedFinancialData","1".repeat(40000)),f.clock.instant().plusSeconds(2)))
+            .hasMessage("CONTEXT_INSUFFICIENT");
+        assertThat(client.selectRoutes(routes,java.util.List.of())).hasSize(6);verifyNoInteractions(remote);
+    }
     @Test void transportTimeoutReleasesProviderLeaseForTheNextBoundedResearchAttempt()throws Exception{
         var f=new TestSupport();var remote=mock(RemoteHttp.class);var route=new AiRoute("custom","custom","custom/model","https://localhost/v1","UI",10000,16000,30000,2,1000,180,false);
         f.settings.registerConfiguredRoute(route,"test-credential","OPENAI_COMPATIBLE","MANUAL");var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
