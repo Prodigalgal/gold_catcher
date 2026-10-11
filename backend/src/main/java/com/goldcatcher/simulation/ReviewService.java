@@ -40,14 +40,14 @@ public class ReviewService {
         result.put("status",closed.isEmpty()?"NO_CLOSED_SAMPLE":complete.size()!=closed.size()?"RECORDED_COSTS_INCOMPLETE":"PUBLIC_COST_ASSUMPTIONS");
         var curve=curves.get(symbol);if(curve==null||curve.at().isBefore(clock.instant().minusSeconds(15))){curve=new Cached(clock.instant(),curve(store.accountSamples(symbol)));curves.put(symbol,curve);}
         result.putAll(curve.statistics());result.put("statisticsAt",curve.at());
-        var runs=research.history().stream().filter(r->r.symbol.equals(symbol)).toList();
-        result.put("researchStatistics",Map.of("scope","LATEST_40_RESEARCH_RUNS","runs",runs.size(),"completed",runs.stream().filter(r->List.of("COMPLETED","COMPLETED_WAIT","COMPLETED_EXPIRED").contains(r.status)).count(),
-            "staleEvidence",runs.stream().filter(r->r.status.equals("COMPLETED_EXPIRED")).count(),"running",runs.stream().filter(r->List.of("RUNNING","RECOVERY_PENDING").contains(r.status)).count(),
-            "lowQuorum",runs.stream().filter(r->r.status.equals("LOW_QUORUM")).count(),"failed",runs.stream().filter(r->List.of("FAILED","EXPIRED","COMPLETED_ORDER_REJECTED","EXECUTION_TIMED_OUT","FAILED_RECOVERY","INTERRUPTED_BY_RESTART").contains(r.status)).count(),"canceled",runs.stream().filter(r->r.status.equals("CANCELED")).count()));
+        var runs=research.summaries().stream().filter(r->r.symbol().equals(symbol)).toList();
+        result.put("researchStatistics",Map.of("scope","LATEST_40_RESEARCH_RUNS","runs",runs.size(),"completed",runs.stream().filter(r->List.of("COMPLETED","COMPLETED_WAIT","COMPLETED_EXPIRED").contains(r.status())).count(),
+            "staleEvidence",runs.stream().filter(r->r.status().equals("COMPLETED_EXPIRED")).count(),"running",runs.stream().filter(r->List.of("RUNNING","RECOVERY_PENDING").contains(r.status())).count(),
+            "lowQuorum",runs.stream().filter(r->r.status().equals("LOW_QUORUM")).count(),"failed",runs.stream().filter(r->List.of("FAILED","EXPIRED","COMPLETED_ORDER_REJECTED","EXECUTION_TIMED_OUT","FAILED_RECOVERY","INTERRUPTED_BY_RESTART").contains(r.status())).count(),"canceled",runs.stream().filter(r->r.status().equals("CANCELED")).count()));
         var models=new LinkedHashMap<String,Map<String,Object>>();
-        for(var run:runs)for(var actor:run.actors){var messages=run.messages.stream().filter(m->m.actorId().equals(actor.id())).toList();
-            var row=models.computeIfAbsent(actor.provider()+"/"+actor.model(),k->new LinkedHashMap<>(Map.of("provider",actor.provider(),"model",actor.model(),"calls",0L,"submitted",0L,"failed",0L,"late",0L,"durationMillis",0L)));
-            for(var message:messages){increment(row,"calls",1);if(message.state().equals("SUBMITTED"))increment(row,"submitted",1);if(List.of("FAILED","TIMED_OUT").contains(message.state()))increment(row,"failed",1);if(message.state().equals("LATE_ARCHIVED"))increment(row,"late",1);if(message.answer()!=null)increment(row,"durationMillis",message.answer().durationMs());}}
+        for(var run:runs)for(var model:run.modelStatistics()){
+            var row=models.computeIfAbsent(model.provider()+"/"+model.model(),k->new LinkedHashMap<>(Map.of("provider",model.provider(),"model",model.model(),"calls",0L,"submitted",0L,"failed",0L,"late",0L,"durationMillis",0L)));
+            increment(row,"calls",model.calls());increment(row,"submitted",model.submitted());increment(row,"failed",model.failed());increment(row,"late",model.late());increment(row,"durationMillis",model.durationMillis());}
         result.put("modelStatistics",List.copyOf(models.values()));result.put("primaryStatisticsScope","CLOSED_PERPETUAL_ORDERS_WITH_RECORDED_COSTS; CFD_QUOTE_SCENARIOS_AND_UNKNOWN_COSTS_EXCLUDED");
         return result;
     }

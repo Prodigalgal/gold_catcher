@@ -1,30 +1,412 @@
 import { useState } from 'react';
 import type { AnalysisView, Driver, EconomicRelease } from './api';
 import { SupplementalPanel } from './SupplementalPanel';
+import Pagination from './Pagination';
 
-const direction: Record<string,string> = { BULLISH: '偏多结构', BEARISH: '偏空结构', MIXED: '存在分歧', RANGE: '横盘结构', UNKNOWN: '信息不足' };
-const time = (v?: string | null) => v ? new Date(v).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '尚未取得';
-const decimal = (v?: string | null) => v == null ? '—' : v.includes('.') ? v.replace(/(\.\d{4})\d+$/,'$1') : v;
-const unit = (v: string) => v === 'COUNT' ? '人／个' : v === 'PERCENT_QOQ_ANNUALIZED_SA' ? '% · 年化季环比' : v.includes('MOM') ? '% · 月环比' : v.includes('YOY') ? '% · 同比' : '%';
-const tone = (d: string) => d === 'BULLISH' ? 'gc-positive' : d === 'BEARISH' ? 'gc-negative' : '';
-function DriverCard({driver, at}: {driver: Driver; at: string}) {
-  const daily=driver.frequency==='DAILY';
-  const rates=driver.frequency==='INTRADAY_PUBLIC_WEB';
-  const sourceAge=driver.responseAt?Date.parse(at)-Date.parse(driver.responseAt):Infinity;
-  const recent=rates?sourceAge>=-2000&&sourceAge<=180000&&Date.parse(at)-Date.parse(driver.receivedAt)<=180000:!daily&&driver.marketStatus==='open'&&Date.parse(at)-Date.parse(driver.receivedAt)<=15000;
-  return <article className="gc-panel gc-driver-card">
-    <div className="gc-panel-head"><a href={driver.url} target="_blank" rel="noreferrer">{driver.label} ↗</a><span className="gc-badge">{daily?'日频背景':recent?rates?'提供方近期报价':'报价近期检查':'过期或休市'}</span></div>
-    <strong>{decimal(driver.value)}<small>{driver.unit==='PERCENT'?'%':driver.unit==='INDEX_POINTS'?'点':''}</small></strong>
-    {daily?<div className="gc-driver-returns"><span>前一统计日<b>{decimal(driver.previous)}%</b></span><span>变化<b>{decimal(driver.change)} bp</b></span><span>官方统计日<b>{driver.asOfDate}</b></span></div>:<div className="gc-driver-returns">{[5,15,60].map(m=>{const value=rates?driver.changesBp?.[String(m)]:driver.returnsPct[String(m)];return <span key={m}>约 {m} 分钟变化<b>{value==null?'等待基线':`${decimal(value)}${rates?' bp':'%'}`}</b></span>;})}</div>}
-    {rates&&<p className="gc-small">提供方前收 {decimal(driver.previous)}% · 日变化 {decimal(driver.change)} bp<br/>报价时间 {time(driver.responseAt)}</p>}
-    <p className="gc-small">{driver.note}</p><small>{daily?'此版本首次取得':'此版本首次收到'} {time(driver.receivedAt)}</small>
-  </article>;
+const direction: Record<string, string> = {
+  BULLISH: '偏多结构',
+  BEARISH: '偏空结构',
+  MIXED: '存在分歧',
+  RANGE: '横盘结构',
+  UNKNOWN: '信息不足',
+};
+
+const time = (v?: string | null) =>
+  v
+    ? new Date(v).toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        hour12: false,
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+    : '尚未取得';
+
+const decimal = (v?: string | null) =>
+  v == null ? '—' : v.includes('.') ? v.replace(/(\.\d{4})\d+$/, '$1') : v;
+
+const unit = (v: string) =>
+  v === 'COUNT'
+    ? '人／个'
+    : v === 'PERCENT_QOQ_ANNUALIZED_SA'
+    ? '% · 年化季环比'
+    : v.includes('MOM')
+    ? '% · 月环比'
+    : v.includes('YOY')
+    ? '% · 同比'
+    : '%';
+
+const tone = (d: string) =>
+  d === 'BULLISH' ? 'gc-positive' : d === 'BEARISH' ? 'gc-negative' : '';
+
+function DriverCard({ driver, at }: { driver: Driver; at: string }) {
+  const daily = driver.frequency === 'DAILY';
+  const rates = driver.frequency === 'INTRADAY_PUBLIC_WEB';
+  const sourceAge = driver.responseAt ? Date.parse(at) - Date.parse(driver.responseAt) : Infinity;
+  const recent = rates
+    ? sourceAge >= -2000 &&
+      sourceAge <= 180000 &&
+      Date.parse(at) - Date.parse(driver.receivedAt) <= 180000
+    : !daily &&
+      driver.marketStatus === 'open' &&
+      Date.parse(at) - Date.parse(driver.receivedAt) <= 15000;
+
+  return (
+    <article
+      className="gc-panel gc-driver-card"
+      style={{
+        background: 'var(--gc-surface-raised)',
+        padding: '16px',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+      }}
+    >
+      <div className="gc-panel-head" style={{ marginBottom: '8px' }}>
+        <a
+          href={driver.url}
+          target="_blank"
+          rel="noreferrer"
+          style={{ fontWeight: 600, fontSize: '13px' }}
+        >
+          {driver.label} ↗
+        </a>
+        <span className={`gc-badge ${recent ? 'gc-positive' : ''}`}>
+          {daily ? '日频背景' : recent ? (rates ? '近期报价' : '近期检查') : '延迟或休市'}
+        </span>
+      </div>
+      <strong style={{ fontSize: '22px', fontFamily: 'var(--gc-font-mono)', margin: '4px 0' }}>
+        {decimal(driver.value)}
+        <small>{driver.unit === 'PERCENT' ? '%' : driver.unit === 'INDEX_POINTS' ? ' 点' : ''}</small>
+      </strong>
+      {daily ? (
+        <div className="gc-factor">
+          <span>前一统计日</span>
+          <b>
+            {decimal(driver.previous)}% · {decimal(driver.change)} bp
+          </b>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '4px', margin: '8px 0' }}>
+          {[5, 15, 60].map((m) => {
+            const value = rates
+              ? driver.changesBp?.[String(m)]
+              : driver.returnsPct[String(m)];
+            return (
+              <div className="gc-factor" key={m} style={{ padding: '3px 0' }}>
+                <span>约 {m} 分钟变化</span>
+                <b>
+                  {value == null ? '等待基线' : `${decimal(value)}${rates ? ' bp' : '%'}`}
+                </b>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="gc-small" style={{ margin: '8px 0 0' }}>
+        {driver.note}
+      </p>
+    </article>
+  );
 }
-function ReleaseRow({release}: {release: EconomicRelease}) {
-  return <details className="gc-economic-row"><summary><span><b>{release.label}</b><small>{release.period} · {unit(release.unit)}</small></span><span><small>实际值</small><b>{decimal(release.actual)}</b></span><span><small>发布前预期</small><b>{decimal(release.forecast)}</b></span><span><small>实际 − 预期</small><b>{decimal(release.surprise)}</b></span></summary><div className="gc-economic-detail"><p>{release.excerpt}</p><div className="gc-driver-returns"><span>正式公布<b>{time(release.publishedAt)}</b></span><span>结构化取得<b>{time(release.extractedAt)}</b></span><span>前值<b>{decimal(release.previous)}</b></span></div><p className="gc-small">{release.expectationReceivedAt?`提供方预期首次取得 ${time(release.expectationReceivedAt)} · ${release.expectationSource}`:'缺少发布前取得且匹配的预期，超预期差值保持未知。'} · {release.precision==='OFFICIAL_ROUNDED_MILLIONS'?'官方摘要按百万四舍五入':'官方明确陈述或表格'}</p>{release.revisions.map((r,i)=><p className="gc-small" key={i}>{r.period} 修订：{r.before} → {r.after} · 差值 {r.delta}</p>)}<p className="gc-small">{release.source} · 正文版本证据 {release.bodyHash.slice(0,12)} · 发布版本 v{release.version}</p></div></details>;
+
+function ReleaseRow({ release }: { release: EconomicRelease }) {
+  return (
+    <details
+      className="gc-economic-row"
+      style={{
+        background: 'var(--gc-surface-raised)',
+        padding: '12px 16px',
+        borderRadius: 'var(--gc-radius-sm)',
+        marginBottom: '8px',
+        border: '1px solid var(--gc-line)',
+      }}
+    >
+      <summary
+        style={{
+          cursor: 'pointer',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '12px',
+        }}
+      >
+        <span>
+          <b style={{ fontSize: '13px', color: 'var(--gc-text)' }}>{release.label}</b>
+          <small className="gc-small" style={{ marginLeft: '8px' }}>
+            {release.period} · {unit(release.unit)}
+          </small>
+        </span>
+        <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--gc-font-mono)' }}>
+          <span>
+            <small style={{ color: 'var(--gc-muted)', marginRight: '4px' }}>实际</small>
+            <b>{decimal(release.actual)}</b>
+          </span>
+          <span>
+            <small style={{ color: 'var(--gc-muted)', marginRight: '4px' }}>预期</small>
+            <b>{decimal(release.forecast)}</b>
+          </span>
+          <span>
+            <small style={{ color: 'var(--gc-muted)', marginRight: '4px' }}>差值</small>
+            <b
+              className={
+                Number(release.surprise) > 0
+                  ? 'gc-positive'
+                  : Number(release.surprise) < 0
+                  ? 'gc-negative'
+                  : ''
+              }
+            >
+              {decimal(release.surprise)}
+            </b>
+          </span>
+        </div>
+      </summary>
+      <div className="gc-economic-detail" style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--gc-line)' }}>
+        <p className="gc-live-prose" style={{ margin: '6px 0' }}>
+          {release.excerpt}
+        </p>
+        <div className="gc-factor">
+          <span>正式公布 / 取得</span>
+          <b>
+            {time(release.publishedAt)} / {time(release.extractedAt)}
+          </b>
+        </div>
+        <div className="gc-factor">
+          <span>前值</span>
+          <b>{decimal(release.previous)}</b>
+        </div>
+        <p className="gc-small" style={{ marginTop: '8px' }}>
+          {release.expectationReceivedAt
+            ? `预期取得：${time(release.expectationReceivedAt)} · 来源 ${release.expectationSource}`
+            : '缺少发布前匹配的预期值，超预期差值未记录。'}
+        </p>
+      </div>
+    </details>
+  );
 }
-export default function AnalysisPanel({analysis, compact=false}: {analysis?: AnalysisView; compact?: boolean}) {
-  const [tab,setTab]=useState('趋势因子');
-  if(!analysis)return <section className="gc-panel"><h3>趋势观察正在初始化</h3></section>;
-  return <div className="gc-driver-board"><div className="gc-panel-head"><div><h3>四周期趋势观察</h3><p className="gc-small">结构、关联变化与缺口共同展示 · 更新 {time(analysis.calculatedAt)}</p></div><span className="gc-badge">规则初判 · 待 AI 复核</span></div><div className="gc-horizon-grid">{analysis.horizons.map(h=><article className="gc-panel gc-horizon-card" key={h.id}><div className="gc-panel-head"><b>{h.label}</b><span className={`gc-badge ${tone(h.direction)}`}>{direction[h.direction]??h.direction}</span></div><p className="gc-small">{h.scope==='PRICE_STRUCTURE_ONLY'?'当前依据主要为价格结构':'价格结构与关联背景存在可用观察'}</p><ul>{h.support.slice(0,2).map((s,i)=><li className="gc-positive" key={`s${i}`}>{s}</li>)}{h.counter.slice(0,2).map((s,i)=><li className={s.includes('DOWNTREND')?'gc-negative':''} key={`c${i}`}>{s}</li>)}</ul><details><summary>依据、缺口与失效条件</summary><p className="gc-small">{h.gaps.join('；')||'当前结构证据已取得'}</p><p className="gc-small">{h.invalidation}</p></details></article>)}</div>{!compact&&<><div className="gc-tabs gc-driver-tabs" aria-label="因子分析视图">{['趋势因子','经济发布','预期与覆盖','补充数据'].map(name=><button key={name} aria-pressed={tab===name} onClick={()=>setTab(name)}>{name}</button>)}</div>{tab==='趋势因子'&&<><div className="gc-driver-grid">{analysis.drivers.map(d=><DriverCard key={d.id} driver={d} at={analysis.calculatedAt}/>)}</div>{!analysis.drivers.length&&<div className="gc-panel"><p>等待美元报价和官方收益率资料；已获取的黄金指标继续展示。</p></div>}<section className="gc-panel gc-driver-gaps"><h3>当前覆盖缺口</h3><ul>{analysis.gaps.map(g=><li key={g}>{g}</li>)}</ul><p className="gc-small">初判未统计校准，不显示预测胜率。日频收益率和提供方预期按实际频率使用。</p></section></>}{tab==='经济发布'&&<section className="gc-panel"><div className="gc-panel-head"><h3>官方经济数据与超预期差值</h3><span className="gc-badge">{analysis.releases.length} 项持续背景</span></div><p className="gc-small">实际值、预期和修订分别保存。历史发布的预期不会在发布后回填；差值未标准化，也不直接等于黄金方向。</p>{analysis.releases.map(r=><ReleaseRow key={r.id} release={r}/>)}{!analysis.releases.length&&<p>官方正文取得后，正在核验可解析的数值。</p>}{!!analysis.reactions.length&&<div className="gc-economic-reactions"><h3>近期事件后的价格观察</h3>{analysis.reactions.map(r=><div key={r.eventId}><b>{r.label}</b><p>{Object.entries(r.returnsPct).map(([window,value])=>`${window==='current'?'当前':window+'分钟'} ${decimal(value)}%`).join(' · ')||'尚无完整观测基线'}</p><small>{r.note}</small></div>)}</div>}</section>}{tab==='补充数据'&&<SupplementalPanel data={analysis.supplemental}/>}{tab==='预期与覆盖'&&<><section className="gc-panel"><h3>发布安排与提供方预期</h3><p className="gc-small">Forex Factory 公开导出不包含实际值；时间可能调整。预期来自提供方，调查样本未独立核实。此处包括近两天与未来一周的已取得安排；当前接口仅提供本周。未映射事件保留提供方原文，暂不参与自动差值计算。</p>{analysis.expectations.map(e=><div className="gc-expectation-row" key={e.id}><time>{time(e.scheduledAt)}</time><span><b>{e.title}</b><small>{e.impact} · 时间以官方公布核验</small></span><span>预期 <b>{e.rawForecast || decimal(e.forecast)}</b></span><span>前值 <b>{e.rawPrevious || decimal(e.previous)}</b></span><small>首次收到此版本 {time(e.receivedAt)}</small></div>)}{!analysis.expectations.length&&<p>本周没有取得此时间窗口的美元发布安排；官方日历继续在下方展示。</p>}</section><div className="gc-driver-grid">{analysis.sources.map(s=><article className="gc-panel gc-driver-source" key={s.id}><div className="gc-panel-head"><a href={s.url} target="_blank" rel="noreferrer">{s.label} ↗</a><span className={`gc-badge ${s.error?'gc-negative':''}`}>{s.state==='CURRENT'?'最近采集成功':s.state==='FETCH_FAILED'?'获取失败':s.state==='DISABLED'?'未启用':'等待采集'}</span></div><p>{s.error||`${s.records} 项记录 · ${s.intervalSeconds} 秒调度`}</p><small>检查成功 {time(s.lastSuccess)}<br/>下次检查 {time(s.nextPoll)}</small></article>)}</div></>}</>}</div>;
+
+export default function AnalysisPanel({
+  analysis,
+  compact = false,
+}: {
+  analysis?: AnalysisView;
+  compact?: boolean;
+}) {
+  const [tab, setTab] = useState('趋势因子');
+  const [releasePage, setReleasePage] = useState(1);
+  const [expPage, setExpPage] = useState(1);
+
+  if (!analysis)
+    return (
+      <section className="gc-panel">
+        <h3>趋势观察正在初始化</h3>
+      </section>
+    );
+
+  const releases = analysis.releases;
+  const pagedReleases = releases.slice((releasePage - 1) * 6, releasePage * 6);
+
+  const expectations = analysis.expectations;
+  const pagedExp = expectations.slice((expPage - 1) * 8, expPage * 8);
+
+  return (
+    <div className="gc-driver-board">
+      {/* 4 Horizons Summary Cards */}
+      <section className="gc-panel" style={{ marginBottom: '16px' }}>
+        <div className="gc-panel-head">
+          <div>
+            <h3>四周期大势初判 (Multi-Horizon Structure)</h3>
+            <span className="gc-small">
+              Java 规则初判 · 更新时间 {time(analysis.calculatedAt)}
+            </span>
+          </div>
+          <span className="gc-badge gc-gold-badge">规则初判 · 待 AI 复核</span>
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+            gap: '14px',
+          }}
+        >
+          {analysis.horizons.map((h) => (
+            <article
+              className="gc-panel"
+              key={h.id}
+              style={{
+                background: 'var(--gc-surface-raised)',
+                padding: '16px',
+                border: '1px solid var(--gc-line)',
+              }}
+            >
+              <div className="gc-panel-head" style={{ marginBottom: '8px' }}>
+                <b>{h.label}</b>
+                <span className={`gc-badge ${tone(h.direction)}`}>
+                  {direction[h.direction] ?? h.direction}
+                </span>
+              </div>
+              <p className="gc-small" style={{ margin: '0 0 10px' }}>
+                {h.scope === 'PRICE_STRUCTURE_ONLY'
+                  ? '主要依据价格走势与均线结构'
+                  : '价格结构与宏观关联背景综合'}
+              </p>
+              <div style={{ display: 'grid', gap: '6px' }}>
+                {h.support.slice(0, 2).map((s, i) => (
+                  <div key={`s${i}`} style={{ fontSize: '11px', color: 'var(--gc-positive)' }}>
+                    ✓ {s}
+                  </div>
+                ))}
+                {h.counter.slice(0, 2).map((s, i) => (
+                  <div
+                    key={`c${i}`}
+                    style={{
+                      fontSize: '11px',
+                      color: s.includes('DOWNTREND') ? 'var(--gc-negative)' : 'var(--gc-muted)',
+                    }}
+                  >
+                    ⚠ {s}
+                  </div>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {!compact && (
+        <>
+          <div className="gc-tabs" aria-label="因子分析视图">
+            {['趋势因子', '经济发布', '预期与覆盖', '补充数据'].map((name) => (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={tab === name}
+                onClick={() => setTab(name)}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+
+          {/* TAB: Drivers */}
+          {tab === '趋势因子' && (
+            <section className="gc-panel">
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                  gap: '14px',
+                }}
+              >
+                {analysis.drivers.map((d) => (
+                  <DriverCard key={d.id} driver={d} at={analysis.calculatedAt} />
+                ))}
+              </div>
+              {!analysis.drivers.length && (
+                <p className="gc-small" style={{ padding: '16px' }}>
+                  等待美元报价和官方收益率资料；已获取的黄金指标继续展示。
+                </p>
+              )}
+
+              {!!analysis.gaps.length && (
+                <div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid var(--gc-line)' }}>
+                  <h4 style={{ margin: '0 0 8px' }}>当前覆盖缺口</h4>
+                  <ul className="gc-small" style={{ margin: 0, paddingLeft: '18px' }}>
+                    {analysis.gaps.map((g) => (
+                      <li key={g}>{g}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* TAB: Releases */}
+          {tab === '经济发布' && (
+            <section className="gc-panel">
+              <div className="gc-panel-head">
+                <div>
+                  <h3>官方经济数据发布与预期差</h3>
+                  <span className="gc-small">实际值、预期值与修订记录</span>
+                </div>
+                <span className="gc-badge gc-gold-badge">{releases.length} 项记录</span>
+              </div>
+
+              {pagedReleases.map((r) => (
+                <ReleaseRow key={r.id} release={r} />
+              ))}
+
+              {!releases.length && (
+                <p className="gc-small">官方正文取得后，正在核验可解析的数值。</p>
+              )}
+
+              <Pagination
+                currentPage={releasePage}
+                totalItems={releases.length}
+                pageSize={6}
+                onPageChange={setReleasePage}
+              />
+            </section>
+          )}
+
+          {/* TAB: Expectations */}
+          {tab === '预期与覆盖' && (
+            <section className="gc-panel">
+              <div className="gc-panel-head">
+                <div>
+                  <h3>发布安排与市场一致预期</h3>
+                  <span className="gc-small">近两天与未来一周预期安排</span>
+                </div>
+                <span className="gc-badge gc-gold-badge">{expectations.length} 项日程</span>
+              </div>
+
+              <div style={{ display: 'grid', gap: '8px' }}>
+                {pagedExp.map((e) => (
+                  <div
+                    key={e.id}
+                    style={{
+                      padding: '10px 14px',
+                      background: 'var(--gc-surface-raised)',
+                      borderRadius: 'var(--gc-radius-sm)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '10px',
+                    }}
+                  >
+                    <div>
+                      <strong style={{ fontSize: '13px' }}>{e.title}</strong>
+                      <span className="gc-small" style={{ marginLeft: '10px' }}>
+                        {e.impact} · {time(e.scheduledAt)}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '14px', fontFamily: 'var(--gc-font-mono)' }}>
+                      <span>预期 <b>{e.rawForecast || decimal(e.forecast)}</b></span>
+                      <span>前值 <b>{e.rawPrevious || decimal(e.previous)}</b></span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <Pagination
+                currentPage={expPage}
+                totalItems={expectations.length}
+                pageSize={8}
+                onPageChange={setExpPage}
+              />
+            </section>
+          )}
+
+          {/* TAB: Supplemental */}
+          {tab === '补充数据' && <SupplementalPanel data={analysis.supplemental} />}
+        </>
+      )}
+    </div>
+  );
 }

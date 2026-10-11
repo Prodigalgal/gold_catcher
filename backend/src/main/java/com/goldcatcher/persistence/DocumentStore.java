@@ -7,6 +7,8 @@ import java.util.function.Supplier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 @Repository
@@ -17,6 +19,8 @@ public class DocumentStore {
     private final ObjectMapper mapper;
     private final TransactionTemplate transactions;
     private final Clock clock;
+    private final String processId=java.util.UUID.randomUUID().toString();
+    private final java.util.Map<String,java.util.concurrent.atomic.AtomicLong> revisions=new java.util.concurrent.ConcurrentHashMap<>();
     public DocumentStore(JdbcTemplate jdbc, ObjectMapper mapper, TransactionTemplate transactions, Clock clock) {
         this.jdbc=jdbc; this.mapper=mapper; this.transactions=transactions; this.clock=clock;
     }
@@ -27,7 +31,12 @@ public class DocumentStore {
             body,java.sql.Timestamp.from(clock.instant()),kind,id);
         if(updated==0) jdbc.update("INSERT INTO gc_document(kind,id,body,updated_at) VALUES(?,?,?,?)",
             kind,id,body,java.sql.Timestamp.from(clock.instant()));
+        Runnable committed=()->revisions.computeIfAbsent(kind,key->new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+        if(TransactionSynchronizationManager.isSynchronizationActive())TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){@Override public void afterCommit(){committed.run();}});
+        else committed.run();
     }
+    public String revision(String kind){return processId+":"+revisions.computeIfAbsent(kind,key->new java.util.concurrent.atomic.AtomicLong()).get();}
+    public List<String> ids(String kind,int limit){return jdbc.query("SELECT id FROM gc_document WHERE kind=? ORDER BY updated_at DESC LIMIT ?",(rs,row)->rs.getString(1),kind,Math.max(1,Math.min(1000,limit)));}
     public <T> Optional<T> find(String kind, String id, Class<T> type) {
         return jdbc.query("SELECT body FROM gc_document WHERE kind=? AND id=?",
             (rs,row)->mapper.readValue(rs.getString(1),type),kind,id).stream().findFirst();

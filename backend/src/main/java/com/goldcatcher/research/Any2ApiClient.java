@@ -178,6 +178,8 @@ public class Any2ApiClient {
             if(catalogReadiness(route,catalog).equals("MODEL_NOT_AVAILABLE"))throw new IllegalStateException("MODEL_NOT_AVAILABLE");
             JsonNode capabilities=catalog.path("capabilities");
             Map<String,Object> request=new LinkedHashMap<>();request.put("model",settings.requestModel(route));
+            request.put("stream",true);
+            request.put("stream_options",Map.of("include_usage",true));
             boolean adjudication=!compression&&mapper.valueToTree(packet).path("phase").asInt(-1)==3;
             boolean unified=mapper.valueToTree(packet).path("protocol").asText().equals(compression?ResearchProtocol.COMPRESSION_VERSION:ResearchProtocol.VERSION);
             request.put("messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",mapper.writeValueAsString(packet))));
@@ -221,7 +223,8 @@ public class Any2ApiClient {
                 var began=clock.instant();long measured=System.nanoTime();
                 try{response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("chat/completions")))
                     .timeout(Duration.ofMillis(Math.min(route.timeoutSeconds()*1000L,remaining))).header("Authorization","Bearer "+settings.secret(route))
-                    .header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),1_000_000);
+                    .header("Content-Type","application/json").header("Accept","text/event-stream")
+                    .POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),1_000_000);
                     attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,response.statusCode(),response.statusCode()==200?null:"INFERENCE_HTTP_"+response.statusCode()));
                     retryAfter=response.statusCode()==200?0:retryAfterMillis(response.headers().firstValue("Retry-After").orElse(""),clock.instant());
                     if(attempt==attemptLimit||!List.of(408,425,429,500,502,503,504).contains(response.statusCode())||Duration.between(clock.instant(),deadline).toSeconds()<5)break;
@@ -235,7 +238,7 @@ public class Any2ApiClient {
                     if(upstream.matches("[A-Z0-9_]{1,60}"))code="_"+upstream;}catch(RuntimeException ignored){}
                 throw new IllegalStateException("INFERENCE_HTTP_"+response.statusCode()+code);
             }
-            JsonNode envelope=mapper.readTree(response.body()),choice=envelope.path("choices").path(0),message=choice.path("message");
+            JsonNode envelope=OpenAiStream.decode(mapper,response.body()),choice=envelope.path("choices").path(0),message=choice.path("message");
             String finish=choice.path("finish_reason").asText("UNKNOWN");
             String raw=message.path("content").asText();
             var calls=message.path("tool_calls");

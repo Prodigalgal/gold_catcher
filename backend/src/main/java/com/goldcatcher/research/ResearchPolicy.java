@@ -31,6 +31,10 @@ public record ResearchPolicy(int maxAttempts,int retryBaseSeconds,int retryMaxSe
         // Retry-After is a lower bound; a stage with less time left must stop, never retry early.
         return Math.max(retryAfterMillis,Math.min(retryMaxSeconds*1000L,base+jitter));
     }
+    public long attemptMillis(long remaining,int requestSeconds){
+        // Give a slow but healthy first attempt its configured duration; retries consume the remaining stage budget.
+        return Math.max(1,Math.min(remaining,requestSeconds*1000L));
+    }
     private static final Set<String> REPAIRABLE=Set.of("INVALID_STRUCTURED_OUTPUT","MISSING_REQUIRED_OUTPUT","OUTPUT_FIELDS_TOO_LONG",
         "INVALID_DIRECTION","INVALID_EVIDENCE_ARRAY","PLAN_NARRATIVE_TOO_LONG","INVALID_IMPACT","MISSING_JUDGE_VOTE",
         "INVALID_JUDGE_CANDIDATE","INVALID_PREVIOUS_STAGE_REFERENCE","INVALID_NEWS_REFERENCE","INVALID_EVIDENCE_REFERENCE",
@@ -38,6 +42,8 @@ public record ResearchPolicy(int maxAttempts,int retryBaseSeconds,int retryMaxSe
     public static boolean repairable(String code){return code!=null&&(REPAIRABLE.contains(code)||code.startsWith("OUTPUT_NOT_COMPLETE_")
         ||code.startsWith("INVALID_STRUCTURED_OUTPUT_")||code.startsWith("MISSING_REQUIRED_OUTPUT_")||code.startsWith("PLAN_NARRATIVE_TOO_LONG_"));}
     public static boolean retryable(String code){return code!=null&&(repairable(code)||Set.of("REQUEST_TIMEOUT","PROVIDER_REQUEST_STILL_RUNNING",
-        "UPSTREAM_TRANSPORT_FAILED","UPSTREAM_OR_PARSE_FAILED").contains(code)
+        "UPSTREAM_TRANSPORT_FAILED","UPSTREAM_OR_PARSE_FAILED","STREAM_FIRST_BYTE_TIMEOUT","STREAM_IDLE_TIMEOUT",
+        "STREAM_TOTAL_TIMEOUT","STREAM_INCOMPLETE","INVALID_STREAM_UTF8","INVALID_STREAM_JSON").contains(code)
+        ||code.startsWith("INFERENCE_STREAM_ERROR")
         ||code.matches("(?:INFERENCE|CATALOG)_HTTP_(?:408|425|429|500|502|503|504)(?:_[A-Z0-9_]+)?"));}
 }
