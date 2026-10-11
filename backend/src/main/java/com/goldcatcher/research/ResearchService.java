@@ -23,11 +23,15 @@ public class ResearchService {
     public static final int RESEARCH_MODEL_COUNT=3;
     public record Actor(String id,String role,String routeId,String provider,String model) {}
     public record Message(String id,String actorId,String role,int stage,String state,Instant startedAt,
-        Instant completedAt,String error,List<String> readingOrder,Any2ApiClient.Answer answer) {}
+        Instant completedAt,String error,List<String> readingOrder,Any2ApiClient.Answer answer,int attempt,Instant retryAt) {
+        public Message(String id,String actorId,String role,int stage,String state,Instant startedAt,Instant completedAt,String error,List<String> readingOrder,Any2ApiClient.Answer answer){this(id,actorId,role,stage,state,startedAt,completedAt,error,readingOrder,answer,1,null);}
+    }
     public static class Run {
         public String id,symbol,horizon,status="RUNNING",error,evidenceHash,orderId,sourceCommit;
         public int stage;public long seed;
-        public Instant evidenceCutoff,startedAt,completedAt,decisionExpiresAt;
+        public Instant evidenceCutoff,startedAt,completedAt,decisionExpiresAt,workflowExpiresAt;
+        public ResearchPolicy retryPolicy;public boolean decisionExpired;public int recoveryCount;public String executionState;
+        public List<Integer> sealedStages=new ArrayList<>();
         public JsonNode evidence,verdict,preprocessing,adjudication,routeConfiguration;
         public Map<String,Object> modelDiversity;
         public List<Actor> actors=new ArrayList<>();public List<Message> messages=new ArrayList<>();
@@ -37,11 +41,8 @@ public class ResearchService {
         输入为JSON或YAML，锚点为同值引用；Java数值，columns/csv为RFC4180无表头，common适用每行，空UNKNOWN、0保留。利率日频/盘中及时效看frequency/freshness，公开报价无延迟保证；USIDX基准未核实CFD。预期须发布前取得，查修订/反证/确认/失效，两周期独立判断，方向BULLISH/BEARISH/UNKNOWN/MIXED。
         phase=0盲审/1质疑/2修订/3裁决，只读上轮peers，不按先后投票，说明采纳/拒绝。缺失不补造，无可靠机会/报价/成本/规则时WAIT。
         自行评估风险，无固定盈利/止损/盈亏比，未知成本非0，触价非成交。quantity按quantityUnit，entryPrice买入上限/卖出下限，遵守步长/余额和UTC ISO时间。
-        只返回JSON；有submit_research时只用arguments。title≤80字，analysisSummary≤300，output≤400，changes≤120。
-        plan.riskAssessment≤120字，invalidate≤80字，详情写output，保留数值风险及失效阈值。
-        格式：{"title":"观点","analysisSummary":"可见摘要","output":"依据与采纳理由","shortDirection":"UNKNOWN","longDirection":"UNKNOWN","quotedMessages":[],"evidenceRefs":[],"changes":"修订","impacts":[{"newsId":"新闻id","horizon":"SHORT|LONG","direction":"UNKNOWN","reason":"依据","counter":"反证"}],"plan":{"action":"WAIT|CREATE|CANCEL|CLOSE|MODIFY|REDUCE","orderId":null,"side":"BUY|SELL","type":"LIMIT|MARKET|STOP_LIMIT|STOP_MARKET","quantity":null,"leverage":null,"entryPrice":null,"triggerPrice":null,"stopLoss":null,"takeProfit":null,"trailingDistance":null,"trailingActivation":null,"expiresAt":null,"holdUntil":null,"riskAssessment":"风险情景","invalidate":"失效条件"}}。
         action须在allowedActions。MODIFY改退出价格/追踪距离和激活价/holdUntil，null清除价格；REDUCE.quantity是减仓量。CFD仅报价情景/未知成本，非已验证成交。结论不得晚于decisionExpiresAt执行。
-        WAIT 时plan只需action/原因；严格函数所有字段必填，不适用null。数值为十进制字符串。
+        WAIT只需action/原因；严格函数所有字段必填，不适用null。数值为十进制字符串，side=BUY/SELL，type=LIMIT/MARKET/STOP_LIMIT/STOP_MARKET。
         quotedMessages≤6抄peers.id；impacts≤4抄news.id；evidenceRefs≤14抄evidenceIds/news/calendar.id/csv.id，无前缀。估计未校准。
         """;
     private static final String JUDGE_INSTRUCTION="""
@@ -52,8 +53,6 @@ public class ResearchService {
         只选择一个完整候选：selectedCandidateId为peers.id之一或字面量WAIT。候选无plan、违反allowedActions、报价/成本/规则不可靠、扣费无机会时选WAIT。
         不生成或修改plan，不拼接/平均价格、杠杆、数量、止损、止盈。参数、风险说明与失效条件均相同的候选可任选其id，Java按同一完整方案计票。
         Java需至少3份不同模型有效裁决，严格多数采纳同一候选；没有多数就WAIT。不同模型仍可能相关犯错，票数不是盈利概率。
-        只返回JSON；有submit_research时只返回arguments。title≤80字，analysisSummary≤300，output≤400，changes≤120。
-        格式：{"title":"裁决","analysisSummary":"可见依据摘要","output":"采纳与反对理由","shortDirection":"UNKNOWN","longDirection":"UNKNOWN","selectedCandidateId":"WAIT","quotedMessages":[],"evidenceRefs":[],"changes":"裁决说明","impacts":[]}。
         方向BULLISH/BEARISH/UNKNOWN/MIXED，按SHORT与LONG分别判断。quotedMessages≤6抄peers.id；evidenceRefs≤14抄evidenceIds/news/calendar.id/csv.id，无前缀。
         impacts≤4，格式{"newsId":"news.id","horizon":"SHORT|LONG","direction":"UNKNOWN","reason":"依据","counter":"反证"}，只引用evidence.news内id。
         休市CFD只做形势观察，不能提出成交；过期结论不能执行。估计未校准。
@@ -63,6 +62,8 @@ public class ResearchService {
     private final ObjectMapper mapper;private final EventHub events;private final Clock clock;
     private final ExecutorService workers=Executors.newVirtualThreadPerTaskExecutor();
     private final Semaphore running=new Semaphore(1);private final Map<String,Run> active=new ConcurrentHashMap<>();
+    private final Map<String,Set<Future<?>>> calls=new ConcurrentHashMap<>();
+    private final Queue<Run> recovery=new ConcurrentLinkedQueue<>();private volatile boolean stopping;
     private record NewsTrigger(String id,Instant at) {}
     private final AtomicReference<NewsTrigger> pendingNews=new AtomicReference<>();private volatile Instant lastAutomatic=Instant.EPOCH;
     private volatile String automaticError;
@@ -72,7 +73,8 @@ public class ResearchService {
         public Instant updatedAt;
     }
     private final Map<String,Instant> automaticTimes=new ConcurrentHashMap<>();
-    private final TrendAnalysis analysis;private final EvidenceCompression compression;
+    private final Map<String,Instant> automaticRetryTimes=new ConcurrentHashMap<>();
+    private final TrendAnalysis analysis;private final EvidenceCompression compression;private final AiConfiguration configuration;
     public ResearchService(RuntimeSettings settings,DocumentStore store,MarketFeed market,NewsService news,SimulationLedger ledger,
         Any2ApiClient ai,ObjectMapper mapper,EventHub events,Clock clock) {
         this(settings,store,market,news,ledger,ai,mapper,events,clock,null);
@@ -81,15 +83,37 @@ public class ResearchService {
         Any2ApiClient ai,ObjectMapper mapper,EventHub events,Clock clock,TrendAnalysis analysis) {
         this(settings,store,market,news,ledger,ai,mapper,events,clock,analysis,null);
     }
-    @Autowired public ResearchService(RuntimeSettings settings,DocumentStore store,MarketFeed market,NewsService news,SimulationLedger ledger,
+    public ResearchService(RuntimeSettings settings,DocumentStore store,MarketFeed market,NewsService news,SimulationLedger ledger,
         Any2ApiClient ai,ObjectMapper mapper,EventHub events,Clock clock,TrendAnalysis analysis,EvidenceCompression compression) {
+        this(settings,store,market,news,ledger,ai,mapper,events,clock,analysis,compression,null);
+    }
+    @Autowired public ResearchService(RuntimeSettings settings,DocumentStore store,MarketFeed market,NewsService news,SimulationLedger ledger,
+        Any2ApiClient ai,ObjectMapper mapper,EventHub events,Clock clock,TrendAnalysis analysis,EvidenceCompression compression,AiConfiguration configuration) {
         this.settings=settings;this.store=store;this.market=market;this.news=news;this.ledger=ledger;this.ai=ai;this.mapper=mapper;this.events=events;this.clock=clock;
         news.onNews(id->pendingNews.set(new NewsTrigger(id,clock.instant())));
-        this.analysis=analysis;this.compression=compression;if(compression!=null)compression.researchBusy(()->running.availablePermits()==0);
+        this.analysis=analysis;this.compression=compression;this.configuration=configuration;if(compression!=null)compression.researchBusy(()->running.availablePermits()==0);
     }
-    @PostConstruct void recover(){for(var run:store.list("research",Run.class,100))if(run.status.equals("RUNNING")){
-        run.status="INTERRUPTED_BY_RESTART";run.completedAt=clock.instant();store.save("research",run.id,run);}
+    @PostConstruct void recover(){for(var run:store.list("research",Run.class,100))if(List.of("RUNNING","RECOVERY_PENDING").contains(run.status)){
+        if(run.retryPolicy==null)run.retryPolicy=policy(run.horizon);
+        if(run.workflowExpiresAt==null)run.workflowExpiresAt=run.startedAt.plusSeconds(run.retryPolicy.workflowSeconds());
+        if(run.sealedStages==null)run.sealedStages=new ArrayList<>();
+        for(int stage=0;stage<run.stage;stage++)if(!run.sealedStages.contains(stage))run.sealedStages.add(stage);
+        for(int i=0;i<run.messages.size();i++){var message=run.messages.get(i);if(List.of("WAITING_RESPONSE","RETRY_WAITING").contains(message.state()))
+            run.messages.set(i,new Message(message.id(),message.actorId(),message.role(),message.stage(),"INTERRUPTED",message.startedAt(),clock.instant(),"REQUEST_INTERRUPTED_BY_RESTART",message.readingOrder(),message.answer(),Math.max(1,message.attempt()),null));}
+        run.status="RECOVERY_PENDING";run.completedAt=null;run.recoveryCount++;save(run);recovery.add(run);}
         automaticTimes.putAll(store.find("research-scheduling","times",new tools.jackson.core.type.TypeReference<Map<String,Instant>>(){}).orElse(Map.of()));}
+    private ResearchPolicy policy(String horizon){return configuration==null?ResearchPolicy.from(settings,horizon):configuration.policy(horizon);}
+    @Scheduled(fixedDelay=1000,initialDelay=8000) void resumePending(){
+        if(stopping||recovery.isEmpty()||!running.tryAcquire())return;
+        var run=recovery.poll();if(run==null){running.release();return;}
+        try{
+            if(!clock.instant().isBefore(run.workflowExpiresAt))throw new IllegalStateException("WORKFLOW_DEADLINE");
+            var routes=configuration==null?settings.routes(run.horizon):configuration.routesForRun(run.routeConfiguration,run.horizon);
+            var bindings=new LinkedHashMap<String,AiRoute>();for(var actor:run.actors)bindings.put(actor.id(),routes.stream()
+                .filter(route->route.id().equals(actor.routeId())&&route.model().equals(actor.model())).findFirst().orElseThrow(()->new IllegalStateException("FROZEN_AI_CONFIGURATION_MISMATCH")));
+            run.status="RUNNING";run.error=null;save(run);active.put(run.id,run);workers.submit(()->execute(run,bindings));
+        }catch(Exception failure){run.status="FAILED_RECOVERY";run.error=Any2ApiClient.safeError(failure);run.completedAt=clock.instant();save(run);running.release();}
+    }
     public List<Run> history(){return store.list("research",Run.class,200).stream().sorted(Comparator.comparing((Run run)->run.startedAt).reversed()).limit(40).toList();}
     public Run find(String id){return store.find("research",id,Run.class).orElseThrow(()->new IllegalArgumentException("RESEARCH_NOT_FOUND"));}
     public Run latest(String symbol){return history().stream().filter(run->run.symbol.equals(symbol)).findFirst().orElse(null);}
@@ -104,15 +128,16 @@ public class ResearchService {
         var snapshot=market.snapshot(symbol);
         boolean analysisOnly=symbol.equals("GATE:XAUUSD")&&horizon.equals("LONG")&&snapshot.state().equals("MARKET_CLOSED");
         if(!analysisOnly&&(!snapshot.state().equals("LIVE")||snapshot.quote()==null))throw new IllegalArgumentException("MARKET_NOT_READY");
-        if(!running.tryAcquire())throw new IllegalArgumentException("RESEARCH_ALREADY_RUNNING");
+        if(!recovery.isEmpty()||stopping||!running.tryAcquire())throw new IllegalArgumentException("RESEARCH_ALREADY_RUNNING");
         try {
             var requested=routes;routes=ai.selectRoutes(routes,settings.fallbackRoutes());researchers=routes.stream().filter(route->!route.judge()).toList();
             judges=routes.stream().filter(AiRoute::judge).toList();identities=researchers.stream().map(ResearchService::modelIdentity).toList();
             if(judges.size()<AdjudicationPanel.MINIMUM_JUDGES)throw new IllegalArgumentException("NO_AVAILABLE_JUDGE_QUORUM");
             Run run=new Run();run.id=UUID.randomUUID().toString();run.symbol=symbol;run.horizon=horizon;run.startedAt=clock.instant();
-            run.decisionExpiresAt=run.startedAt.plusSeconds(settings.integer(horizon.equals("SHORT")?"GOLD_SHORT_DECISION_SECONDS":"GOLD_LONG_DECISION_SECONDS",horizon.equals("SHORT")?240:900));
+            run.retryPolicy=configuration==null?policy(horizon):configuration.policy(routeSnapshot.revision(),horizon);run.decisionExpiresAt=run.startedAt.plusSeconds(run.retryPolicy.decisionSeconds());
+            run.workflowExpiresAt=run.startedAt.plusSeconds(run.retryPolicy.workflowSeconds());run.executionState="RESEARCHING";
             run.sourceCommit=settings.text("GOLD_SOURCE_COMMIT","development");
-            run.routeConfiguration=mapper.valueToTree(Map.of("revision",routeSnapshot.revision(),"horizon",horizon,
+            run.routeConfiguration=mapper.valueToTree(Map.of("revision",routeSnapshot.revision(),"horizon",horizon,"protocol",ResearchProtocol.VERSION,
                 "routes",routes.stream().map(route->Map.ofEntries(Map.entry("id",route.id()),Map.entry("provider",route.provider()),Map.entry("model",route.model()),
                     Map.entry("judge",route.judge()),Map.entry("characterLimit",route.characterLimit()),Map.entry("byteLimit",route.byteLimit()),
                     Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("messageLimit",route.messageLimit()),Map.entry("outputReserve",route.outputReserve()),Map.entry("timeoutSeconds",route.timeoutSeconds()))).toList()));
@@ -192,13 +217,12 @@ public class ResearchService {
             List<Message> previous=List.of(),proposals=List.of();
             for(int stage=0;stage<4;stage++) {
                 if(!current(run))return;
-                synchronized(run){run.stage=stage;save(run);}
+                synchronized(run){if(!run.sealedStages.contains(stage)){run.stage=stage;save(run);}}
                 boolean judging=stage==3;
                 List<Actor> actors=run.actors.stream().filter(actor->actor.id().startsWith("J")==judging).toList();
-                previous=batch(run,stage,actors,bindings,previous);
+                previous=run.sealedStages.contains(stage)?submitted(run,stage):batch(run,stage,actors,bindings,previous);
                 if(!current(run))return;
-                int required=stage==3?AdjudicationPanel.MINIMUM_JUDGES:2;
-                if(previous.size()<required){synchronized(run){run.status="LOW_QUORUM";run.error=stage==3?"INSUFFICIENT_VALID_JUDGE_OUTPUTS":"INSUFFICIENT_VALID_STAGE_OUTPUTS";}return;}
+                if(stage==3&&previous.size()<AdjudicationPanel.MINIMUM_JUDGES){synchronized(run){run.status="LOW_QUORUM";run.error="INSUFFICIENT_VALID_JUDGE_OUTPUTS";run.executionState="NO_ORDER_MISSING_JUDGES";}return;}
                 if(stage==2)proposals=previous;
             }
             var adjudication=AdjudicationPanel.aggregate(mapper,proposals,previous,run.actors);
@@ -208,65 +232,95 @@ public class ResearchService {
             if(!plan.isObject())throw new IllegalStateException("MISSING_JUDGE_PLAN");
             var allowed=new HashSet<String>();run.evidence.path("allowedActions").forEach(a->allowed.add(a.asText()));
             if(!allowed.contains(plan.path("action").asText()))throw new IllegalStateException("ACTION_NOT_ALLOWED_BY_FROZEN_EVIDENCE");
-            synchronized(run){if(!current(run))return;var order=ledger.propose(run.id,run.symbol,plan);run.orderId=order==null?null:order.id;
-                run.status=order!=null&&order.status.equals("REJECTED")?"COMPLETED_ORDER_REJECTED":"COMPLETED";if(order!=null&&order.status.equals("REJECTED"))run.error=order.rejection;}
+            synchronized(run){if(!current(run))return;
+                if(run.decisionExpired){run.status="COMPLETED_EXPIRED";run.error="DECISION_DEADLINE";run.executionState="NO_ORDER_STALE_EVIDENCE";return;}
+                if(proposals.size()<2){run.status="COMPLETED_WAIT";run.error="INSUFFICIENT_VALID_STAGE_OUTPUTS";run.executionState="WAIT_INSUFFICIENT_RESEARCH";return;}
+                // Ledger changes and the terminal checkpoint commit together, including MODIFY/REDUCE.
+                try{store.transaction(()->{var order=ledger.propose(run.id,run.symbol,plan);run.orderId=order==null?null:order.id;
+                    run.executionState=order==null?"WAIT":"INTERNAL_ORDER_PROPOSED";
+                    run.status=order!=null&&order.status.equals("REJECTED")?"COMPLETED_ORDER_REJECTED":"COMPLETED";if(order!=null&&order.status.equals("REJECTED"))run.error=order.rejection;run.completedAt=clock.instant();save(run);return true;});}
+                catch(RuntimeException failedCommit){run.status="FAILED";run.error=Any2ApiClient.safeError(failedCommit);run.orderId=null;run.executionState="NO_ORDER_EXECUTION_FAILED";throw failedCommit;}}
         }catch(Exception failure){synchronized(run){if(run.status.equals("RUNNING")){run.status="FAILED";run.error=Any2ApiClient.safeError(failure);}}}
-        finally {synchronized(run){run.completedAt=clock.instant();save(run);}active.remove(run.id);running.release();}
+        finally {try{synchronized(run){if(!run.status.equals("RECOVERY_PENDING"))run.completedAt=clock.instant();save(run);}}
+            finally{active.remove(run.id);calls.getOrDefault(run.id,Set.of()).forEach(future->future.cancel(true));calls.remove(run.id);running.release();}}
     }
+    private List<Message> submitted(Run run,int stage){synchronized(run){return run.messages.stream().filter(message->message.stage()==stage&&message.state().equals("SUBMITTED")).sorted(Comparator.comparing(Message::actorId)).toList();}}
     private List<Message> batch(Run run,int stage,List<Actor> actors,Map<String,AiRoute> bindings,List<Message> previous) throws Exception {
-        var lock=new Object();List<Message> accepted=new ArrayList<>();boolean[] sealed={false};
-        List<CompletableFuture<Void>> pending=new ArrayList<>();
+        var lock=new Object();var accepted=new ConcurrentHashMap<String,Message>();submitted(run,stage).forEach(message->accepted.put(message.actorId(),message));boolean[] sealed={false};
+        List<Future<?>> pending=new ArrayList<>();var runCalls=calls.computeIfAbsent(run.id,key->ConcurrentHashMap.newKeySet());
+        int seconds=stage==3?run.retryPolicy.judgeSeconds():run.retryPolicy.stageSeconds();
+        long batchDeadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(Math.max(1,Math.min(seconds*1000L,Duration.between(clock.instant(),run.workflowExpiresAt).toMillis())));
         Set<String> previousIds=new HashSet<>();previous.forEach(message->previousIds.add(message.id()));
+        var evidenceIds=new HashSet<String>();run.evidence.path("news").forEach(article->evidenceIds.add(article.path("id").asText()));
+        run.evidence.path("calendar").forEach(event->evidenceIds.add(event.path("id").asText()));run.evidence.path("evidenceIds").forEach(value->evidenceIds.add(value.asText()));
+        store.find("research-analysis-references",run.id,Map.class).ifPresent(refs->refs.keySet().forEach(key->evidenceIds.add(key.toString())));
         for(int actorIndex=0;actorIndex<actors.size();actorIndex++) {
             var actor=actors.get(actorIndex);
-            String id=run.id+"-"+stage+"-"+actor.id();Instant started=clock.instant();
+            if(accepted.containsKey(actor.id()))continue;
             var peers=new ArrayList<>(previous);peers.sort(Comparator.comparing(Message::actorId));Collections.shuffle(peers,new Random(run.seed+stage*31L));
             if(!peers.isEmpty())Collections.rotate(peers,actorIndex%peers.size()); // Balance first/last positions within a sealed batch.
             var reading=peers.stream().map(Message::id).toList();
-            synchronized(run){run.messages.add(new Message(id,actor.id(),actor.role(),stage,"WAITING_RESPONSE",started,null,null,reading,null));save(run);}
-            Map<String,Object> packet=Map.of("evidence",run.evidence,"phase",stage,"role",actor.role(),
+            Map<String,Object> frozenPacket=Map.of("protocol",ResearchProtocol.VERSION,"evidence",run.evidence,"phase",stage,"role",actor.role(),
                 "actorId",actor.id(),
                 "peers",peers.stream().map(message->Map.of("id",message.id(),"actor",message.actorId(),"output",peerOutput(message.answer().output()))).toList());
-            pending.add(CompletableFuture.runAsync(()->{
-                Message completed;
-                Any2ApiClient.Answer provided=null;
-                try {
-                    var answer=ai.complete(bindings.get(actor.id()),stage==3?JUDGE_INSTRUCTION:INSTRUCTION,packet);
+            var future=workers.submit(()->{
+                int consumed;synchronized(run){consumed=run.messages.stream().filter(message->message.stage()==stage&&message.actorId().equals(actor.id())).mapToInt(message->Math.max(1,message.attempt())).max().orElse(0);}
+                String correction;synchronized(run){correction=run.messages.stream().filter(message->message.stage()==stage&&message.actorId().equals(actor.id())&&ResearchPolicy.repairable(message.error())).reduce((a,b)->b).map(Message::error).orElse("");}
+                for(int attempt=consumed+1;attempt<=run.retryPolicy.maxAttempts()&&System.nanoTime()<batchDeadline&&current(run);attempt++){
+                    String id=run.id+"-"+stage+"-"+actor.id()+"-"+attempt;Instant started=clock.instant();
+                    var packet=new LinkedHashMap<String,Object>(frozenPacket);
+                    packet.put("execution",Map.of("at",started,"attempt",attempt,"decisionExpired",run.decisionExpired,"missingPreviousActors",run.actors.stream().filter(a->!a.id().startsWith("J")&&stage>0&&previous.stream().noneMatch(message->message.actorId().equals(a.id()))).map(Actor::id).toList()));
+                    if(!correction.isBlank())packet.put("formatCorrection",Map.of("error",correction,"instruction","只修复所报格式/引用错误，保持冻结证据；方向仅BULLISH/BEARISH/UNKNOWN/MIXED；riskAssessment≤120字，invalidate≤80字，详情写output；不得补造数值或引用。"));
+                    synchronized(run){run.messages.add(new Message(id,actor.id(),actor.role(),stage,"WAITING_RESPONSE",started,null,null,reading,null,attempt,null));save(run);}
+                    Message completed;Any2ApiClient.Answer provided=null;long retryAfter=0;
+                    try {
+                    long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(batchDeadline-System.nanoTime()));
+                    int attemptsLeft=run.retryPolicy.maxAttempts()-attempt+1;
+                    long allowance=Math.min(bindings.get(actor.id()).timeoutSeconds()*1000L,Math.max(1,remaining/attemptsLeft));
+                    var answer=ai.complete(bindings.get(actor.id()),stage==3?JUDGE_INSTRUCTION:INSTRUCTION,packet,clock.instant().plusMillis(allowance));
                     provided=answer;
                     if(stage==3)AdjudicationPanel.validateVote(answer.output(),previous);
+                    if(stage==3&&previous.size()<2&&!answer.output().path("selectedCandidateId").asText().equals("WAIT"))throw new IllegalStateException("INSUFFICIENT_CANDIDATE_QUORUM");
                     for(var reference:answer.output().path("quotedMessages"))if(!previousIds.contains(reference.asText()))throw new IllegalStateException("INVALID_PREVIOUS_STAGE_REFERENCE");
-                    var evidenceIds=new HashSet<String>();run.evidence.path("news").forEach(article->evidenceIds.add(article.path("id").asText()));
-                    for(var impact:answer.output().path("impacts"))if(!evidenceIds.contains(impact.path("newsId").asText()))throw new IllegalStateException("INVALID_NEWS_REFERENCE");
-                    run.evidence.path("calendar").forEach(event->evidenceIds.add(event.path("id").asText()));
-                    run.evidence.path("evidenceIds").forEach(value->evidenceIds.add(value.asText()));
-                    store.find("research-analysis-references",run.id,Map.class).ifPresent(refs->refs.keySet().forEach(key->evidenceIds.add(key.toString())));
+                    var newsIds=new HashSet<String>();run.evidence.path("news").forEach(article->newsIds.add(article.path("id").asText()));
+                    for(var impact:answer.output().path("impacts"))if(!newsIds.contains(impact.path("newsId").asText()))throw new IllegalStateException("INVALID_NEWS_REFERENCE");
                     for(var reference:answer.output().path("evidenceRefs"))if(!evidenceIds.contains(reference.asText()))throw new IllegalStateException("INVALID_EVIDENCE_REFERENCE");
-                    completed=new Message(id,actor.id(),actor.role(),stage,"SUBMITTED",started,clock.instant(),null,reading,answer);
-                }catch(Exception failure){completed=new Message(id,actor.id(),actor.role(),stage,"FAILED",started,clock.instant(),Any2ApiClient.safeError(failure),reading,
-                    failure instanceof Any2ApiClient.InferenceFailure partial?partial.partial():provided);}
+                    completed=new Message(id,actor.id(),actor.role(),stage,"SUBMITTED",started,clock.instant(),null,reading,answer,attempt,null);
+                    }catch(Exception failure){retryAfter=failure instanceof Any2ApiClient.InferenceFailure partial?partial.retryAfterMillis():0;
+                        completed=new Message(id,actor.id(),actor.role(),stage,"FAILED",started,clock.instant(),Any2ApiClient.safeError(failure),reading,
+                            failure instanceof Any2ApiClient.InferenceFailure partial?partial.partial():provided,attempt,null);}
                 synchronized(lock) {
                     if(sealed[0]||!run.status.equals("RUNNING"))completed=new Message(completed.id(),completed.actorId(),completed.role(),completed.stage(),"LATE_ARCHIVED",
-                        completed.startedAt(),completed.completedAt(),completed.error(),completed.readingOrder(),completed.answer());
-                    else if(completed.state().equals("SUBMITTED"))accepted.add(completed);
+                        completed.startedAt(),completed.completedAt(),completed.error(),completed.readingOrder(),completed.answer(),attempt,null);
+                    else if(completed.state().equals("SUBMITTED"))accepted.put(actor.id(),completed);
                     synchronized(run){replace(run,completed);save(run);}
                 }
-            },workers));
+                    if(completed.state().equals("SUBMITTED")||completed.state().equals("LATE_ARCHIVED")||!ResearchPolicy.retryable(completed.error()))break;
+                    correction=ResearchPolicy.repairable(completed.error())?completed.error():"";
+                    if(attempt==run.retryPolicy.maxAttempts())break;
+                    long delay=run.retryPolicy.delayMillis(attempt,retryAfter);
+                    if(TimeUnit.MILLISECONDS.toNanos(delay)>=batchDeadline-System.nanoTime())break;
+                    synchronized(run){replace(run,new Message(completed.id(),completed.actorId(),completed.role(),completed.stage(),"RETRY_WAITING",completed.startedAt(),completed.completedAt(),completed.error(),completed.readingOrder(),completed.answer(),attempt,clock.instant().plusMillis(delay)));save(run);}
+                    try{Thread.sleep(delay);}catch(InterruptedException canceled){Thread.currentThread().interrupt();break;}
+                    synchronized(run){replace(run,completed);save(run);}
+                }
+            });pending.add(future);runCalls.add(future);
         }
-        int seconds=settings.integer(stage==3?"GOLD_JUDGE_STAGE_SECONDS":run.horizon.equals("LONG")?"GOLD_LONG_STAGE_SECONDS":"GOLD_SHORT_STAGE_SECONDS",stage==3?180:run.horizon.equals("LONG")?180:120);
-        long batchDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(seconds);var all=CompletableFuture.allOf(pending.toArray(CompletableFuture[]::new));
-        while(!all.isDone()&&System.nanoTime()<batchDeadline&&current(run))try{all.get(Math.min(1000,Math.max(1,TimeUnit.NANOSECONDS.toMillis(batchDeadline-System.nanoTime()))),TimeUnit.MILLISECONDS);}
-            catch(TimeoutException timeout){/* Poll cancellation/deadline; late calls retain their provider lease and are archived. */}
+        while(pending.stream().anyMatch(future->!future.isDone())&&System.nanoTime()<batchDeadline&&current(run))Thread.sleep(Math.min(100,Math.max(1,TimeUnit.NANOSECONDS.toMillis(batchDeadline-System.nanoTime()))));
         synchronized(lock) {
             sealed[0]=true;
             synchronized(run){for(int i=0;i<run.messages.size();i++){var message=run.messages.get(i);
-                if(message.stage()==stage&&message.state().equals("WAITING_RESPONSE"))run.messages.set(i,new Message(message.id(),message.actorId(),message.role(),stage,"TIMED_OUT",message.startedAt(),clock.instant(),"STAGE_DEADLINE",message.readingOrder(),null));}save(run);}
-            return List.copyOf(accepted);
+                if(message.stage()==stage&&List.of("WAITING_RESPONSE","RETRY_WAITING").contains(message.state()))run.messages.set(i,new Message(message.id(),message.actorId(),message.role(),stage,"TIMED_OUT",message.startedAt(),clock.instant(),"STAGE_DEADLINE",message.readingOrder(),message.answer(),message.attempt(),null));}
+                if(run.status.equals("RUNNING")&&!run.sealedStages.contains(stage))run.sealedStages.add(stage);save(run);}
+            pending.forEach(future->{if(!future.isDone())future.cancel(true);runCalls.remove(future);});
+            return accepted.values().stream().sorted(Comparator.comparing(Message::actorId)).toList();
         }
     }
     private boolean current(Run run){synchronized(run){if(!run.status.equals("RUNNING"))return false;
-        if(run.decisionExpiresAt!=null&&!clock.instant().isBefore(run.decisionExpiresAt)){run.status="EXPIRED";run.error="DECISION_DEADLINE";return false;}return true;}}
+        run.decisionExpired=run.decisionExpiresAt!=null&&!clock.instant().isBefore(run.decisionExpiresAt);
+        if(run.workflowExpiresAt!=null&&!clock.instant().isBefore(run.workflowExpiresAt)){run.status="EXECUTION_TIMED_OUT";run.error="WORKFLOW_DEADLINE";run.executionState="NO_ORDER_EXECUTION_TIMEOUT";return false;}return true;}}
     public Run cancel(String id){var run=active.get(id);if(run==null)throw new IllegalArgumentException("RESEARCH_NOT_RUNNING");
-        synchronized(run){if(!run.status.equals("RUNNING"))throw new IllegalArgumentException("RESEARCH_NOT_RUNNING");run.status="CANCELED";run.error="CANCELED_BY_USER";run.completedAt=clock.instant();save(run);}return find(id);}
+        synchronized(run){if(!run.status.equals("RUNNING"))throw new IllegalArgumentException("RESEARCH_NOT_RUNNING");run.status="CANCELED";run.error="CANCELED_BY_USER";run.completedAt=clock.instant();save(run);}calls.getOrDefault(id,Set.of()).forEach(future->future.cancel(true));return find(id);}
     private void replace(Run run,Message replacement){for(int i=0;i<run.messages.size();i++)if(run.messages.get(i).id().equals(replacement.id())){run.messages.set(i,replacement);return;}}
     static String modelIdentity(AiRoute route){return modelIdentity(route.model());}
     static String modelIdentity(String model){String value=model.strip().toLowerCase(Locale.ROOT);int slash=value.indexOf('/');return slash<0?value:value.substring(slash+1);}
@@ -306,25 +360,27 @@ public class ResearchService {
     public synchronized Map<String,Object> configure(ScheduleConfig config){
         if(config.shortIntervalSeconds<30||config.shortIntervalSeconds>86400||config.longIntervalSeconds<60||config.longIntervalSeconds>172800||config.newsDebounceSeconds<1||config.newsDebounceSeconds>300||config.symbols==null||config.symbols.isEmpty()||config.symbols.size()>2||config.symbols.stream().anyMatch(s->!List.of("XAU_USDT","GATE:XAUUSD").contains(s))||new HashSet<>(config.symbols).size()!=config.symbols.size())throw new IllegalArgumentException("INVALID_RESEARCH_SCHEDULE");
         config.updatedAt=clock.instant();store.save("research-scheduling","config",config);store.event("research-scheduling","CONFIG_CHANGED",config);events.changed();return scheduling();}
-    public Map<String,Object> scheduling(){var queued=pendingNews.get();var config=scheduleConfig();return Map.of("automatic",config.automatic,"config",config,"running",running.availablePermits()==0,
+    public Map<String,Object> scheduling(){var queued=pendingNews.get();var config=scheduleConfig();var result=new LinkedHashMap<String,Object>(Map.of("automatic",config.automatic,"config",config,"running",running.availablePermits()==0||!recovery.isEmpty(),
         "lastAutomatic",lastAutomatic,"lastByProductHorizon",Map.copyOf(automaticTimes),"queuedNews",queued==null?"":queued.id(),"error",automaticError==null?"":automaticError,
         "state",!config.automatic?"DISABLED":running.availablePermits()==0?"RUNNING":"MONITORING",
-        "disabledProviders",settings.disabledAiProviders(),"routeReadiness",List.of(ai.routeReadiness("SHORT"),ai.routeReadiness("LONG")));}
-    @PreDestroy void stop(){workers.shutdownNow();}
+        "disabledProviders",settings.disabledAiProviders(),"routeReadiness",List.of(ai.routeReadiness("SHORT"),ai.routeReadiness("LONG"))));result.put("startRetryAt",Map.copyOf(automaticRetryTimes));result.put("pendingRecovery",recovery.size());return result;}
+    @PreDestroy void stop(){stopping=true;for(var run:active.values())synchronized(run){if(run.status.equals("RUNNING")){run.status="RECOVERY_PENDING";run.error="REQUEST_INTERRUPTED_BY_RESTART";run.completedAt=null;save(run);}}
+        workers.shutdownNow();try{workers.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}}
     @Scheduled(fixedDelay=10000,initialDelay=10000)
     void automatic() {
-        var config=scheduleConfig();if(!config.automatic||running.availablePermits()==0)return;
+        var config=scheduleConfig();if(stopping||!recovery.isEmpty()||!config.automatic||running.availablePermits()==0)return;
         var trigger=pendingNews.get();
         boolean newsDue=trigger!=null&&!trigger.at().plusSeconds(config.newsDebounceSeconds).isAfter(clock.instant());
         var candidates=new ArrayList<String>();for(var symbol:config.symbols)for(var horizon:List.of("SHORT","LONG"))candidates.add(symbol+"/"+horizon);
         candidates.sort(Comparator.comparing(key->automaticTimes.getOrDefault(key,Instant.EPOCH)));
-        for(var key:candidates){var parts=key.split("/");var snapshot=market.snapshot(parts[0]);boolean closedLong=parts[0].equals("GATE:XAUUSD")&&parts[1].equals("LONG")&&snapshot.state().equals("MARKET_CLOSED");
+        for(var key:candidates){if(automaticRetryTimes.getOrDefault(key,Instant.EPOCH).isAfter(clock.instant()))continue;
+            var parts=key.split("/");var snapshot=market.snapshot(parts[0]);boolean closedLong=parts[0].equals("GATE:XAUUSD")&&parts[1].equals("LONG")&&snapshot.state().equals("MARKET_CLOSED");
             if(!snapshot.state().equals("LIVE")&&!closedLong)continue;
             int interval=parts[1].equals("SHORT")?config.shortIntervalSeconds:config.longIntervalSeconds;
             var last=automaticTimes.getOrDefault(key,Instant.EPOCH);if(last.plusSeconds(interval).isAfter(clock.instant())&&(!newsDue||last.plusSeconds(30).isAfter(clock.instant())))continue;
-            try{start(parts[0],parts[1]);automaticError=null;if(newsDue)pendingNews.compareAndSet(trigger,null);}
-            catch(IllegalArgumentException invalid){automaticError=invalid.getMessage();}
-            automaticTimes.put(key,clock.instant());lastAutomatic=clock.instant();store.save("research-scheduling","times",automaticTimes);return;
+            try{start(parts[0],parts[1]);automaticError=null;automaticRetryTimes.remove(key);if(newsDue)pendingNews.compareAndSet(trigger,null);
+                automaticTimes.put(key,clock.instant());lastAutomatic=clock.instant();store.save("research-scheduling","times",automaticTimes);return;}
+            catch(IllegalArgumentException invalid){automaticError=invalid.getMessage();automaticRetryTimes.put(key,clock.instant().plusSeconds(policy(parts[1]).retryMaxSeconds()));events.changed();}
         }
     }
 }

@@ -41,7 +41,9 @@ public class ReviewService {
         var curve=curves.get(symbol);if(curve==null||curve.at().isBefore(clock.instant().minusSeconds(15))){curve=new Cached(clock.instant(),curve(store.accountSamples(symbol)));curves.put(symbol,curve);}
         result.putAll(curve.statistics());result.put("statisticsAt",curve.at());
         var runs=research.history().stream().filter(r->r.symbol.equals(symbol)).toList();
-        result.put("researchStatistics",Map.of("scope","LATEST_40_RESEARCH_RUNS","runs",runs.size(),"completed",runs.stream().filter(r->r.status.equals("COMPLETED")).count(),"lowQuorum",runs.stream().filter(r->r.status.equals("LOW_QUORUM")).count(),"failed",runs.stream().filter(r->List.of("FAILED","EXPIRED","COMPLETED_ORDER_REJECTED").contains(r.status)).count()));
+        result.put("researchStatistics",Map.of("scope","LATEST_40_RESEARCH_RUNS","runs",runs.size(),"completed",runs.stream().filter(r->List.of("COMPLETED","COMPLETED_WAIT","COMPLETED_EXPIRED").contains(r.status)).count(),
+            "staleEvidence",runs.stream().filter(r->r.status.equals("COMPLETED_EXPIRED")).count(),"running",runs.stream().filter(r->List.of("RUNNING","RECOVERY_PENDING").contains(r.status)).count(),
+            "lowQuorum",runs.stream().filter(r->r.status.equals("LOW_QUORUM")).count(),"failed",runs.stream().filter(r->List.of("FAILED","EXPIRED","COMPLETED_ORDER_REJECTED","EXECUTION_TIMED_OUT","FAILED_RECOVERY","INTERRUPTED_BY_RESTART").contains(r.status)).count(),"canceled",runs.stream().filter(r->r.status.equals("CANCELED")).count()));
         var models=new LinkedHashMap<String,Map<String,Object>>();
         for(var run:runs)for(var actor:run.actors){var messages=run.messages.stream().filter(m->m.actorId().equals(actor.id())).toList();
             var row=models.computeIfAbsent(actor.provider()+"/"+actor.model(),k->new LinkedHashMap<>(Map.of("provider",actor.provider(),"model",actor.model(),"calls",0L,"submitted",0L,"failed",0L,"late",0L,"durationMillis",0L)));

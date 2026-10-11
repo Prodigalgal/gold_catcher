@@ -2,7 +2,7 @@
 
 Java / React 黄金研究与内部交易模拟系统。交易行情统一使用 Gate：XAU_USDT 黄金永续、XAUUSD 黄金 CFD；指标与账务由 Java 计算，多个模型经 any2api 独立研究、交叉质疑、修订和裁决。
 
-当前版本 **0.4.5，内部模拟 Alpha**。独立登录页面采用 Session、CSRF 和单次 SHA-256 PoW，登录凭据只在后端配置。六个主页面展示行情、信息、讨论、两套独立内部账本、复盘和运行状态。
+当前版本 **0.4.6，内部模拟 Alpha**。独立登录页面采用 Session、CSRF 和单次 SHA-256 PoW，登录凭据只在后端配置。六个主页面展示行情、信息、讨论、两套独立内部账本、复盘和运行状态。
 
 Gate XAU_USDT 已接入 WebSocket 买卖一、成交和带序号的100档增量盘口，REST 基准用于序号衔接；另有公开规格、风险档位、六周期 K 线与历史资金费。行情事件持久化，连接状态、价格新鲜度、丢帧与归档范围分别展示。CFD 有公开 Bid/Ask、六周期 K 线、签名只读规格与佣金；独立 USD 账本按手数、合约单位和账户保证金计算报价情景，隔夜费类型与结算时刻未核实时标注成本不完整。系统没有外部下单调用。
 
@@ -63,3 +63,5 @@ MIMO 压缩无需返回引用或片段编号，Java 在后台关联原文与版�
 CI 验证 Java、React、清单及发布变更；Release 构建 ARM64 镜像，按 digest 提升 GitOps，Argo CD 同步后以 PoW Session 核验 API、Web 源码版本和 Gate 行情。验收模式明确为 INTERNAL_SIMULATION_ALPHA，不将 CFD 完整模拟、全 tick 回放或盈利能力列为已完成能力。
 
 源码中的部署模板保持零副本。生产激活记录与实时验证分开记录，不能把 CI 通过当作已经部署。
+
+研究协议与超时恢复规则见 [docs/research-resilience.md](docs/research-resilience.md)。

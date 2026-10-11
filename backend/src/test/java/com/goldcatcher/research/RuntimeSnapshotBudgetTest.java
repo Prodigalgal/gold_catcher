@@ -45,14 +45,15 @@ class RuntimeSnapshotBudgetTest {
   for(var row:dashboard.path("analysis").path("supplemental").path("observations")){var o=f.mapper.treeToValue(row,SupplementalSources.Observation.class);f.store.save("public-observation-version",NewsService.hash(o.id()),o);}
   var savedExtra=dashboard.path("analysis").path("supplemental");f.store.save("public-depth","XAU_USDT",f.mapper.treeToValue(savedExtra.path("depth"),SupplementalSources.Depth.class));f.store.save("public-trades","XAU_USDT",f.mapper.treeToValue(savedExtra.path("trades"),SupplementalSources.Trades.class));
   var analysis=new TrendAnalysis(sources,news,market,f.store,f.mapper,f.clock,events,supplemental);
-  List<ContextWindow.Prepared> prepared=Collections.synchronizedList(new ArrayList<>());
+  List<ContextWindow.Prepared> prepared=Collections.synchronizedList(new ArrayList<>()),repaired=Collections.synchronizedList(new ArrayList<>());
   when(ai.selectRoutes(anyList(),anyList())).thenAnswer(call->call.getArgument(0));
-  when(ai.complete(any(),anyString(),any())).thenAnswer(call->{
+  when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
    var route=(RuntimeSettings.AiRoute)call.getArgument(0);String instruction=call.getArgument(1);var packet=f.mapper.valueToTree(call.getArgument(2));
    Map<String,Object> request=new LinkedHashMap<>();request.put("model",route.model());
-   request.put("response_format",Map.of("type","json_object"));
-   request.put("messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content","")));request.put("max_tokens",route.outputReserve());
+   request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(packet.path("phase").asInt()==3,false)),Map.of("role","user","content","")));request.put("max_tokens",route.outputReserve());
    var limits=ContextWindow.limits(route,f.mapper.createObjectNode());var result=ContextWindow.prepare(f.mapper,request,packet,limits);prepared.add(result);
+   var retryPacket=(tools.jackson.databind.node.ObjectNode)packet.deepCopy();retryPacket.putObject("formatCorrection").put("error","INVALID_EVIDENCE_REFERENCE").put("instruction","只修复所报格式/引用错误，保持冻结证据；方向仅BULLISH/BEARISH/UNKNOWN/MIXED；riskAssessment≤120字，invalidate≤80字，详情写output；不得补造数值或引用。");
+   var repair=ContextWindow.prepare(f.mapper,request,retryPacket,limits);repaired.add(repair);assertThat(ContextWindow.fits(repair.sent(),limits,true)).isTrue();
    Files.writeString(Path.of("../artifacts/offline-request-"+route.id()+"-"+packet.path("phase").asInt()+".json"),result.body());
    System.out.println(route.id()+" phase="+packet.path("phase").asInt()+" chars="+result.sent().characters()+" bytes="+result.sent().bytes()+" utilization="+ContextWindow.utilization(result.sent(),limits));
    var output=f.mapper.createObjectNode().put("title","离线预算验证").put("analysisSummary","研究观点".repeat(90)).put("output","解释与反证".repeat(110)).put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN").put("changes","保留修订".repeat(20));
@@ -74,7 +75,7 @@ class RuntimeSnapshotBudgetTest {
   try{
    var run=research.start("XAU_USDT","SHORT");long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
    while(research.find(run.id).status.equals("RUNNING")&&System.nanoTime()<deadline)Thread.sleep(20);
-   assertThat(research.find(run.id).status).isEqualTo("COMPLETED");assertThat(prepared).hasSize(12);
+   assertThat(research.find(run.id).status).isEqualTo("COMPLETED");assertThat(prepared).hasSize(12);assertThat(repaired).hasSize(12);
    var limits=ContextWindow.limits(f.settings.routes().getFirst(),f.mapper.createObjectNode());for(var packet:prepared)assertThat(ContextWindow.fits(packet.sent(),limits,true)).isTrue();
    assertThat(run.evidence.path("analysis").path("drivers").path("csv").asText().split("\n")).hasSize(dashboard.path("analysis").path("drivers").size());
    assertThat(run.evidence.path("analysis").path("horizons").isMissingNode()).isTrue();

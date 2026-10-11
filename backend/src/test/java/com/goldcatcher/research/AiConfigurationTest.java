@@ -47,6 +47,21 @@ class AiConfigurationTest {
         assertThat(f.settings.text("GOLD_COMPRESSION_ENABLED","true")).isEqualTo("false");
     }
     @Test void staleSaveCannotOverwriteNewerVersion(){service.save(update(0,null));assertThatThrownBy(()->service.save(update(0,"stale-test-secret"))).hasMessage("AI_CONFIG_REVISION_CONFLICT");assertThat(service.view()).containsEntry("revision",1L);}
+    @Test void retryPolicyPersistsAndOldEncryptedRevisionCanRestoreBindingsAfterProviderChanges(){
+        var u=update(0,"first-test-secret");var policy=new ResearchPolicy(4,1,15,300,300,1200,180);
+        service.save(new AiConfiguration.Update(0,u.providers(),u.shortRoutes(),u.longRoutes(),true,u.compression(),policy,null));
+        var frozen=f.settings.researchRouteSnapshot("SHORT");var publicSnapshot=f.mapper.valueToTree(Map.of("revision",frozen.revision(),"routes",frozen.routes()));
+        service.save(update(1,"second-test-secret"));
+        var restarted=new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote);restarted.recover();
+        assertThat(restarted.policy("SHORT")).isEqualTo(policy);assertThat(restarted.policy(1,"SHORT")).isEqualTo(policy);
+        var restored=restarted.routesForRun(publicSnapshot,"SHORT");assertThat(f.settings.secret(restored.getFirst())).isEqualTo("first-test-secret");
+        assertThat(f.settings.secret(f.settings.routes("SHORT").getFirst())).isEqualTo("second-test-secret");
+        assertThat(f.mapper.writeValueAsString(restarted.view())).doesNotContain("first-test-secret","second-test-secret","encryptedApiKey");
+    }
+    @Test void invalidRetryPolicyCannotPartiallyPersistConfiguration(){
+        var u=update(0,null);assertThatThrownBy(()->service.save(new AiConfiguration.Update(0,u.providers(),u.shortRoutes(),u.longRoutes(),true,u.compression(),new ResearchPolicy(100,2,30,360,360,1440,240),null))).hasMessage("INVALID_RESEARCH_RETRY_POLICY");
+        assertThat(service.view()).containsEntry("revision",0L);assertThat(f.store.events("ai-configuration",10)).isEmpty();
+    }
     @Test void invalidEndpointDoesNotPartiallySaveConfiguration(){
         var u=update(0,null);var providers=new ArrayList<>(u.providers());var p=providers.getFirst();providers.set(0,new AiConfiguration.ProviderInput(p.id(),p.label(),"https://user:secret@example.test/v1?token=key",p.protocol(),p.catalogMode(),null));
         assertThatThrownBy(()->service.save(new AiConfiguration.Update(0,providers,u.shortRoutes(),u.longRoutes(),true,u.compression()))).hasMessage("INVALID_AI_ENDPOINT");

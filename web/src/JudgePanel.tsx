@@ -1,13 +1,13 @@
 import type { Run } from './api';
 
 const panelStates: Record<string, string> = { MAJORITY: '形成多数', WAIT_MAJORITY: '多数选择等待', NO_MAJORITY: '未形成多数' };
-const messageStates: Record<string, string> = { WAITING_RESPONSE: '等待返回', SUBMITTED: '有效裁决', FAILED: '裁决失败', TIMED_OUT: '裁决超时', LATE_ARCHIVED: '迟到归档' };
+const messageStates: Record<string, string> = { WAITING_RESPONSE: '等待返回', RETRY_WAITING: '等待重试', INTERRUPTED: '重启中断', SUBMITTED: '有效裁决', FAILED: '裁决失败', TIMED_OUT: '裁决超时', LATE_ARCHIVED: '迟到归档' };
 
 export default function JudgePanel({ run, showMessage }: { run: Run; showMessage: () => void }) {
   const judges = run.actors.filter(actor => actor.id.startsWith('J'));
   const panel = run.adjudication;
   const minimum = run.modelDiversity?.minimumJudges ?? 1;
-  const submitted = run.messages.filter(message => message.stage === 3 && message.state === 'SUBMITTED').length;
+  const submitted = new Set(run.messages.filter(message => message.stage === 3 && message.state === 'SUBMITTED').map(message=>message.actorId)).size;
   const reused = judges.filter(judge=>run.actors.some(actor=>!actor.id.startsWith('J')&&actor.model===judge.model));
   const candidate = (id: string) => id === 'WAIT' ? '等待' : `候选 ${run.messages.find(message => message.id === id)?.actorId ?? id}`;
   return <section className="gc-panel gc-judge-panel" aria-label="裁决投票">
@@ -15,12 +15,14 @@ export default function JudgePanel({ run, showMessage }: { run: Run; showMessage
     <p className="gc-small">{minimum >= 3 ? `本轮以新上下文同时盲评，彼此看不到裁决稿。${reused.length ? `${reused.length} 个裁决模型也参与了前面的辩论。` : '裁决使用另行配置的模型。'}` : '此记录采用历史的单模型裁决配置。'}</p>
     {judges.map(judge => {
       const vote = panel?.votes.find(item => item.actorId === judge.id);
-      const message = run.messages.find(item => item.stage === 3 && item.actorId === judge.id);
-      const choice = vote?.selectedCandidateId ?? message?.answer?.output?.selectedCandidateId;
+      const history=run.messages.filter(item=>item.stage===3&&item.actorId===judge.id);
+      const message = history.find(item=>item.state==='SUBMITTED')??history.at(-1);
+      const choice = vote?.selectedCandidateId ?? (message?.state==='SUBMITTED'?message.answer?.output?.selectedCandidateId:undefined);
       return <article className="gc-judge-vote" key={judge.id}>
         <div className="gc-panel-head"><b>{judge.id} · {judge.model.split('/').pop()}</b><span className={`gc-badge ${message?.state === 'FAILED' || message?.state === 'TIMED_OUT' ? 'gc-negative' : ''}`}>{message ? messageStates[message.state] ?? message.state : '尚未裁决'}</span></div>
         {choice && <p className="gc-judge-choice">选择：{candidate(choice)}{choice !== 'WAIT' && <a className="gc-text-button" href={`#message-${choice}`} onClick={showMessage}>查看候选 ↗</a>}</p>}
         {message?.error && <p className="gc-live-error">{message.error}</p>}
+        {message && <small>第 {message.attempt||1}/{run.retryPolicy?.maxAttempts??1} 次尝试{message.retryAt ? ' · 已安排重试' : ''}</small>}
         {(vote?.reason || message?.answer?.output?.output) && <details><summary>裁决理由</summary><p className="gc-live-prose">{vote?.reason ?? message?.answer?.output?.output}</p></details>}
       </article>;
     })}
