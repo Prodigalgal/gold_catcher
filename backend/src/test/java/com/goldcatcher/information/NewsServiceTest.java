@@ -8,6 +8,23 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void aBusyMediaFeedCannotExcludeOfficialFamiliesBeforeTheResearchLimit(){
+        var f=new TestSupport();var news=new NewsService(f.settings,mock(RemoteHttp.class),f.store,new EventHub(),f.clock);
+        for(int i=0;i<20;i++){
+            var media=new NewsService.News("media-"+i,"CNBC_WORLD","Media "+i,"Public summary","https://www.cnbc.com/story-"+i,
+                f.clock.instant().minusSeconds(10+i),f.clock.instant().minusSeconds(1),"MEDIA_REPORT",1,"media-"+i);
+            f.store.save("news",media.id(),media);
+        }
+        int age=3600;for(String source:List.of("BOE_NEWS","ECB_PRESS","FED_PRESS")){
+            var official=new NewsService.News(source,source,"Official release","Official facts","https://example.test/"+source,
+                f.clock.instant().minusSeconds(age++),f.clock.instant().minusSeconds(2),"OFFICIAL",1,source);
+            f.store.save("news",official.id(),official);
+        }
+        assertThat(news.evidence(f.clock.instant())).hasSize(23);
+        var frozen=news.freezeEvidence(f.clock.instant(),"diverse",4);
+        assertThat(frozen).hasSize(4).extracting(row->row.get("source")).containsExactly("CNBC_WORLD","BOE_NEWS","ECB_PRESS","FED_PRESS");
+        assertThat(news.freezeEvidence(f.clock.instant(),"small-budget",2)).hasSize(2).extracting(row->row.get("source")).containsExactly("CNBC_WORLD","BOE_NEWS");
+    }
     @Test void publisherColumnsDeduplicateKnowledgeAndKeepPublicSummarySemantics() throws Exception {
         var f=new TestSupport();var remote=mock(RemoteHttp.class);var news=new NewsService(f.settings,remote,f.store,new EventHub(),f.clock);
         String xml="<rss><channel><item><guid>story</guid><title>Treasury yields fall</title><link>https://www.cnbc.com/2026/10/07/treasury.html</link><description>Published public summary</description><pubDate>Wed, 07 Oct 2026 23:58:00 GMT</pubDate></item></channel></rss>";

@@ -92,7 +92,7 @@ public class ResearchService {
         Any2ApiClient ai,ObjectMapper mapper,EventHub events,Clock clock,TrendAnalysis analysis,EvidenceCompression compression,AiConfiguration configuration) {
         this.settings=settings;this.store=store;this.market=market;this.news=news;this.ledger=ledger;this.ai=ai;this.mapper=mapper;this.events=events;this.clock=clock;
         news.onNews(id->pendingNews.set(new NewsTrigger(id,clock.instant())));
-        this.analysis=analysis;this.compression=compression;this.configuration=configuration;if(compression!=null)compression.researchBusy(()->running.availablePermits()==0);
+        this.analysis=analysis;this.compression=compression;this.configuration=configuration;
     }
     @PostConstruct void recover(){for(var run:store.list("research",Run.class,100))if(List.of("RUNNING","RECOVERY_PENDING").contains(run.status)){
         if(run.retryPolicy==null)run.retryPolicy=policy(run.horizon);

@@ -5,6 +5,57 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
+    @Test void openAny2apiCircuitCanAttemptRecoveryWithoutTreatingItAsConfirmedHealthy()throws Exception{
+        var f=new TestSupport();f.environment.setProperty("GOLD_AI_ROUTES_JSON",java.nio.file.Files.readString(java.nio.file.Path.of("../config/ai-routes.fast.example.json")));
+        for(var route:f.settings.allRoutes())f.environment.setProperty(route.apiKeyEnv(),"test-only");var remote=mock(RemoteHttp.class);
+        String recovering="{\"cataloged\":true,\"available\":false,\"runtime\":{\"circuit_state\":\"OPEN\",\"available_account_count\":2,\"probe_status\":\"READY\"}}";
+        when(remote.send(any(),eq(500_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);return response(200,request.uri().getPath().contains("mimo")?recovering:"{\"available\":true}");});
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var selected=client.selectRoutes(f.settings.routes(),java.util.List.of());
+        assertThat(selected).hasSize(6);var readiness=f.mapper.valueToTree(client.routeReadiness("SHORT"));
+        var checkStates=new java.util.ArrayList<String>();for(var check:readiness.path("checks"))checkStates.add(check.path("state").asText());
+        assertThat(checkStates).contains("MODEL_RECOVERY_READY");
+        assertThat(client.states().stream().filter(state->state.provider().equals("mimo")).findFirst().orElseThrow().catalog().path("available").asBoolean()).isFalse();
+        String output="{\"title\":\"等待\",\"output\":\"等待条件\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"UNKNOWN\",\"plan\":{\"action\":\"WAIT\"}}";
+        var valid=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));
+        when(remote.send(any(),eq(1_000_000))).thenReturn(valid);
+        var mimo=selected.stream().filter(route->route.provider().equals("mimo")&&!route.judge()).findFirst().orElseThrow();
+        assertThat(client.complete(mimo,"冻结证据",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(2)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+        verify(remote,times(1)).send(any(),eq(1_000_000));
+    }
+    @Test void forcedOpenMissingAccountsAndUnverifiedModelsNeverUseTheRecoveryException()throws Exception{
+        for(String blocked:java.util.List.of(
+            "{\"cataloged\":true,\"available\":false,\"runtime\":{\"circuit_state\":\"FORCED_OPEN\",\"available_account_count\":2,\"probe_status\":\"READY\"}}",
+            "{\"cataloged\":true,\"available\":false,\"runtime\":{\"circuit_state\":\"OPEN\",\"available_account_count\":0,\"probe_status\":\"READY\"}}",
+            "{\"cataloged\":true,\"available\":false,\"runtime\":{\"circuit_state\":\"OPEN\",\"available_account_count\":2,\"probe_status\":\"FAILED\"}}",
+            "{\"available\":false,\"runtime\":{\"circuit_state\":\"OPEN\",\"available_account_count\":2,\"probe_status\":\"READY\"}}")){
+            var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
+            var catalog=response(200,blocked);when(remote.send(any(),eq(500_000))).thenReturn(catalog);var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+            var route=new AiRoute("blocked","mimo","mimo/test","https://localhost/mimo/v1","TEST",10000,16000,30000,2,1000,2,false);
+            assertThatThrownBy(()->client.complete(route,"观察",java.util.Map.of(),f.clock.instant().plusSeconds(2))).hasMessage("MODEL_NOT_AVAILABLE");
+            verify(remote,never()).send(any(),eq(1_000_000));
+        }
+    }
+    @Test void aResearchRequestPreemptsOnlyItsProvidersCompressorAndReleasesTheLease()throws Exception{
+        var f=new TestSupport();f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");f.environment.setProperty("TEST","test-only");
+        var remote=mock(RemoteHttp.class);var catalog=response(200,"{\"available\":true}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
+        var started=new java.util.concurrent.CountDownLatch(1);var compressor=new java.util.concurrent.atomic.AtomicReference<Thread>();
+        String output="{\"title\":\"等待\",\"output\":\"观察\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"UNKNOWN\",\"plan\":{\"action\":\"WAIT\"}}";
+        when(remote.send(any(),eq(1_000_000))).thenAnswer(call->{
+            if(Thread.currentThread()==compressor.get()){started.countDown();new java.util.concurrent.CountDownLatch(1).await(10,java.util.concurrent.TimeUnit.SECONDS);throw new AssertionError("compressor was not preempted");}
+            return response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));
+        });
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var mimo=f.settings.compressionRoute();
+        var research=new AiRoute("research","mimo","mimo/pro","https://localhost/mimo/v1","TEST",10000,16000,30000,2,1000,2,false);
+        var other=new AiRoute("other","deepseek","deepseek/default","https://localhost/deepseek/v1","TEST",10000,16000,30000,2,1000,2,false);
+        try(var workers=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()){
+            var pending=workers.submit(()->{compressor.set(Thread.currentThread());try{client.compress(mimo,"摘要",java.util.Map.of("text","官方事实"));return "UNEXPECTED_SUCCESS";}catch(Exception failure){return Any2ApiClient.safeError(failure);}});
+            assertThat(started.await(2,java.util.concurrent.TimeUnit.SECONDS)).isTrue();assertThat(client.compressionAvailable(mimo)).isFalse();
+            assertThat(client.complete(other,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(2)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+            assertThat(pending.isDone()).isFalse();
+            assertThat(client.complete(research,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(2)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+            assertThat(pending.get(2,java.util.concurrent.TimeUnit.SECONDS)).isEqualTo("REQUEST_CANCELED");assertThat(client.compressionAvailable(mimo)).isTrue();
+        }
+    }
     @SuppressWarnings("unchecked") private java.net.http.HttpResponse<byte[]> response(int status,String body){var result=(java.net.http.HttpResponse<byte[]>)mock(java.net.http.HttpResponse.class);when(result.statusCode()).thenReturn(status);when(result.headers()).thenReturn(java.net.http.HttpHeaders.of(java.util.Map.of(),(a,b)->true));when(result.body()).thenReturn(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));return result;}
     @Test void withdrawnProviderNeverReachesCatalogOrInferenceEvenThroughDirectCalls() {
         var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);

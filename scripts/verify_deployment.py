@@ -63,8 +63,9 @@ expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION',
                      'RESEARCH_SEAT_RETRIES', 'STALE_EVIDENCE_ANALYSIS_CONTINUES', 'RESEARCH_CHECKPOINT_RECOVERY', 'UNIFIED_RESEARCH_TEXT_PROTOCOL',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
-                     'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS'}
-if api.get('version') != '0.4.6' or not expected_features <= set(api.get('features', [])):
+                     'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS',
+                     'DIVERSE_NEWS_CANDIDATE_POOL', 'PREEMPTIBLE_MIMO_COMPRESSION', 'ANY2API_CIRCUIT_RECOVERY'}
+if api.get('version') != '0.4.7' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -137,6 +138,13 @@ for key in ('shortPolicy', 'longPolicy'):
 assert schedule.get('state') in {'DISABLED', 'RUNNING', 'MONITORING'}
 if compression.get('provider') != 'mimo' or compression.get('voting') is not False:
     raise SystemExit('MIMO preprocessing role mismatch')
+if compression.get('state') not in {'DISABLED', 'CREDENTIAL_MISSING', 'RUNNING', 'UPSTREAM_BACKOFF', 'PAUSED_PROVIDER_RESEARCH', 'SCANNING', 'QUEUED', 'ARTICLE_RETRY_WAIT', 'NO_ELIGIBLE_BODY', 'UP_TO_DATE'}:
+    raise SystemExit('MIMO preprocessing scheduling state missing')
+queue = compression.get('queue') or {}
+for field in ('candidateArticles', 'eligibleBodies', 'completedSummaries', 'queuedArticles', 'processingArticles', 'retryingArticles', 'missingBodies', 'unsuitableBodies'):
+    assert isinstance(queue.get(field), int) and queue[field] >= 0
+assert queue['candidateArticles'] == queue['eligibleBodies'] + queue['missingBodies'] + queue['unsuitableBodies']
+assert queue['eligibleBodies'] == queue['completedSummaries'] + queue['queuedArticles'] + queue['processingArticles'] + queue['retryingArticles']
 if not any(model['routeId'] == 'compressor-mimo' and model['provider'] == 'mimo'
            and model['credentialConfigured'] for model in perpetual['models']):
     raise SystemExit('MIMO preprocessing route is not credential-configured')
