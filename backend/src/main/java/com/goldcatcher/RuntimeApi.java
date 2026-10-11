@@ -32,13 +32,15 @@ public class RuntimeApi {
     private final SourceReliability reliability;private final DriverSources drivers;private final SupplementalSources supplemental;
     private final MarketArchive archive;
     private final ReviewService reviews;private final EvidenceCompression compression;
+    private final AiConfiguration aiConfiguration;
     public RuntimeApi(MarketFeed market,NewsService news,SimulationLedger ledger,ResearchService research,Any2ApiClient ai,
-        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis,SourceReliability reliability,DriverSources drivers,SupplementalSources supplemental,MarketArchive archive,ReviewService reviews,EvidenceCompression compression) {
+        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis,SourceReliability reliability,DriverSources drivers,SupplementalSources supplemental,MarketArchive archive,ReviewService reviews,EvidenceCompression compression,AiConfiguration aiConfiguration) {
         this.market=market;this.news=news;this.ledger=ledger;this.research=research;this.ai=ai;this.settings=settings;this.events=events;this.store=store;this.clock=clock;
         this.funding=funding;this.proxy=proxy;this.analysis=analysis;
         this.reliability=reliability;this.drivers=drivers;this.supplemental=supplemental;
         this.archive=archive;
         this.reviews=reviews;this.compression=compression;
+        this.aiConfiguration=aiConfiguration;
     }
     @GetMapping("/session") public Map<String,String> session(Principal principal,CsrfToken token) {
         return Map.of("username",principal.getName(),"csrfHeader",token.getHeaderName(),"csrfToken",token.getToken());
@@ -74,6 +76,9 @@ public class RuntimeApi {
     @GetMapping("/research/{id}") public ResearchService.Run run(@PathVariable String id){return research.find(id);}
     @PostMapping("/research/{id}/cancel") public ResearchService.Run cancelResearch(@PathVariable String id){return research.cancel(id);}
     @PostMapping("/research/scheduling") public Map<String,Object> scheduling(@RequestBody ResearchService.ScheduleConfig config){return research.configure(config);}
+    @GetMapping("/ai/configuration") public Map<String,Object> aiConfiguration(){return aiConfiguration.view();}
+    @PostMapping("/ai/configuration") public Map<String,Object> configureAi(@RequestBody AiConfiguration.Update config){return aiConfiguration.save(config);}
+    @PostMapping("/ai/configuration/models") public Map<String,Object> refreshModels(){return aiConfiguration.refreshCatalogs();}
     @GetMapping("/market/candles") public Map<String,Object> candles(@RequestParam(defaultValue="XAU_USDT") String symbol,@RequestParam(defaultValue="5") String frame){product(symbol);return Map.of("symbol",symbol,"frame",frame,"candles",market.candles(symbol,frame));}
     @GetMapping("/research/{id}/export") public ResponseEntity<ResearchService.Run> exportResearch(@PathVariable String id){var run=research.find(id);return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=research-"+run.id+".json").body(run);}
     @GetMapping("/market/archive") public Map<String,Object> archive(@RequestParam(defaultValue="XAU_USDT") String symbol,@RequestParam(defaultValue="0") long after,@RequestParam(defaultValue="100") int limit) {

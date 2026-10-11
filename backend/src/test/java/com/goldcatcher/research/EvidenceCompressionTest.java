@@ -68,6 +68,13 @@ class EvidenceCompressionTest {
         f.environment.setProperty("GOLD_AI_COMPRESSION_ROUTE_JSON",f.mapper.writeValueAsString(wrong));
         assertThatThrownBy(f.settings::compressionRoute).hasMessage("COMPRESSION_FIXED_TO_MIMO");
     }
+    @Test void endpointChangeCannotReuseSummaryFromThePreviousProviderEndpoint()throws Exception{
+        answer("{\"summary\":\"官方事实摘要\"}");var original=compression.process(article,body);
+        f.environment.setProperty("GOLD_AI_MIMO_BASE_URL","https://new.example.test/mimo/v1");
+        var frozen=Map.<String,Object>of("id","a","bodyHash",body.hash(),"excerpt","original fallback");
+        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"new-endpoint").getFirst().get("excerpt")).isEqualTo("original fallback");
+        var updated=compression.process(article,body);assertThat(updated.cacheKey()).isNotEqualTo(original.cacheKey());verify(ai,times(2)).compress(any(),anyString(),any());
+    }
     @Test void upstreamOutageBacksOffAcrossArticlesInsteadOfSendingEveryPendingDocument() throws Exception {
         f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(20));
         var second=new NewsService.News("b",article.source(),article.title(),article.excerpt(),article.link(),article.publishedAt(),article.receivedAt(),article.verification(),article.version(),article.contentHash());

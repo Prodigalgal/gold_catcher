@@ -30,7 +30,7 @@ function CompressionAudit({ id, session }: { id: string; session: Session }) {
 }
 export function FrozenCompression({ data, session }: { data: Preprocessing; session: Session }) {
   return <article className="gc-live-message gc-compression-message"><div className="gc-live-avatar">P</div><div className="gc-live-bubble">
-    <div className="gc-live-message-meta"><b>MIMO · 前置信息压缩</b><span>不参与投票</span><time>{stamp(data.cutoff)}</time></div>
+    <div className="gc-live-message-meta"><b>MIMO · 前置信息压缩</b><span>本次压缩不计票</span><time>{stamp(data.cutoff)}</time></div>
     <p className="gc-small">各位研究成员收到同一份摘要。此处显示本轮使用的压缩版本，后续更新不改写当前研究。</p>
     {data.articles.map(article => <div className="gc-compression-row" key={article.newsId}><b>{names[article.state] ?? article.state}</b><small>原文 {article.originalCharacters ?? '未取得'} → 摘要 {article.sentCharacters} 字符{article.totalChunks && ` · ${article.processedChunks}/${article.totalChunks} 分块`}</small>{article.resultId && <CompressionAudit id={article.resultId} session={session}/>}</div>)}
     {!data.articles.length && <p className="gc-small">本轮没有入选新闻正文。</p>}
@@ -41,7 +41,7 @@ export default function CompressionPanel({ data, session }: { data?: Compression
   return <section className="gc-panel">
     <div className="gc-panel-head"><div><h3>MIMO 前置信息压缩</h3><span className="gc-small">{data.model} · 原文 → 精华摘要 → 多模型研究</span></div><span className="gc-badge">{!data.enabled ? '已停用' : data.running ? '提炼摘要中' : data.retryAt ? '等待上游恢复' : '等待新正文'}</span></div>
     <p className="gc-live-prose">{data.coverage}</p>
-    <p className="gc-small">摘要保留关键事实、条件和不确定性。长文章分块压缩后合并；原文和处理记录可展开查看。</p>
+    <p className="gc-small">摘要保留关键事实、条件和不确定性。长文章分块压缩后合并；原文和处理记录可展开查看。压缩调用不计票，MIMO 另行参与辩论和裁决。</p>
     {data.error && <p className="gc-live-error">{data.error}</p>}
     {data.retryAt && <p className="gc-small">连续上游失败 {data.consecutiveFailures ?? 1} 次 · 最早重试：{stamp(data.retryAt)}。未完成摘要的文章继续使用原文摘录。</p>}
     {data.lastSuccessfulAt && <p className="gc-small">最近一次摘要请求成功：{stamp(data.lastSuccessfulAt)}</p>}

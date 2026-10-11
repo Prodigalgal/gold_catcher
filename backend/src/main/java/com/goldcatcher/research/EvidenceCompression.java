@@ -55,7 +55,8 @@ public class EvidenceCompression {
     }
     public void researchBusy(BooleanSupplier busy){researchBusy=busy;}
     public boolean enabled(){return Boolean.parseBoolean(settings.text("GOLD_COMPRESSION_ENABLED","true"));}
-    private String key(NewsService.News article,NewsService.ArticleBody body){return NewsService.hash(VERSION+"|"+NewsService.hash(INSTRUCTION)+"|"+settings.compressionRoute().model()+"|"+article.id()+"|"+article.contentHash()+"|"+body.hash());}
+    private String key(NewsService.News article,NewsService.ArticleBody body){return key(article,body,settings.compressionRoute());}
+    private String key(NewsService.News article,NewsService.ArticleBody body,RuntimeSettings.AiRoute route){return NewsService.hash(VERSION+"|"+NewsService.hash(INSTRUCTION)+"|"+route.model()+"|"+route.baseUrl()+"|"+article.id()+"|"+article.contentHash()+"|"+body.hash());}
     public Result find(String id){return store.find("compression-result",id,Result.class).orElseThrow(()->new IllegalArgumentException("COMPRESSION_NOT_FOUND"));}
     public Map<String,Object> detail(String id){var result=find(id);return Map.of("result",result,"chunks",result.chunkIds().stream().map(chunk->{var row=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(store.find("compression-chunk-result",chunk,ChunkResult.class).orElseThrow());row.set("input",store.find("compression-input",chunk,JsonNode.class).orElse(null));return row;}).toList());}
     public Map<String,Object> status(){var route=settings.compressionRoute();var recent=store.list("compression-result",Result.class,60).stream().filter(r->VERSION.equals(r.method())).limit(12).toList();
@@ -102,7 +103,7 @@ public class EvidenceCompression {
         store.save("compression-runtime",checkpointId,new Checkpoint(consecutiveFailures,retryAt,error,lastSuccessfulAt));
     }
     Result process(NewsService.News article,NewsService.ArticleBody body){
-        var route=settings.compressionRoute();String cacheKey=key(article,body);var chunks=chunks(body.text(),cacheKey,route);
+        var route=settings.compressionRoute();String cacheKey=key(article,body,route);var chunks=chunks(body.text(),cacheKey,route);
         var summaries=new ArrayList<String>();var chunkIds=new ArrayList<String>();int processed=0,attempted=0;String error=null;Instant started=clock.instant();
         int maximum=Math.max(1,Math.min(8,settings.integer("GOLD_COMPRESSION_CHUNKS_PER_PASS",2)));long passDeadline=nanos.getAsLong()+TimeUnit.SECONDS.toNanos(100);
         for(var chunk:chunks){

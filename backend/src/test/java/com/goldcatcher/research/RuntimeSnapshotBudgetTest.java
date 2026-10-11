@@ -59,6 +59,7 @@ class RuntimeSnapshotBudgetTest {
    var peers=output.putArray("quotedMessages");for(var peer:packet.path("peers"))peers.add(peer.path("id").asText());output.putArray("evidenceRefs").add("analysis:drivers").add("market:quote");output.putArray("impacts");var plan=output.putObject("plan").put("action",scenario.equals("WAIT")?"WAIT":"CREATE");
    plan.put("riskAssessment","风险".repeat(60)).put("invalidate","条件".repeat(40));
    if(!scenario.equals("WAIT")){plan.put("side","BUY").put("type","LIMIT").put("quantity","0.01").put("leverage","50").put("entryPrice",snapshot.quote().ask().toPlainString()).put("stopLoss",snapshot.quote().ask().subtract(new java.math.BigDecimal("1")).toPlainString()).put("takeProfit",snapshot.quote().ask().add(new java.math.BigDecimal("1")).toPlainString()).put("trailingDistance","1").put("expiresAt",f.clock.instant().plusSeconds(300).toString()).put("holdUntil",f.clock.instant().plusSeconds(3600).toString());}
+   if(packet.path("phase").asInt()==3){output.remove("plan");output.put("selectedCandidateId",scenario.equals("WAIT")?"WAIT":packet.path("peers").path(0).path("id").asText());}
    return new Any2ApiClient.Answer(route.model(),"离线验证","EXPLICIT_OUTPUT_SUMMARY",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",new Any2ApiClient.Budget(result.sent().bytes(),result.sent().characters(),result.sent().inputEstimate(),2,route.outputReserve(),"offline","CONFIG","OFFLINE"),1);
   });
   var compression=new EvidenceCompression(f.settings,news,ai,f.store,f.mapper,f.clock,events);
@@ -73,7 +74,7 @@ class RuntimeSnapshotBudgetTest {
   try{
    var run=research.start("XAU_USDT","SHORT");long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
    while(research.find(run.id).status.equals("RUNNING")&&System.nanoTime()<deadline)Thread.sleep(20);
-   assertThat(research.find(run.id).status).isEqualTo("COMPLETED");assertThat(prepared).hasSize(10);
+   assertThat(research.find(run.id).status).isEqualTo("COMPLETED");assertThat(prepared).hasSize(12);
    var limits=ContextWindow.limits(f.settings.routes().getFirst(),f.mapper.createObjectNode());for(var packet:prepared)assertThat(ContextWindow.fits(packet.sent(),limits,true)).isTrue();
    assertThat(run.evidence.path("analysis").path("drivers").path("csv").asText().split("\n")).hasSize(dashboard.path("analysis").path("drivers").size());
    assertThat(run.evidence.path("analysis").path("horizons").isMissingNode()).isTrue();
