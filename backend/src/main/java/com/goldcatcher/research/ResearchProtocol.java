@@ -76,7 +76,10 @@ final class ResearchProtocol {
             else throw invalid(key.startsWith("plan.")&&judging?"JUDGE_PLAN":"UNKNOWN_FIELD_"+fieldCode(key));
         }
         if(fields.containsKey("impacts")&&!groups.isEmpty())throw invalid("CONFLICT_IMPACTS");
-        for(var group:groups.values()){if(IMPACT_FIELDS.stream().anyMatch(field->!group.has(field)))throw new IllegalStateException("INVALID_IMPACT");impacts.add(group);}
+        for(var group:groups.values()){
+            if(emptyImpact(group))continue;
+            if(IMPACT_FIELDS.stream().anyMatch(field->!group.has(field)))throw new IllegalStateException("INVALID_IMPACT");impacts.add(group);
+        }
         applyReason(result,reason);
         if(!judging&&(!result.path("plan").isObject()||result.path("plan").path("action").asText().isBlank()))throw new IllegalStateException("MISSING_REQUIRED_OUTPUT_PLAN_ACTION");
         if(judging&&result.path("selectedCandidateId").asText().isBlank())throw new IllegalStateException("MISSING_JUDGE_VOTE");
@@ -87,11 +90,16 @@ final class ResearchProtocol {
         var result=(ObjectNode)output.deepCopy();var echoed=result.remove("phase");
         if(echoed!=null&&(phase==null||!echoed.asText().equals(phase.toString())))throw invalid("PHASE");
         if(judging&&result.has("plan"))throw invalid("JUDGE_PLAN");
+        if(result.path("impacts").isArray()){
+            var original=result.path("impacts");var impacts=result.putArray("impacts");for(var group:original)if(!emptyImpact(group))impacts.add(group);
+        }
         if(result.path("plan") instanceof ObjectNode plan){var reason=plan.remove("reason");if(reason!=null){
             if(!reason.isTextual())throw invalid("UNKNOWN_FIELD");applyReason(result,reason.asText());}}
         if(!judging&&result.path("plan").path("action").asText().isBlank())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT_PLAN_ACTION");
         return result;
     }
+    private static boolean emptyImpact(JsonNode group){return group.isObject()&&group.properties().stream().allMatch(entry->
+        IMPACT_FIELDS.contains(entry.getKey())&&(entry.getValue().isNull()||entry.getValue().isTextual()&&entry.getValue().asText().isBlank()));}
     private static void applyReason(ObjectNode result,String reason){
         if(reason==null||reason.isBlank())return;
         var plan=result.withObject("plan");String risk=plan.path("riskAssessment").asText();
@@ -116,6 +124,8 @@ final class ResearchProtocol {
         if(error.startsWith("PLAN_NARRATIVE_TOO_LONG"))detail="plan.riskAssessment≤120字，plan.invalidate≤80字；详情写output。";
         else if(error.startsWith("MISSING_REQUIRED_OUTPUT_PLAN_ACTION"))detail="必须明确提交plan.action=allowedActions内动作。";
         else if(error.startsWith("INVALID_DIRECTION"))detail="两方向只用BULLISH/BEARISH/UNKNOWN/MIXED。";
+        else if(error.equals("INVALID_EVIDENCE_ARRAY"))detail="quotedMessages最多6个原id，evidenceRefs最多14个原id，impact最多4组；只选相关引用，无项留空。";
+        else if(error.equals("INVALID_IMPACT"))detail="impact每组完整提交newsId/horizon/direction/reason/counter；newsId只抄news.id，horizon=SHORT/LONG，direction按协议；无判断省略整组。";
         else if(error.equals("INVALID_EVIDENCE_REFERENCE")||error.equals("INVALID_NEWS_REFERENCE")||error.equals("INVALID_PREVIOUS_STAGE_REFERENCE"))detail="引用逐字抄冻结证据或上轮peers的原id，无项留空。";
         else if(error.equals("INVALID_JUDGE_CANDIDATE")||error.equals("MISSING_JUDGE_VOTE"))detail="selectedCandidateId=WAIT或修订peers.id，禁止plan。";
         else if(error.startsWith("INVALID_STRUCTURED_OUTPUT"))detail="只用协议列出的key=value，不回显输入，同字段不可冲突。";

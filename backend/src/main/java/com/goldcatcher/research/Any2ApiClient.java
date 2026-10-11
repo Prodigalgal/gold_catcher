@@ -10,6 +10,8 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.*;
 
@@ -43,7 +45,18 @@ public class Any2ApiClient {
     private record Cached(JsonNode catalog,Instant at,String routeKey) {}
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
     private final Map<String,Cached> catalogs=new ConcurrentHashMap<>();
-    private final Map<String,Semaphore> leases=new ConcurrentHashMap<>();
+    private static final class ProviderWork {
+        final Semaphore lease=new Semaphore(1,true);
+        final AtomicInteger researchDemand=new AtomicInteger();
+        final AtomicReference<Thread> compressor=new AtomicReference<>();
+    }
+    private record ProviderLease(ProviderWork work,boolean compression,Thread thread) implements AutoCloseable {
+        @Override public void close(){
+            if(compression)synchronized(work){work.compressor.compareAndSet(thread,null);}
+            work.lease.release();if(!compression)work.researchDemand.decrementAndGet();
+        }
+    }
+    private final Map<String,ProviderWork> leases=new ConcurrentHashMap<>();
     private final Map<String,String> inference=new ConcurrentHashMap<>(),failures=new ConcurrentHashMap<>();
     private final Map<String,Budget> budgets=new ConcurrentHashMap<>();private final Map<String,Instant> budgetTimes=new ConcurrentHashMap<>();
     private record FailureAt(Instant at,String error) {}
@@ -54,6 +67,38 @@ public class Any2ApiClient {
     public List<ModelState> states() {return settings.allRoutes().stream().map(route->{var cached=currentCatalog(route);
         return new ModelState(route.id(),route.provider(),route.model(),!settings.secret(route).isBlank(),cached==null?null:cached.catalog(),
             cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()),budgets.get(route.id()),budgetTimes.get(route.id()),catalogErrors.get(route.id()));}).toList();}
+    public boolean compressionAvailable(AiRoute route){
+        var work=leases.get(route.provider());return work==null||work.researchDemand.get()==0&&work.lease.availablePermits()>0;
+    }
+    private ProviderLease acquireProvider(AiRoute route,boolean compression,Instant deadline)throws InterruptedException {
+        var work=leases.computeIfAbsent(route.provider(),key->new ProviderWork());Thread thread=Thread.currentThread();boolean acquired=false;
+        if(!compression){
+            synchronized(work){work.researchDemand.incrementAndGet();var compressor=work.compressor.get();if(compressor!=null)compressor.interrupt();}
+        }
+        try{
+            long wait=deadline==null?3000:Math.min(10000,Math.max(1,Duration.between(clock.instant(),deadline).toMillis()));
+            acquired=compression?work.researchDemand.get()==0&&work.lease.tryAcquire():work.lease.tryAcquire(wait,java.util.concurrent.TimeUnit.MILLISECONDS);
+            if(!acquired)throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
+            if(compression)synchronized(work){
+                // A research request may arrive between the availability check and registration.
+                if(work.researchDemand.get()>0)throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
+                work.compressor.set(thread);
+            }
+            return new ProviderLease(work,compression,thread);
+        }catch(InterruptedException|RuntimeException failure){
+            if(compression)synchronized(work){work.compressor.compareAndSet(thread,null);}
+            if(acquired)work.lease.release();if(!compression)work.researchDemand.decrementAndGet();throw failure;
+        }
+    }
+    private String catalogReadiness(AiRoute route,JsonNode catalog){
+        if(catalog.path("available").asBoolean(false))return "READY";
+        var runtime=catalog.path("runtime");
+        // Any2API's OPEN state advances only when an inference attempts admission. Catalog polling alone cannot recover it.
+        if(!settings.genericAiEndpoint(route)&&catalog.path("cataloged").asBoolean(false)
+            &&runtime.path("circuit_state").asText().equals("OPEN")&&runtime.path("available_account_count").asInt()>0
+            &&runtime.path("probe_status").asText().equals("READY"))return "MODEL_RECOVERY_READY";
+        return "MODEL_NOT_AVAILABLE";
+    }
     @org.springframework.scheduling.annotation.Scheduled(fixedDelay=300000,initialDelay=5000) public void warmCatalogs(){
         for(var route:settings.allRoutes())if(!settings.secret(route).isBlank())try{catalog(route);}catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));}
     }
@@ -84,14 +129,14 @@ public class Any2ApiClient {
                 if(failed!=null&&failed.at().plusSeconds(cooldown).isAfter(clock.instant())) {
                     state="FAILURE_COOLDOWN";retryAt=failed.at().plusSeconds(cooldown);
                 } else if(refresh) {
-                    try {if(!catalog(route).path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";cached=currentCatalog(route);}
+                    try {state=catalogReadiness(route,catalog(route));cached=currentCatalog(route);}
                     catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));state="CATALOG_QUERY_FAILED";}
                 } else if(cached==null)state=catalogErrors.containsKey(route.id())?"CATALOG_QUERY_FAILED":"CATALOG_NOT_CHECKED";
-                else if(!cached.catalog().path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";
                 else if(!cached.at().isAfter(clock.instant().minusSeconds(300)))state="CATALOG_STALE";
+                else state=catalogReadiness(route,cached.catalog());
             }
             checks.add(new RouteCheck(route.id(),route.provider(),route.model(),route.judge(),state,cached==null?null:cached.at(),retryAt));
-            if(state.equals("READY"))ready.add(route.id());
+            if(state.equals("READY")||state.equals("MODEL_RECOVERY_READY"))ready.add(route.id());
         }
         var selected=new ArrayList<AiRoute>();
         int desired=(int)preferred.stream().filter(settings::aiProviderEnabled).filter(r->!r.judge()).count();
@@ -124,15 +169,13 @@ public class Any2ApiClient {
     private Answer complete(AiRoute route,String instruction,Object packet,boolean compression,Instant attemptDeadline) throws Exception {
         if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         long started=System.nanoTime();
-        Semaphore lease=leases.computeIfAbsent(route.provider(),key->new Semaphore(1));
-        long leaseWait=attemptDeadline==null?3000:Math.min(10000,Math.max(1,Duration.between(clock.instant(),attemptDeadline).toMillis()));
-        if(!(compression?lease.tryAcquire():lease.tryAcquire(leaseWait,java.util.concurrent.TimeUnit.MILLISECONDS)))throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
+        var lease=acquireProvider(route,compression,attemptDeadline);
         Answer captured=null;
         long retryAfter=0;
         List<Attempt> attempts=new ArrayList<>();
         try {
             JsonNode catalog=catalog(route);
-            if(!catalog.path("available").asBoolean(false))throw new IllegalStateException("MODEL_NOT_AVAILABLE");
+            if(catalogReadiness(route,catalog).equals("MODEL_NOT_AVAILABLE"))throw new IllegalStateException("MODEL_NOT_AVAILABLE");
             JsonNode capabilities=catalog.path("capabilities");
             Map<String,Object> request=new LinkedHashMap<>();request.put("model",settings.requestModel(route));
             boolean adjudication=!compression&&mapper.valueToTree(packet).path("phase").asInt(-1)==3;
@@ -220,7 +263,7 @@ public class Any2ApiClient {
             if(!compression&&!(failure instanceof InterruptedException)&&!safeError(failure).equals("CONTEXT_INSUFFICIENT"))failedAt.put(modelKey(route),new FailureAt(clock.instant(),safeError(failure)));
             if(captured!=null)throw new InferenceFailure(safeError(failure),new Answer(captured.model(),captured.analysis(),captured.analysisSource(),captured.raw(),captured.output(),
                 captured.usage(),captured.usageSource(),captured.finishReason(),captured.budget(),(System.nanoTime()-started)/1_000_000,List.copyOf(attempts)),retryAfter);throw failure;
-        }finally{lease.release();}
+        }finally{lease.close();}
     }
     private void validateCompression(JsonNode output) {
         EvidenceCompression.validate(output);

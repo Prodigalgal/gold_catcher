@@ -52,9 +52,10 @@ class RuntimeSnapshotBudgetTest {
    Map<String,Object> request=new LinkedHashMap<>();request.put("model",route.model());
    request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(packet.path("phase").asInt()==3,false,ResearchProtocol.onlyWait(packet))),Map.of("role","user","content","")));request.put("max_tokens",route.outputReserve());
    var limits=ContextWindow.limits(route,f.mapper.createObjectNode());var result=ContextWindow.prepare(f.mapper,request,packet,limits);prepared.add(result);
-   String correction="PLAN_NARRATIVE_TOO_LONG_RISKASSESSMENT";
-   var retryPacket=(tools.jackson.databind.node.ObjectNode)packet.deepCopy();retryPacket.putObject("formatCorrection").put("error",correction).put("instruction",ResearchProtocol.repairInstruction(correction));
-   var repair=ContextWindow.prepare(f.mapper,request,retryPacket,limits);repaired.add(repair);assertThat(ContextWindow.fits(repair.sent(),limits,true)).isTrue();
+   for(String correction:List.of("PLAN_NARRATIVE_TOO_LONG_RISKASSESSMENT","INVALID_IMPACT","INVALID_EVIDENCE_ARRAY")){
+    var retryPacket=(tools.jackson.databind.node.ObjectNode)packet.deepCopy();retryPacket.putObject("formatCorrection").put("error",correction).put("instruction",ResearchProtocol.repairInstruction(correction));
+    var repair=ContextWindow.prepare(f.mapper,request,retryPacket,limits);repaired.add(repair);assertThat(ContextWindow.fits(repair.sent(),limits,true)).isTrue();
+   }
    Files.writeString(Path.of("../artifacts/offline-request-"+route.id()+"-"+packet.path("phase").asInt()+".json"),result.body());
    System.out.println(route.id()+" phase="+packet.path("phase").asInt()+" chars="+result.sent().characters()+" bytes="+result.sent().bytes()+" utilization="+ContextWindow.utilization(result.sent(),limits));
    var output=f.mapper.createObjectNode().put("title","离线预算验证").put("analysisSummary","研究观点".repeat(90)).put("output","解释与反证".repeat(110)).put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN").put("changes","保留修订".repeat(20));
@@ -76,7 +77,7 @@ class RuntimeSnapshotBudgetTest {
   try{
    var run=research.start(symbol,horizon);long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
    while(research.find(run.id).status.equals("RUNNING")&&System.nanoTime()<deadline)Thread.sleep(20);
-   assertThat(research.find(run.id).status).isEqualTo("COMPLETED");assertThat(prepared).hasSize(12);assertThat(repaired).hasSize(12);
+   assertThat(research.find(run.id).status).isEqualTo("COMPLETED");assertThat(prepared).hasSize(12);assertThat(repaired).hasSize(36);
    var limits=ContextWindow.limits(f.settings.routes().getFirst(),f.mapper.createObjectNode());for(var packet:prepared)assertThat(ContextWindow.fits(packet.sent(),limits,true)).isTrue();
    assertThat(run.evidence.path("analysis").path("drivers").path("csv").asText().split("\n")).hasSize(dashboard.path("analysis").path("drivers").size());
    assertThat(run.evidence.path("analysis").path("horizons").isMissingNode()).isTrue();

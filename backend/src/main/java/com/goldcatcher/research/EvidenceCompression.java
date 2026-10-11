@@ -7,7 +7,6 @@ import jakarta.annotation.PreDestroy;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.function.BooleanSupplier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.*;
@@ -37,6 +36,8 @@ public class EvidenceCompression {
         List<Segment> selectedSpans,List<String> chunkIds,String error) {}
     public record Checkpoint(int consecutiveFailures,Instant retryAt,String lastError,Instant lastSuccessfulAt) {}
     private record Candidate(NewsService.News article,NewsService.ArticleBody body,Result cached) {}
+    private record Coverage(int candidateArticles,int eligibleBodies,int completedSummaries,int queuedArticles,
+        int processingArticles,int retryingArticles,int missingBodies,int unsuitableBodies,Instant scannedAt) {}
     private final RuntimeSettings settings;private final NewsService news;private final Any2ApiClient ai;
     private final DocumentStore store;private final ObjectMapper mapper;private final Clock clock;private final EventHub events;
     private final ExecutorService worker=Executors.newSingleThreadExecutor(Thread.ofVirtual().name("gold-mimo-compression").factory());
@@ -44,7 +45,7 @@ public class EvidenceCompression {
     private volatile Instant retryAt=Instant.EPOCH,lastSuccessfulAt;
     private volatile int consecutiveFailures;
     private final String checkpointId;
-    private volatile BooleanSupplier researchBusy=()->false;
+    private volatile Coverage coverage=new Coverage(0,0,0,0,0,0,0,0,null);
     private java.util.function.LongSupplier nanos=System::nanoTime;
     public EvidenceCompression(RuntimeSettings settings,NewsService news,Any2ApiClient ai,DocumentStore store,ObjectMapper mapper,Clock clock,EventHub events){
         this.settings=settings;this.news=news;this.ai=ai;this.store=store;this.mapper=mapper;this.clock=clock;this.events=events;
@@ -53,7 +54,6 @@ public class EvidenceCompression {
             consecutiveFailures=saved.consecutiveFailures();retryAt=saved.retryAt();lastError=saved.lastError();lastSuccessfulAt=saved.lastSuccessfulAt();
         });
     }
-    public void researchBusy(BooleanSupplier busy){researchBusy=busy;}
     public boolean enabled(){return Boolean.parseBoolean(settings.text("GOLD_COMPRESSION_ENABLED","true"));}
     private String key(NewsService.News article,NewsService.ArticleBody body){return key(article,body,settings.compressionRoute());}
     private String key(NewsService.News article,NewsService.ArticleBody body,RuntimeSettings.AiRoute route){return NewsService.hash(VERSION+"|"+NewsService.hash(INSTRUCTION)+"|"+route.model()+"|"+route.baseUrl()+"|"+article.id()+"|"+article.contentHash()+"|"+body.hash());}
@@ -64,7 +64,11 @@ public class EvidenceCompression {
             "running",workingOn!=null,"workingOn",workingOn==null?"":workingOn,"error",lastError==null?"":lastError,"recent",recent.stream().map(r->{var row=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(r);row.remove(List.of("selectedSpans","chunkIds","cacheKey"));return row;}).toList(),
             "coverage","MIMO将已下载正文提炼成摘要；价格、指标、账户和订单数值由Java提供。未完成压缩时使用原文摘录。"));
         status.put("retryAt",retryAt.isAfter(clock.instant())?retryAt.toString():"");status.put("consecutiveFailures",consecutiveFailures);
-        status.put("lastSuccessfulAt",lastSuccessfulAt);return status;}
+        status.put("lastSuccessfulAt",lastSuccessfulAt);status.put("queue",coverage);
+        status.put("state",!enabled()?"DISABLED":settings.secret(route).isBlank()?"CREDENTIAL_MISSING":workingOn!=null?"RUNNING":
+            retryAt.isAfter(clock.instant())?"UPSTREAM_BACKOFF":!ai.compressionAvailable(route)?"PAUSED_PROVIDER_RESEARCH":
+            coverage.scannedAt()==null?"SCANNING":coverage.queuedArticles()>0?"QUEUED":coverage.retryingArticles()>0?"ARTICLE_RETRY_WAIT":
+            coverage.eligibleBodies()==0?"NO_ELIGIBLE_BODY":"UP_TO_DATE");return status;}
     /** Never waits for AI or admits summaries completed after the research cutoff. */
     public List<Map<String,Object>> apply(List<Map<String,Object>> frozen,Instant cutoff,String runId){
         var selected=new ArrayList<Map<String,Object>>();var audit=new ArrayList<Map<String,Object>>();
@@ -81,18 +85,22 @@ public class EvidenceCompression {
         store.save("research-preprocessing",runId,Map.of("provider","mimo","model",settings.compressionRoute().model(),"method",VERSION,"voting",false,"cutoff",cutoff,"articles",audit));return selected;
     }
     @Scheduled(fixedDelay=2000,initialDelay=15000) public synchronized void collect(){
-        if(researchBusy.getAsBoolean()){if(pending!=null&&!pending.isDone())pending.cancel(true);return;}
-        if(!enabled()||settings.secret(settings.compressionRoute()).isBlank()||retryAt.isAfter(clock.instant())||pending!=null&&!pending.isDone())return;
-        var candidates=new ArrayList<Candidate>();
-        for(var article:news.evidence(clock.instant())){var body=news.bodyForEvidence(article.id(),clock.instant());
-            if(body==null||body.hash()==null||body.text().codePointCount(0,body.text().length())<600||body.error()!=null||body.format()!=null&&body.format().startsWith("XLSX"))continue;
-            var cached=store.find("compression-cache",key(article,body),Result.class).orElse(null);
-            if(cached!=null&&(cached.state().equals("EXTRACTED")||cached.nextAttempt().isAfter(clock.instant())))continue;
+        if(!enabled())return;var route=settings.compressionRoute();Instant cutoff=clock.instant();var articles=news.evidence(cutoff);
+        var candidates=new ArrayList<Candidate>();int eligible=0,completed=0,processing=0,retrying=0,missing=0,unsuitable=0;String current=workingOn;
+        for(var article:articles){var body=news.bodyForEvidence(article.id(),cutoff);
+            if(body==null||body.hash()==null||body.error()!=null){missing++;continue;}
+            if(body.text().codePointCount(0,body.text().length())<600||body.format()!=null&&body.format().startsWith("XLSX")){unsuitable++;continue;}
+            eligible++;if(article.id().equals(current)){processing++;continue;}
+            var cached=store.find("compression-cache",key(article,body,route),Result.class).orElse(null);
+            if(cached!=null&&cached.state().equals("EXTRACTED")){completed++;continue;}
+            if(cached!=null&&cached.nextAttempt().isAfter(cutoff)){retrying++;continue;}
             candidates.add(new Candidate(article,body,cached));
         }
+        coverage=new Coverage(articles.size(),eligible,completed,candidates.size(),processing,retrying,missing,unsuitable,cutoff);
+        if(settings.secret(route).isBlank()||retryAt.isAfter(cutoff)||pending!=null&&!pending.isDone()||!ai.compressionAvailable(route))return;
         // Fresh evidence first, then the least recently attempted article; one slow report cannot monopolize the worker.
         var candidate=candidates.stream().min(Comparator.comparing((Candidate c)->c.cached()==null?Instant.EPOCH:c.cached().completedAt())).orElse(null);
-        if(candidate!=null)pending=worker.submit(()->{workingOn=candidate.article().id();try{lastError=process(candidate.article(),candidate.body()).error();}catch(Exception failure){lastError=Any2ApiClient.safeError(failure);}finally{try{backoff(lastError);}finally{workingOn=null;events.changed();}}});
+        if(candidate!=null)pending=worker.submit(()->{workingOn=candidate.article().id();try{var result=process(candidate.article(),candidate.body());lastError=deferred(result.error())?null:result.error();}catch(Exception failure){lastError=Any2ApiClient.safeError(failure);}finally{try{backoff(lastError);}finally{workingOn=null;events.changed();}}});
     }
     private void backoff(String error){
         if(error!=null&&(error.startsWith("INFERENCE_HTTP_429")||error.startsWith("INFERENCE_HTTP_5")||error.equals("MODEL_NOT_AVAILABLE")
@@ -133,17 +141,19 @@ public class EvidenceCompression {
                 level=next;if(level.size()==1){excerpt=level.getFirst();merged=true;}
             }
         }
-        String state=processed==chunks.size()&&merged?"EXTRACTED":processed>0?"PARTIAL":"FAILED";
-        if(excerpt.isBlank())state="FAILED";Instant completed=clock.instant();
+        boolean deferred=deferred(error)||processed==0&&error==null;
+        String state=processed==chunks.size()&&merged?"EXTRACTED":processed>0?"PARTIAL":deferred?"DEFERRED":"FAILED";
+        if(excerpt.isBlank()&&!deferred)state="FAILED";Instant completed=clock.instant();
         String id=NewsService.hash(cacheKey+"|"+processed+"|"+excerpt+"|"+state+"|"+completed);
         var result=new Result(id,cacheKey,article.id(),article.title(),article.source(),article.link(),body.hash(),"mimo",route.model(),VERSION,state,started,completed,
-            completed.plusSeconds(state.equals("FAILED")||error!=null?300:30),body.text().codePointCount(0,body.text().length()),processed,chunks.size(),body.truncated(),excerpt,List.of(),List.copyOf(chunkIds),error);
+            completed.plusSeconds(deferred?10:state.equals("FAILED")||error!=null?300:30),body.text().codePointCount(0,body.text().length()),processed,chunks.size(),body.truncated(),excerpt,List.of(),List.copyOf(chunkIds),error);
         store.transaction(()->{store.save("compression-result",id,result);store.save("compression-cache",cacheKey,result);return result;});events.changed();return result;
     }
     private boolean canRequest(RuntimeSettings.AiRoute route,long deadline){
-        return !Thread.currentThread().isInterrupted()&&!researchBusy.getAsBoolean()
+        return !Thread.currentThread().isInterrupted()&&ai.compressionAvailable(route)
             &&deadline-nanos.getAsLong()>=TimeUnit.SECONDS.toNanos(Math.min(75,route.timeoutSeconds()));
     }
+    private static boolean deferred(String error){return "REQUEST_CANCELED".equals(error)||"PROVIDER_REQUEST_STILL_RUNNING".equals(error);}
     private Instant expires(RuntimeSettings.AiRoute route,long passDeadline){
         long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(passDeadline-nanos.getAsLong()));
         return clock.instant().plusMillis(Math.min(Math.min(75,route.timeoutSeconds())*1000L,remaining));
@@ -154,7 +164,10 @@ public class EvidenceCompression {
             result=new ChunkResult(requestId,"VERIFIED",clock.instant(),List.of(),answer,null,validate(answer.output()));
             lastSuccessfulAt=result.completedAt();
         }catch(Exception failure){if(failure instanceof Any2ApiClient.InferenceFailure partial)answer=partial.partial();
-            result=new ChunkResult(requestId,"FAILED",clock.instant(),List.of(),answer,Any2ApiClient.safeError(failure),"");}
+            String error=Any2ApiClient.safeError(failure);
+            result=new ChunkResult(requestId,"FAILED",clock.instant(),List.of(),answer,error,"");}
+        // The provider lease is released; a yield interrupt must not prevent JDBC from archiving this result.
+        Thread.interrupted();
         store.save("compression-chunk-result",requestId,result);store.save("compression-chunk",cacheKey,result);return result;
     }
     static String validate(JsonNode output){

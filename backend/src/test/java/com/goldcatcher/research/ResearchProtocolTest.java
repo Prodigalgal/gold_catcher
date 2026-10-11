@@ -72,4 +72,13 @@ class ResearchProtocolTest {
         assertThat(ResearchProtocol.repairInstruction("PLAN_NARRATIVE_TOO_LONG_INVALIDATE")).contains("plan.invalidate≤80");
         assertThat(ResearchProtocol.repairInstruction("MISSING_REQUIRED_OUTPUT_PLAN_ACTION")).contains("plan.action");
     }
+    @Test void emptyImpactPlaceholdersAreAbsentButPartialNewsJudgmentsRemainInvalid(){
+        var output=ResearchProtocol.parse(f.mapper,base+"selectedCandidateId=WAIT\nimpact.3.newsId=\nimpact.3.horizon=\nimpact.3.direction=\nimpact.3.reason=\nimpact.3.counter=\n",false,true);
+        assertThat(output.path("impacts").isEmpty()).isTrue();
+        var json=f.mapper.createObjectNode();json.put("selectedCandidateId","WAIT");json.putArray("impacts").addObject().put("newsId","").put("horizon","").put("direction","").put("reason","").putNull("counter");
+        assertThat(ResearchProtocol.normalize(json,false,true,3).path("impacts").isEmpty()).isTrue();
+        assertThatThrownBy(()->ResearchProtocol.parse(f.mapper,base+"selectedCandidateId=WAIT\nimpact.3.horizon=SHORT\nimpact.3.reason=无新闻id\n",false,true)).hasMessage("INVALID_IMPACT");
+        assertThat(ResearchProtocol.repairInstruction("INVALID_IMPACT")).contains("newsId只抄news.id","省略整组");
+        assertThat(ResearchProtocol.repairInstruction("INVALID_EVIDENCE_ARRAY")).contains("evidenceRefs最多14");
+    }
 }

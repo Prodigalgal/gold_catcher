@@ -150,7 +150,7 @@ public class NewsService {
         .filter(n->verifiedTime(n)&&!n.publishedAt().isAfter(cutoff)&&!Boolean.TRUE.equals(n.archived()))
         .filter(n->n.publishedAt().isAfter(cutoff.minus(Duration.ofDays(7))))
         .sorted(Comparator.comparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
-            .thenComparing(News::receivedAt,Comparator.reverseOrder())).limit(12).toList();}
+            .thenComparing(News::receivedAt,Comparator.reverseOrder())).toList();}
     private boolean verifiedTime(News news){return news.publishedAt()!=null&&!"FEED_TIMESTAMP".equals(news.publishedPrecision());}
     public List<News> analysisArticles(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
         .filter(n->!n.receivedAt().isAfter(cutoff)).toList()).stream().map(n->decorate(n,cutoff))

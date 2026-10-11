@@ -12,7 +12,7 @@ class EvidenceCompressionTest {
     TestSupport f;Any2ApiClient ai;NewsService news;EvidenceCompression compression;
     NewsService.News article;NewsService.ArticleBody body;
     @BeforeEach void setup(){
-        f=new TestSupport();ai=mock(Any2ApiClient.class);news=mock(NewsService.class);
+        f=new TestSupport();ai=mock(Any2ApiClient.class);news=mock(NewsService.class);when(ai.compressionAvailable(any())).thenReturn(true);
         article=new NewsService.News("a","FED_PRESS","官方事实","摘要","https://www.federalreserve.gov/test",f.clock.instant().minusSeconds(10),f.clock.instant().minusSeconds(5),"OFFICIAL",1,"feed");
         body=body("The rate is 4.00 percent. However, this is not a forecast. A revision may change the prior value. ");
         f.store.save("news","a",article);when(news.bodyForEvidence(eq("a"),any())).thenAnswer(call->body);
@@ -20,7 +20,7 @@ class EvidenceCompressionTest {
     }
     NewsService.ArticleBody body(String text){return new NewsService.ArticleBody("a","FED_PRESS",article.link(),text,"AVAILABLE",NewsService.hash(text),f.clock.instant().minusSeconds(2),f.clock.instant(),f.clock.instant().plusSeconds(100),1,null,false,"feed",null,"HTML");}
     @AfterEach void stop(){compression.stop();}
-    void answer(String output) throws Exception {when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var parsed=f.mapper.readTree(output);return new Any2ApiClient.Answer("mimo/mimo-v2.6-pro","","NOT_PROVIDED",parsed.toString(),parsed,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);});}
+    void answer(String output) throws Exception {when(ai.compressionAvailable(any())).thenReturn(true);doAnswer(call->{var parsed=f.mapper.readTree(output);return new Any2ApiClient.Answer("mimo/mimo-v2.6-pro","","NOT_PROVIDED",parsed.toString(),parsed,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);}).when(ai).compress(any(),anyString(),any());}
     @Test void directSummaryOnlyReplacesExcerptWithoutAddingReferencesAndHonorsFrozenVersion() throws Exception {
         answer("{\"summary\":\"利率为4.00%，此数据不构成预测；历史值可能修订。\"}");Instant before=f.clock.instant().minusMillis(1);var result=compression.process(article,body);
         assertThat(result.state()).isEqualTo("EXTRACTED");assertThat(result.excerpt()).contains("4.00%","不构成预测");assertThat(result.selectedSpans()).isEmpty();
@@ -146,5 +146,33 @@ class EvidenceCompressionTest {
         var second=compression.process(article,body);assertThat(second.state()).isEqualTo("PARTIAL");assertThat(second.processedChunks()).isEqualTo(2);assertThat(second.error()).isNull();
         var merged=compression.process(article,body);assertThat(merged.state()).isEqualTo("EXTRACTED");assertThat(merged.error()).isNull();
         assertThat(tasks).containsExactly("SUMMARIZE","SUMMARIZE","MERGE");verify(ai,times(3)).compress(any(),anyString(),any());
+    }
+    @Test void queueReportsEligibleBodiesAndProviderPauseThenCompletesWhenMimoIsFree()throws Exception{
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(15));
+        var media=new NewsService.News("media","CNBC_WORLD","Media headline","Feed summary","https://www.cnbc.com/story",
+            f.clock.instant().minusSeconds(5),f.clock.instant().minusSeconds(1),"MEDIA_REPORT",1,"media-feed");
+        when(news.evidence(any())).thenReturn(List.of(media,article));when(ai.compressionAvailable(any())).thenReturn(false);
+        compression.collect();var paused=f.mapper.valueToTree(compression.status());
+        assertThat(paused.path("state").asText()).isEqualTo("PAUSED_PROVIDER_RESEARCH");
+        assertThat(paused.path("queue").path("candidateArticles").asInt()).isEqualTo(2);
+        assertThat(paused.path("queue").path("eligibleBodies").asInt()).isEqualTo(1);
+        assertThat(paused.path("queue").path("missingBodies").asInt()).isEqualTo(1);
+        assertThat(paused.path("queue").path("queuedArticles").asInt()).isEqualTo(1);verify(ai,never()).compress(any(),anyString(),any());
+        when(ai.compressionAvailable(any())).thenReturn(true);answer("{\"summary\":\"利率为4.00%，不是预测，历史值可能修订。\"}");
+        compression.collect();awaitPass();compression.collect();var ready=f.mapper.valueToTree(compression.status());
+        assertThat(ready.path("state").asText()).isEqualTo("UP_TO_DATE");assertThat(ready.path("queue").path("completedSummaries").asInt()).isEqualTo(1);
+        assertThat(ready.path("queue").path("queuedArticles").asInt()).isZero();verify(ai,times(1)).compress(any(),anyString(),any());
+    }
+    @Test void preemptionKeepsRawAttemptAndResumesWithoutUpstreamFailureBackoff()throws Exception{
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(15));when(news.evidence(any())).thenReturn(List.of(article));
+        when(ai.compress(any(),anyString(),any())).thenAnswer(call->{Thread.currentThread().interrupt();throw new InterruptedException("research priority");});
+        compression.collect();awaitPass();var deferred=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
+        assertThat(deferred.state()).isEqualTo("DEFERRED");assertThat(deferred.error()).isEqualTo("REQUEST_CANCELED");
+        assertThat(deferred.nextAttempt()).isEqualTo(f.clock.instant().plusSeconds(10));
+        assertThat(compression.detail(deferred.id()).toString()).contains("REQUEST_CANCELED");
+        assertThat(compression.status()).containsEntry("consecutiveFailures",0).containsEntry("retryAt","").containsEntry("error","");
+        f.clock.advance(11000);answer("{\"summary\":\"利率为4.00%，数据不是预测，历史值可能修订。\"}");compression.collect();awaitPass();
+        assertThat(f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst().state()).isEqualTo("EXTRACTED");
+        assertThat(compression.find(deferred.id()).error()).isEqualTo("REQUEST_CANCELED");
     }
 }
