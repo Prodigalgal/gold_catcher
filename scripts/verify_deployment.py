@@ -60,10 +60,11 @@ if set(api.get('products', [])) != {'XAU_USDT', 'GATE:XAUUSD'}:
     raise SystemExit('unexpected active products')
 expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION', 'FOUR_STAGE_DIVERSE_RESEARCH',
                      'THREE_MODEL_RESEARCH_AND_JUDGING', 'BLIND_THREE_JUDGE_VOTING', 'PERSISTED_AI_PROVIDER_CONFIGURATION',
+                     'RESEARCH_SEAT_RETRIES', 'STALE_EVIDENCE_ANALYSIS_CONTINUES', 'RESEARCH_CHECKPOINT_RECOVERY', 'UNIFIED_RESEARCH_TEXT_PROTOCOL',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
                      'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS'}
-if api.get('version') != '0.4.5' or not expected_features <= set(api.get('features', [])):
+if api.get('version') != '0.4.6' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -126,6 +127,13 @@ assert configuration['encryptionConfigured'] is True
 assert all('apiKey' not in provider and 'encryptedApiKey' not in provider for provider in configuration['providers'])
 assert all(len(configuration[key]['researchers']) == len(configuration[key]['judges']) == 3 for key in ('shortRoutes', 'longRoutes'))
 assert configuration['compression']['provider'] == 'mimo'
+for key in ('shortPolicy', 'longPolicy'):
+    policy = configuration[key]
+    assert 1 <= policy['maxAttempts'] <= 6
+    assert 1 <= policy['retryBaseSeconds'] <= policy['retryMaxSeconds'] <= 120
+    assert 30 <= policy['stageSeconds'] <= 1800 and 30 <= policy['judgeSeconds'] <= 1800
+    assert max(policy['stageSeconds'], policy['judgeSeconds']) <= policy['workflowSeconds'] <= 7200
+    assert 30 <= policy['decisionSeconds'] <= 172800
 assert schedule.get('state') in {'DISABLED', 'RUNNING', 'MONITORING'}
 if compression.get('provider') != 'mimo' or compression.get('voting') is not False:
     raise SystemExit('MIMO preprocessing role mismatch')

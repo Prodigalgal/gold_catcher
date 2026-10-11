@@ -13,9 +13,9 @@ import java.util.concurrent.*;
 import org.junit.jupiter.api.*;
 import tools.jackson.databind.JsonNode;
 class ResearchServiceTest {
-    TestSupport f;Any2ApiClient ai;ResearchService research;SimulationLedger ledger;
+    TestSupport f;Any2ApiClient ai;ResearchService research;SimulationLedger ledger;MarketFeed market;
     @BeforeEach void setup() {
-        f=new TestSupport();var market=mock(MarketFeed.class);ledger=mock(SimulationLedger.class);ai=mock(Any2ApiClient.class);
+        f=new TestSupport();market=mock(MarketFeed.class);ledger=mock(SimulationLedger.class);ai=mock(Any2ApiClient.class);
         var routes=new ArrayList<RuntimeSettings.AiRoute>();for(String id:List.of("p","q","r","j","k","l")){
             String provider=Map.of("j","p","k","q","l","r").getOrDefault(id,id);
             routes.add(new RuntimeSettings.AiRoute(id,provider,provider+"/"+provider+"-model","https://localhost/"+provider+"/v1","TEST_KEY",10000,14000,30000,2,1000,2,List.of("j","k","l").contains(id)));}
@@ -31,7 +31,7 @@ class ResearchServiceTest {
     @AfterEach void cleanup(){research.stop();}
     @Test void sealedBatchesShareEvidenceExcludeLateOutputAndPersistVerdict() throws Exception {
         List<JsonNode> packets=Collections.synchronizedList(new ArrayList<>());
-        when(ai.complete(any(),anyString(),any())).thenAnswer(call->{
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);JsonNode packet=f.mapper.valueToTree(call.getArgument(2));packets.add(packet);
             if(route.id().equals("r")&&packet.path("phase").asInt()==0)Thread.sleep(1500);
             var output=f.mapper.createObjectNode().put("title","观察").put("analysisSummary","摘要").put("output","保持等待").put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN");
@@ -64,7 +64,7 @@ class ResearchServiceTest {
         verify(ledger,times(1)).propose(eq(run.id),eq("XAU_USDT"),any());
     }
     @Test void insufficientValidModelsNeverCreatesAnOrder() throws Exception {
-        when(ai.complete(any(),anyString(),any())).thenThrow(new IllegalStateException("MODEL_NOT_AVAILABLE"));
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenThrow(new IllegalStateException("MODEL_NOT_AVAILABLE"));
         var run=research.start("XAU_USDT","SHORT");long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
         while(research.find(run.id).status.equals("RUNNING")&&System.nanoTime()<deadline)Thread.sleep(20);
         assertThat(research.find(run.id).status).isEqualTo("LOW_QUORUM");verify(ledger,never()).propose(anyString(),anyString(),any());
@@ -87,7 +87,7 @@ class ResearchServiceTest {
         assertThat(ResearchService.configuredRouteError(routes)).isNull();verifyNoInteractions(ai);
     }
     @Test void twoSuccessfulJudgesCannotReachTheLedger() throws Exception {
-        when(ai.complete(any(),anyString(),any())).thenAnswer(call->{
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);JsonNode packet=f.mapper.valueToTree(call.getArgument(2));
             if(route.id().equals("l"))throw new IllegalStateException("REQUEST_TIMEOUT");
             var output=f.mapper.createObjectNode().put("title","观察").put("output","等待").put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN");
@@ -113,7 +113,7 @@ class ResearchServiceTest {
     }
     @Test void cancellationAndExpiredEvidenceCannotReachTheLedger() throws Exception {
         var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
-        when(ai.complete(any(),anyString(),any())).thenAnswer(call->{entered.countDown();release.await(2,TimeUnit.SECONDS);throw new IllegalStateException("TEST_DELAY");});
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{entered.countDown();release.await(2,TimeUnit.SECONDS);throw new IllegalStateException("TEST_DELAY");});
         var run=research.start("XAU_USDT","SHORT");assertThat(entered.await(2,TimeUnit.SECONDS)).isTrue();
         assertThat(research.cancel(run.id).status).isEqualTo("CANCELED");release.countDown();Thread.sleep(100);
         verify(ledger,never()).propose(anyString(),anyString(),any());assertThat(research.find(run.id).status).isEqualTo("CANCELED");
@@ -130,6 +130,117 @@ class ResearchServiceTest {
         research.automatic();verify(ai,never()).selectRoutes(anyList(),anyList());
         verify(ai,never()).complete(any(),anyString(),any());verifyNoInteractions(ledger);
         assertThat(research.history()).isEmpty();
+    }
+    private Any2ApiClient.Answer waiting(RuntimeSettings.AiRoute route,JsonNode packet){
+        var output=f.mapper.createObjectNode().put("title","等待").put("output","冻结证据观察").put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN");
+        output.putArray("quotedMessages");output.putArray("evidenceRefs");output.putArray("impacts");
+        if(packet.path("phase").asInt()==3)output.put("selectedCandidateId","WAIT");else output.putObject("plan").put("action","WAIT");
+        return new Any2ApiClient.Answer(route.model(),"","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
+    }
+    private ResearchService.Run await(String id)throws Exception{
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);ResearchService.Run run;
+        do{run=research.find(id);if(!run.status.equals("RUNNING"))return run;Thread.sleep(20);}while(System.nanoTime()<deadline);
+        throw new AssertionError("Research did not complete: "+run.status);
+    }
+    @Test void timeoutRetriesOnlyFailedActorAndKeepsFrozenPeersAndSuccessfulOutputs()throws Exception{
+        f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","5");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");
+        var count=new ConcurrentHashMap<String,Integer>();var evidence=Collections.synchronizedList(new ArrayList<String>());
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));String key=route.id()+"/"+packet.path("phase").asInt();
+            evidence.add(packet.path("evidence").toString());int attempt=count.merge(key,1,Integer::sum);
+            if(key.equals("p/0")&&attempt==1)throw new java.net.http.HttpTimeoutException("dummy");
+            return waiting(route,packet);
+        });
+        var run=research.start("XAU_USDT","SHORT");var saved=await(run.id);
+        assertThat(saved.status).isEqualTo("COMPLETED");assertThat(count.get("p/0")).isEqualTo(2);
+        assertThat(count.get("q/0")).isEqualTo(1);assertThat(count.get("r/0")).isEqualTo(1);
+        assertThat(saved.messages.stream().filter(m->m.stage()==0&&m.state().equals("SUBMITTED"))).hasSize(3);
+        assertThat(saved.messages.stream().filter(m->m.stage()==0&&m.error()!=null)).anyMatch(m->m.error().equals("REQUEST_TIMEOUT"));
+        assertThat(evidence.stream().distinct()).hasSize(1);assertThat(saved.adjudication.path("validJudges").asInt()).isEqualTo(3);
+    }
+    @Test void invalidReferenceIsReturnedToSameModelForRepairWithoutLeakingSameStageReplies()throws Exception{
+        f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","5");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");var seen=new ConcurrentHashMap<String,Integer>();
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));var answer=waiting(route,packet);
+            if(route.id().equals("q")&&packet.path("phase").asInt()==0){int attempt=seen.merge("q",1,Integer::sum);
+                assertThat(packet.path("peers")).isEmpty();
+                if(attempt==1)((tools.jackson.databind.node.ArrayNode)answer.output().path("quotedMessages")).add("invented-reference");
+                else assertThat(packet.path("formatCorrection").path("error").asText()).isEqualTo("INVALID_PREVIOUS_STAGE_REFERENCE");
+            }return answer;
+        });
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("COMPLETED");assertThat(seen.get("q")).isEqualTo(2);
+        assertThat(saved.messages.stream().filter(m->m.error()!=null)).anyMatch(m->m.answer()!=null&&m.answer().output().path("quotedMessages").path(0).asText().equals("invented-reference"));
+    }
+    @Test void expiredTradingEvidenceStillCompletesAllFourStagesAndThreeJudgeVotes()throws Exception{
+        var advanced=new java.util.concurrent.atomic.AtomicBoolean();var phases=ConcurrentHashMap.<Integer>newKeySet();
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));phases.add(packet.path("phase").asInt());
+            if(advanced.compareAndSet(false,true))f.clock.advance(241000);return waiting(route,packet);
+        });
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("COMPLETED_EXPIRED");
+        assertThat(saved.decisionExpired).isTrue();assertThat(saved.verdict).isNotNull();assertThat(saved.adjudication.path("validJudges").asInt()).isEqualTo(3);
+        assertThat(phases).containsExactlyInAnyOrder(0,1,2,3);verify(ledger,never()).propose(anyString(),anyString(),any());
+    }
+    @Test void earlyMissingQuorumDoesNotAbortLaterResearchOrIndependentWaitJudging()throws Exception{
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));
+            if(packet.path("phase").asInt()<3&&!route.id().equals("p"))throw new IllegalStateException("MODEL_NOT_AVAILABLE");return waiting(route,packet);
+        });
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.stage).isEqualTo(3);assertThat(saved.status).isEqualTo("COMPLETED_WAIT");
+        assertThat(saved.messages).hasSize(12);assertThat(saved.adjudication.path("validJudges").asInt()).isEqualTo(3);verify(ledger,never()).propose(anyString(),anyString(),any());
+    }
+    @Test void fatalCredentialErrorsAreNotRetriedButEveryStageIsAttempted()throws Exception{
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenThrow(new IllegalStateException("INFERENCE_HTTP_401"));
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("LOW_QUORUM");assertThat(saved.stage).isEqualTo(3);
+        verify(ai,times(12)).complete(any(),anyString(),any(),any(java.time.Instant.class));verify(ledger,never()).propose(anyString(),anyString(),any());
+    }
+    @Test void restartResumesMissingActorsWithoutRepeatingPersistedSuccessfulResponses()throws Exception{
+        var entered=new CountDownLatch(1);var submitted=new CountDownLatch(2);var counts=new ConcurrentHashMap<String,Integer>();
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));String key=route.id()+"/"+packet.path("phase").asInt();int attempt=counts.merge(key,1,Integer::sum);
+            if(key.equals("r/0")&&attempt==1){entered.countDown();Thread.sleep(5000);}if(packet.path("phase").asInt()==0&&!route.id().equals("r"))submitted.countDown();return waiting(route,packet);
+        });
+        var run=research.start("XAU_USDT","SHORT");assertThat(entered.await(2,TimeUnit.SECONDS)).isTrue();assertThat(submitted.await(2,TimeUnit.SECONDS)).isTrue();
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);while(research.find(run.id).messages.stream().filter(m->m.state().equals("SUBMITTED")).count()<2&&System.nanoTime()<deadline)Thread.sleep(10);
+        research.stop();assertThat(research.find(run.id).status).isEqualTo("RECOVERY_PENDING");
+        research=new ResearchService(f.settings,f.store,market,new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock),ledger,ai,f.mapper,new EventHub(),f.clock);
+        research.recover();research.resumePending();var saved=await(run.id);assertThat(saved.status).isEqualTo("COMPLETED");assertThat(saved.recoveryCount).isEqualTo(1);
+        assertThat(counts.get("p/0")).isEqualTo(1);assertThat(counts.get("q/0")).isEqualTo(1);assertThat(counts.get("r/0")).isEqualTo(2);
+        assertThat(saved.adjudication.path("validJudges").asInt()).isEqualTo(3);
+    }
+    @Test void failedAutomaticStartDoesNotConsumeTheThirtyMinuteLongSchedule()throws Exception{
+        var config=new ResearchService.ScheduleConfig();config.automatic=true;config.symbols=List.of("XAU_USDT");research.configure(config);
+        when(ai.selectRoutes(anyList(),anyList())).thenThrow(new IllegalArgumentException("NO_AVAILABLE_JUDGE_QUORUM"));
+        research.automatic();assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();
+        verify(ai,times(2)).selectRoutes(anyList(),anyList());research.automatic();verify(ai,times(2)).selectRoutes(anyList(),anyList());
+        f.clock.advance(31000);research.automatic();verify(ai,times(4)).selectRoutes(anyList(),anyList());
+        assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();verify(ledger,never()).propose(anyString(),anyString(),any());
+    }
+    @Test void failedJudgeStopsAfterConfiguredAttemptsWithoutRepeatingOtherJudges()throws Exception{
+        f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","6");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");f.environment.setProperty("GOLD_RESEARCH_RETRY_MAX_SECONDS","1");
+        var counts=new ConcurrentHashMap<String,Integer>();
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));counts.merge(route.id(),1,Integer::sum);
+            if(route.id().equals("j"))throw new java.net.http.HttpTimeoutException("dummy");return waiting(route,packet);
+        });
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("LOW_QUORUM");assertThat(counts.get("j")).isEqualTo(3);
+        assertThat(counts.get("k")).isEqualTo(1);assertThat(counts.get("l")).isEqualTo(1);
+        assertThat(saved.messages.stream().filter(m->m.stage()==3&&m.error()!=null).map(ResearchService.Message::attempt)).containsExactly(1,2,3);
+        verify(ledger,never()).propose(anyString(),anyString(),any());
+    }
+    @Test void ledgerChangeRollsBackWhenTerminalResearchCheckpointCannotBeWritten()throws Exception{
+        research.stop();var store=spy(f.store);
+        doAnswer(call->{Object value=call.getArgument(2);if(value instanceof ResearchService.Run run&&run.status.equals("COMPLETED"))throw new IllegalStateException("CHECKPOINT_SAVE_FAILED");return call.callRealMethod();}).when(store).save(anyString(),anyString(),any());
+        research=new ResearchService(f.settings,store,market,new NewsService(f.settings,new RemoteHttp(),store,new EventHub(),f.clock),ledger,ai,f.mapper,new EventHub(),f.clock);
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
+        when(ledger.propose(anyString(),eq("XAU_USDT"),any())).thenAnswer(call->{f.store.save("ledger-checkpoint-test","change",Map.of("amount","100"));var order=new SimulationLedger.Order();order.id="test-order";return order;});
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("FAILED");assertThat(saved.error).isEqualTo("CHECKPOINT_SAVE_FAILED");assertThat(saved.orderId).isNull();
+        assertThat(f.store.find("ledger-checkpoint-test","change",Map.class)).isEmpty();verify(ledger,times(1)).propose(eq(saved.id),eq("XAU_USDT"),any());
+    }
+    @Test void persistedPreRetryMessagesRemainReadableWithTheStrictMapper(){
+        var legacy=(tools.jackson.databind.node.ObjectNode)f.mapper.valueToTree(new ResearchService.Message("old-id","A","研究",0,"FAILED",f.clock.instant(),f.clock.instant(),"REQUEST_TIMEOUT",List.of(),null));
+        legacy.remove("attempt");legacy.remove("retryAt");var decoded=f.mapper.treeToValue(legacy,ResearchService.Message.class);assertThat(decoded.attempt()).isEqualTo(1);assertThat(decoded.retryAt()).isNull();assertThat(decoded.error()).isEqualTo("REQUEST_TIMEOUT");
+        legacy.putNull("attempt");assertThat(f.mapper.treeToValue(legacy,ResearchService.Message.class).attempt()).isEqualTo(1);
     }
     private BigDecimal d(String s){return new BigDecimal(s);}
 }

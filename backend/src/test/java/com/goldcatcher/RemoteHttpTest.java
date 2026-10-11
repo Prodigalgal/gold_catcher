@@ -25,4 +25,18 @@ class RemoteHttpTest {
         assertThatThrownBy(()->RemoteHttp.decode(plain,"gzip",3000)).hasMessage("CONTENT_DECOMPRESSION_FAILED");
         assertThatThrownBy(()->RemoteHttp.decode(plain,"future-codec",3000)).hasMessage("CONTENT_ENCODING_UNSUPPORTED");
     }
+    @Test void timeoutCoversStalledResponseBodyAndSubsequentRequestsStillWork() throws Exception {
+        var release=new java.util.concurrent.CountDownLatch(1);
+        var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+        var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();server.setExecutor(executor);
+        server.createContext("/stall",exchange->{try(exchange){exchange.sendResponseHeaders(200,10);exchange.getResponseBody().write('x');exchange.getResponseBody().flush();try{release.await(5,java.util.concurrent.TimeUnit.SECONDS);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}}});
+        server.createContext("/ok",exchange->{try(exchange){exchange.sendResponseHeaders(200,2);exchange.getResponseBody().write(new byte[]{'o','k'});}});
+        server.start();var http=new RemoteHttp();String base="http://127.0.0.1:"+server.getAddress().getPort();
+        try{
+            var began=System.nanoTime();assertThatThrownBy(()->http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base+"/stall")).timeout(java.time.Duration.ofMillis(500)).build(),100))
+                .isInstanceOfAny(java.util.concurrent.TimeoutException.class,java.net.http.HttpTimeoutException.class);
+            assertThat(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began)).isLessThan(3000);
+            assertThat(http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base+"/ok")).timeout(java.time.Duration.ofSeconds(2)).build(),100).body()).isEqualTo(new byte[]{'o','k'});
+        }finally{release.countDown();server.stop(0);executor.shutdownNow();http.client.shutdownNow();}
+    }
 }

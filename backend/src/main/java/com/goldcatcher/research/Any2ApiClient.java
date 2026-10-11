@@ -46,7 +46,8 @@ public class Any2ApiClient {
     private final Map<String,Semaphore> leases=new ConcurrentHashMap<>();
     private final Map<String,String> inference=new ConcurrentHashMap<>(),failures=new ConcurrentHashMap<>();
     private final Map<String,Budget> budgets=new ConcurrentHashMap<>();private final Map<String,Instant> budgetTimes=new ConcurrentHashMap<>();
-    private final Map<String,String> catalogErrors=new ConcurrentHashMap<>();private final Map<String,Instant> failedAt=new ConcurrentHashMap<>();
+    private record FailureAt(Instant at,String error) {}
+    private final Map<String,String> catalogErrors=new ConcurrentHashMap<>();private final Map<String,FailureAt> failedAt=new ConcurrentHashMap<>();
     public Any2ApiClient(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,Clock clock) {
         this.settings=settings;this.http=http;this.mapper=mapper;this.clock=clock;
     }
@@ -79,8 +80,9 @@ public class Any2ApiClient {
             else if(settings.secret(route).isBlank())state="CREDENTIAL_MISSING";
             else {
                 var failed=failedAt.get(modelKey(route));
-                if(failed!=null&&failed.plusSeconds(settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600)).isAfter(clock.instant())) {
-                    state="FAILURE_COOLDOWN";retryAt=failed.plusSeconds(settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600));
+                int cooldown=failed!=null&&ResearchPolicy.retryable(failed.error())?settings.integer("GOLD_AI_TRANSIENT_COOLDOWN_SECONDS",15):settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600);
+                if(failed!=null&&failed.at().plusSeconds(cooldown).isAfter(clock.instant())) {
+                    state="FAILURE_COOLDOWN";retryAt=failed.at().plusSeconds(cooldown);
                 } else if(refresh) {
                     try {if(!catalog(route).path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";cached=currentCatalog(route);}
                     catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));state="CATALOG_QUERY_FAILED";}
@@ -109,18 +111,24 @@ public class Any2ApiClient {
             "CREDENTIALS_CATALOG_AND_FAILURE_COOLDOWN_ONLY; NOT_INFERENCE_OR_CONTEXT_ACCEPTANCE");
     }
     public Answer complete(AiRoute route,String instruction,Object packet) throws Exception {
-        return complete(route,instruction,packet,false);
+        return complete(route,instruction,packet,false,null);
+    }
+    /** Research owns retries; this overload performs one deadline-bounded HTTP attempt. */
+    public Answer complete(AiRoute route,String instruction,Object packet,Instant attemptDeadline) throws Exception {
+        return complete(route,instruction,packet,false,attemptDeadline);
     }
     public Answer compress(AiRoute route,String instruction,Object packet) throws Exception {
         if(!route.provider().equals("mimo")||!route.id().equals("compressor-mimo"))throw new IllegalArgumentException("COMPRESSION_FIXED_TO_MIMO");
-        return complete(route,instruction,packet,true);
+        return complete(route,instruction,packet,true,null);
     }
-    private Answer complete(AiRoute route,String instruction,Object packet,boolean compression) throws Exception {
+    private Answer complete(AiRoute route,String instruction,Object packet,boolean compression,Instant attemptDeadline) throws Exception {
         if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         long started=System.nanoTime();
         Semaphore lease=leases.computeIfAbsent(route.provider(),key->new Semaphore(1));
-        if(!(compression?lease.tryAcquire():lease.tryAcquire(3,java.util.concurrent.TimeUnit.SECONDS)))throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
+        long leaseWait=attemptDeadline==null?3000:Math.min(10000,Math.max(1,Duration.between(clock.instant(),attemptDeadline).toMillis()));
+        if(!(compression?lease.tryAcquire():lease.tryAcquire(leaseWait,java.util.concurrent.TimeUnit.MILLISECONDS)))throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
         Answer captured=null;
+        long retryAfter=0;
         List<Attempt> attempts=new ArrayList<>();
         try {
             JsonNode catalog=catalog(route);
@@ -128,22 +136,24 @@ public class Any2ApiClient {
             JsonNode capabilities=catalog.path("capabilities");
             Map<String,Object> request=new LinkedHashMap<>();request.put("model",settings.requestModel(route));
             boolean adjudication=!compression&&mapper.valueToTree(packet).path("phase").asInt(-1)==3;
+            boolean unified=mapper.valueToTree(packet).path("protocol").asText().equals(compression?ResearchProtocol.COMPRESSION_VERSION:ResearchProtocol.VERSION);
             request.put("messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",mapper.writeValueAsString(packet))));
             var parameters=capabilities.path("supported_parameters").path("chat_completions");
             boolean structuredTool=!compression&&!settings.preferJsonText(route)&&capabilities.path("tools").path("function_calling").asBoolean(false)
                 &&capabilities.path("tools").path("strict").asBoolean(false)&&!capabilities.path("tools").path("bridge").asText().equals("emulated_function_bridge");
             boolean jsonMode=capabilities.path("structured_output").asBoolean(false)||capabilities.path("structured_output").path("supported").asBoolean(false);
-            if(!structuredTool&&jsonMode)for(var parameter:parameters)if(parameter.asText().equals("response_format"))request.put("response_format",Map.of("type","json_object"));
+            if(!structuredTool&&jsonMode&&!unified)for(var parameter:parameters)if(parameter.asText().equals("response_format"))request.put("response_format",Map.of("type","json_object"));
+            if(unified&&!compression)request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(adjudication,structuredTool,ResearchProtocol.onlyWait(mapper.valueToTree(packet)))),Map.of("role","user","content",mapper.writeValueAsString(packet))));
             var sourceOptions=new LinkedHashMap<String,Object>();
             if(capabilities.path("provider_options").has("web_search_status")&&capabilities.path("parameter_adaptation").path("search").path("mode").asText().equals("mapped"))sourceOptions.put("web_search_status","disabled");
             if(compression&&capabilities.path("provider_options").has("thinking"))sourceOptions.put("thinking",false);
             if(!sourceOptions.isEmpty())request.put("provider_options",Map.of(route.provider(),sourceOptions));
-            if(structuredTool) {
+            if(structuredTool&&!unified) {
                 int format=instruction.indexOf("格式："),wait=instruction.indexOf("WAIT 时");
                 if(format>=0&&wait>format)request.put("messages",List.of(Map.of("role","system","content",instruction.substring(0,format)+instruction.substring(wait)),
                     Map.of("role","user","content",mapper.writeValueAsString(packet))));
             }
-            if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",outputSchema(adjudication)))));
+            if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",ResearchProtocol.schema(adjudication)))));
                 request.put("tool_choice",Map.of("type","function","function",Map.of("name","submit_research")));}
             String outputParameter=null;
             for(String candidate:List.of("max_tokens","max_completion_tokens","max_output_tokens"))
@@ -161,16 +171,21 @@ public class Any2ApiClient {
             captured=new Answer(route.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_RECEIVED",budget,0);
             java.net.http.HttpResponse<byte[]> response=null;
             var packetJson=mapper.valueToTree(packet);var expires=packetJson.path("evidence").path("decisionExpiresAt").asText();
-            Instant deadline=expires.isBlank()?clock.instant().plusSeconds(route.timeoutSeconds()):Instant.parse(expires);
-            for(int attempt=1;attempt<=2;attempt++) {
-                long remaining=Duration.between(clock.instant(),deadline).toMillis();if(remaining<=0)throw new IllegalStateException("DECISION_DEADLINE");
+            Instant deadline=attemptDeadline!=null?attemptDeadline:expires.isBlank()?clock.instant().plusSeconds(route.timeoutSeconds()*2L+3):Instant.parse(expires);
+            int attemptLimit=attemptDeadline==null?2:1;
+            for(int attempt=1;attempt<=attemptLimit;attempt++) {
+                long remaining=Duration.between(clock.instant(),deadline).toMillis();if(remaining<=0)throw new IllegalStateException("REQUEST_TIMEOUT");
                 var began=clock.instant();long measured=System.nanoTime();
                 try{response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("chat/completions")))
                     .timeout(Duration.ofMillis(Math.min(route.timeoutSeconds()*1000L,remaining))).header("Authorization","Bearer "+settings.secret(route))
                     .header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),1_000_000);
                     attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,response.statusCode(),response.statusCode()==200?null:"INFERENCE_HTTP_"+response.statusCode()));
-                    if(attempt==2||!List.of(502,503,504).contains(response.statusCode())||Duration.between(clock.instant(),deadline).toSeconds()<5)break;
-                }catch(Exception transport){attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,null,safeError(transport)));throw transport;}
+                    retryAfter=response.statusCode()==200?0:retryAfterMillis(response.headers().firstValue("Retry-After").orElse(""),clock.instant());
+                    if(attempt==attemptLimit||!List.of(408,425,429,500,502,503,504).contains(response.statusCode())||Duration.between(clock.instant(),deadline).toSeconds()<5)break;
+                    long delay=Math.max(1000,retryAfter);if(delay>=Duration.between(clock.instant(),deadline).toMillis())break;Thread.sleep(delay);
+                }catch(Exception transport){attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,null,safeError(transport)));
+                    if(attempt==attemptLimit||!ResearchPolicy.retryable(safeError(transport))||Duration.between(clock.instant(),deadline).toMillis()<=1000)throw transport;
+                    Thread.sleep(1000);}
             }
             if(response.statusCode()!=200) {
                 String code="";try{String upstream=mapper.readTree(response.body()).path("error").path("code").asText().toUpperCase(Locale.ROOT);
@@ -189,7 +204,8 @@ public class Any2ApiClient {
                 finish,budget,(System.nanoTime()-started)/1_000_000);
             if(structuredTool&&!submitted)throw new IllegalStateException("REQUIRED_SUBMISSION_MISSING");
             if(!submitted&&!finish.equals("stop"))throw new IllegalStateException("OUTPUT_NOT_COMPLETE_"+finish.toUpperCase(Locale.ROOT));
-            JsonNode output=parseOutput(raw);
+            JsonNode output=ResearchProtocol.text(raw)?ResearchProtocol.parse(mapper,raw,compression,adjudication):parseOutput(raw);
+            if(!compression&&!adjudication&&!output.path("plan").isObject())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT");
             if(compression)validateCompression(output);else validate(output);
             if(adjudication&&(!output.path("selectedCandidateId").isTextual()||output.path("selectedCandidateId").asText().isBlank()))throw new IllegalStateException("MISSING_JUDGE_VOTE");
             String analysis=reasoning.isBlank()?output.path("analysisSummary").asText():reasoning;
@@ -200,9 +216,9 @@ public class Any2ApiClient {
                 finish,budget,(System.nanoTime()-started)/1_000_000,List.copyOf(attempts));
         }catch(Exception failure) {
             inference.put(route.id(),"FAILED");failures.put(route.id(),safeError(failure));
-            if(!compression)failedAt.put(modelKey(route),clock.instant());
+            if(!compression&&!(failure instanceof InterruptedException))failedAt.put(modelKey(route),new FailureAt(clock.instant(),safeError(failure)));
             if(captured!=null)throw new InferenceFailure(safeError(failure),new Answer(captured.model(),captured.analysis(),captured.analysisSource(),captured.raw(),captured.output(),
-                captured.usage(),captured.usageSource(),captured.finishReason(),captured.budget(),(System.nanoTime()-started)/1_000_000,List.copyOf(attempts)));throw failure;
+                captured.usage(),captured.usageSource(),captured.finishReason(),captured.budget(),(System.nanoTime()-started)/1_000_000,List.copyOf(attempts)),retryAfter);throw failure;
         }finally{lease.release();}
     }
     private void validateCompression(JsonNode output) {
@@ -256,9 +272,7 @@ public class Any2ApiClient {
             prepared.packet()==null?"NOT_APPLICABLE":mapper.readTree(body).path("messages").path(1).path("content").asText().startsWith("---")?"YAML_FLOW_LOSSLESS":"JSON");
     }
     JsonNode parseOutput(String raw) {
-        String content=raw.strip();
-        if(content.startsWith("```")){int newline=content.indexOf('\n');int end=content.lastIndexOf("```");
-            if(newline<0||end<=newline)throw new IllegalStateException("INVALID_STRUCTURED_OUTPUT");content=content.substring(newline+1,end).strip();}
+        String content=ResearchProtocol.unfence(raw);
         JsonNode output=mapper.readTree(content);
         if(!output.isObject())throw new IllegalStateException("INVALID_STRUCTURED_OUTPUT");return output;
     }
@@ -279,31 +293,24 @@ public class Any2ApiClient {
             ||!List.of("BULLISH","BEARISH","UNKNOWN","MIXED").contains(impact.path("direction").asText())
             ||impact.path("reason").asText().length()>500||impact.path("counter").asText().length()>400)throw new IllegalStateException("INVALID_IMPACT");
     }
-    private Map<String,Object> outputSchema(boolean adjudication) {
-        Map<String,Object> properties=new LinkedHashMap<>();
-        for(var field:List.of("title","analysisSummary","output","changes"))properties.put(field,Map.of("type","string"));
-        for(var field:List.of("shortDirection","longDirection"))properties.put(field,Map.of("type","string","enum",List.of("BULLISH","BEARISH","UNKNOWN","MIXED")));
-        for(var field:List.of("quotedMessages","evidenceRefs"))properties.put(field,Map.of("type","array","items",Map.of("type","string")));
-        properties.put("impacts",Map.of("type","array","items",Map.of("type","object","properties",Map.of(
-            "newsId",Map.of("type","string"),"horizon",Map.of("type","string","enum",List.of("SHORT","LONG")),"direction",properties.get("shortDirection"),
-            "reason",Map.of("type","string"),"counter",Map.of("type","string")),"required",List.of("newsId","horizon","direction","reason","counter"),"additionalProperties",false)));
-        if(adjudication)properties.put("selectedCandidateId",Map.of("type","string"));
-        else {
-            Map<String,Object> plan=new LinkedHashMap<>();plan.put("action",Map.of("type","string","enum",List.of("WAIT","CREATE","CANCEL","CLOSE","MODIFY","REDUCE")));
-            for(var field:List.of("orderId","side","type","quantity","leverage","entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation","expiresAt","holdUntil","riskAssessment","invalidate"))plan.put(field,Map.of("type",List.of("string","null")));
-            properties.put("plan",Map.of("type","object","properties",plan,"required",List.copyOf(plan.keySet()),"additionalProperties",false));
-        }
-        return Map.of("type","object","properties",properties,"required",List.copyOf(properties.keySet()),"additionalProperties",false);
-    }
     public static class InferenceFailure extends IllegalStateException {
         private final Answer partial;
-        public InferenceFailure(String code,Answer partial){super(code);this.partial=partial;}
+        private final long retryAfterMillis;
+        public InferenceFailure(String code,Answer partial){this(code,partial,0);}
+        public InferenceFailure(String code,Answer partial,long retryAfterMillis){super(code);this.partial=partial;this.retryAfterMillis=retryAfterMillis;}
         public Answer partial(){return partial;}
+        public long retryAfterMillis(){return retryAfterMillis;}
+    }
+    static long retryAfterMillis(String value,Instant now){
+        try{return Math.max(0,Math.multiplyExact(Long.parseLong(value.strip()),1000));}catch(RuntimeException ignored){}
+        try{return Math.max(0,Duration.between(now,ZonedDateTime.parse(value,java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()).toMillis());}catch(RuntimeException ignored){return 0;}
     }
     public static String safeError(Exception error) {
+        if(error instanceof InterruptedException||error instanceof java.util.concurrent.CancellationException)return "REQUEST_CANCELED";
         if(error instanceof java.util.concurrent.TimeoutException||error instanceof java.net.http.HttpTimeoutException)return "REQUEST_TIMEOUT";
-        if(error instanceof java.util.concurrent.ExecutionException&&error.getCause() instanceof Exception cause)return safeError(cause);
+        if((error instanceof java.util.concurrent.ExecutionException||error instanceof java.util.concurrent.CompletionException)&&error.getCause() instanceof Exception cause)return safeError(cause);
         if(error instanceof tools.jackson.core.JacksonException)return "INVALID_STRUCTURED_OUTPUT";
+        if(error instanceof java.io.IOException)return "UPSTREAM_TRANSPORT_FAILED";
         String message=error instanceof IllegalStateException||error instanceof IllegalArgumentException?error.getMessage():null;
         return message!=null&&message.matches("[A-Z0-9_]+")?message:"UPSTREAM_OR_PARSE_FAILED";
     }

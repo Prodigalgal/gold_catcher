@@ -26,9 +26,13 @@ public class AiConfiguration {
     public record ProviderInput(String id,String label,String baseUrl,String protocol,String catalogMode,String apiKey,Boolean clearApiKey) {
         public ProviderInput(String id,String label,String baseUrl,String protocol,String catalogMode,String apiKey){this(id,label,baseUrl,protocol,catalogMode,apiKey,false);}
     }
-    public record Update(long expectedRevision,List<ProviderInput> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression) {}
+    public record Update(long expectedRevision,List<ProviderInput> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy) {
+        public Update(long expectedRevision,List<ProviderInput> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression){this(expectedRevision,providers,shortRoutes,longRoutes,compressionEnabled,compression,null,null);}
+    }
     public record Provider(String id,String label,String baseUrl,String protocol,String catalogMode,String encryptedApiKey) {}
-    public record Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression) {}
+    public record Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy) {
+        public Configuration{if(shortPolicy==null)shortPolicy=ResearchPolicy.defaults("SHORT");if(longPolicy==null)longPolicy=ResearchPolicy.defaults("LONG");}
+    }
     public record ModelChoice(String id,String name,Boolean available,Long contextTokens,Long inputTokens,Long outputTokens) {}
     public record ModelCatalog(String provider,String state,Instant retrievedAt,List<ModelChoice> models,String error) {}
     private final RuntimeSettings settings;private final DocumentStore store;private final ObjectMapper mapper;
@@ -46,18 +50,35 @@ public class AiConfiguration {
                 providers.putIfAbsent(route.provider(),new Provider(route.provider(),route.provider(),route.baseUrl(),"ANY2API","DISCOVERED",null));
                 bootstrapKeys.putIfAbsent(route.provider(),settings.secret(route));
             }
-        var defaults=new Configuration(0,null,List.copyOf(providers.values()),horizon(settings.bootstrapRoutes("SHORT")),horizon(settings.bootstrapRoutes("LONG")),settings.enabled("GOLD_COMPRESSION_ENABLED"),selection(settings.compressionRoute()));
+        var defaults=new Configuration(0,null,List.copyOf(providers.values()),horizon(settings.bootstrapRoutes("SHORT")),horizon(settings.bootstrapRoutes("LONG")),settings.enabled("GOLD_COMPRESSION_ENABLED"),selection(settings.compressionRoute()),ResearchPolicy.from(settings,"SHORT"),ResearchPolicy.from(settings,"LONG"));
         current=store.find("ai-configuration","current",Configuration.class).orElse(defaults);
-        if(current.revision()>0)publish(current);
+        if(current.revision()>0){publish(current);store.save("ai-configuration","current",current);store.save("ai-configuration-history",Long.toString(current.revision()),current);}
     }
     private Horizon horizon(List<AiRoute> routes){return new Horizon(routes.stream().filter(r->!r.judge()).map(this::selection).toList(),routes.stream().filter(AiRoute::judge).map(this::selection).toList());}
     private Selection selection(AiRoute route){return new Selection(route.provider(),route.model(),route.inputEstimateLimit(),route.characterLimit(),route.byteLimit(),route.messageLimit(),route.outputReserve(),route.timeoutSeconds());}
     public Map<String,Object> view(){return publicView(current);}
     private Map<String,Object> publicView(Configuration config){
-        return Map.of("revision",config.revision(),"updatedAt",config.updatedAt()==null?"":config.updatedAt(),"shortRoutes",config.shortRoutes(),"longRoutes",config.longRoutes(),"compressionEnabled",config.compressionEnabled(),"compression",config.compression(),
+        var result=new LinkedHashMap<String,Object>(Map.of("revision",config.revision(),"updatedAt",config.updatedAt()==null?"":config.updatedAt(),"shortRoutes",config.shortRoutes(),"longRoutes",config.longRoutes(),"compressionEnabled",config.compressionEnabled(),"compression",config.compression(),
             "providers",config.providers().stream().map(p->Map.of("id",p.id(),"label",p.label(),"baseUrl",p.baseUrl(),"protocol",p.protocol(),"catalogMode",p.catalogMode(),
                 "credentialConfigured",!credential(p).isBlank(),"disabled",settings.disabledAiProviders().contains(p.id()))).toList(),
-            "encryptionConfigured",encryptionConfigured(),"catalogs",config.providers().stream().map(p->catalogs.getOrDefault(p.id(),new ModelCatalog(p.id(),p.catalogMode().equals("MANUAL")?"MANUAL":"NOT_CHECKED",null,List.of(),null))).toList());
+            "encryptionConfigured",encryptionConfigured(),"catalogs",config.providers().stream().map(p->catalogs.getOrDefault(p.id(),new ModelCatalog(p.id(),p.catalogMode().equals("MANUAL")?"MANUAL":"NOT_CHECKED",null,List.of(),null))).toList()));
+        result.put("shortPolicy",config.shortPolicy());result.put("longPolicy",config.longPolicy());return result;
+    }
+    public ResearchPolicy policy(String horizon){return horizon.equals("LONG")?current.longPolicy():current.shortPolicy();}
+    public ResearchPolicy policy(long revision,String horizon){if(revision==0)return ResearchPolicy.from(settings,horizon);
+        var snapshot=current;var frozen=snapshot.revision()==revision?snapshot:store.find("ai-configuration-history",Long.toString(revision),Configuration.class).orElseThrow(()->new IllegalStateException("FROZEN_AI_CONFIGURATION_UNAVAILABLE"));
+        return horizon.equals("LONG")?frozen.longPolicy():frozen.shortPolicy();}
+    /** Restore the encrypted revision used by a run, without publishing it as the current UI configuration. */
+    public List<AiRoute> routesForRun(tools.jackson.databind.JsonNode frozen,String horizon){
+        long revision=frozen.path("revision").asLong(-1);
+        if(revision==0&&current.revision()==0)return settings.bootstrapRoutes(horizon);
+        var configuration=current.revision()==revision?current:store.find("ai-configuration-history",Long.toString(revision),Configuration.class)
+            .orElseThrow(()->new IllegalStateException("FROZEN_AI_CONFIGURATION_UNAVAILABLE"));
+        var routes=buildRoutes(configuration).get(horizon);
+        for(var archived:frozen.path("routes"))if(routes.stream().noneMatch(route->route.id().equals(archived.path("id").asText())&&route.model().equals(archived.path("model").asText())
+            &&route.judge()==archived.path("judge").asBoolean()&&route.timeoutSeconds()==archived.path("timeoutSeconds").asInt()))
+            throw new IllegalStateException("FROZEN_AI_CONFIGURATION_MISMATCH");
+        return routes;
     }
     public synchronized Map<String,Object> save(Update update){
         if(update==null||update.expectedRevision()!=current.revision())throw new IllegalArgumentException("AI_CONFIG_REVISION_CONFLICT");
@@ -78,10 +99,13 @@ public class AiConfiguration {
         if(!ids.contains("mimo")||update.compression()==null||!"mimo".equals(update.compression().provider()))throw new IllegalArgumentException("COMPRESSION_FIXED_TO_MIMO");
         var shortRoutes=validateHorizon(update.shortRoutes(),ids);var longRoutes=validateHorizon(update.longRoutes(),ids);
         var compression=validateSelections(List.of(update.compression()),ids).getFirst();
-        var next=new Configuration(current.revision()+1,clock.instant(),List.copyOf(providers),shortRoutes,longRoutes,update.compressionEnabled(),compression);
+        var shortPolicy=(update.shortPolicy()==null?current.shortPolicy():update.shortPolicy()).validated();
+        var longPolicy=(update.longPolicy()==null?current.longPolicy():update.longPolicy()).validated();
+        var next=new Configuration(current.revision()+1,clock.instant(),List.copyOf(providers),shortRoutes,longRoutes,update.compressionEnabled(),compression,shortPolicy,longPolicy);
         // Build before saving so malformed budgets/endpoints cannot partially mutate the configuration.
         var routes=buildRoutes(next);
-        store.transaction(()->{store.save("ai-configuration","current",next);store.event("ai-configuration","CONFIG_CHANGED",publicView(next));return true;});
+        store.transaction(()->{if(current.revision()>0)store.save("ai-configuration-history",Long.toString(current.revision()),current);
+            store.save("ai-configuration-history",Long.toString(next.revision()),next);store.save("ai-configuration","current",next);store.event("ai-configuration","CONFIG_CHANGED",publicView(next));return true;});
         current=next;settings.applyResearchRoutes(next.revision(),routes,buildCompression(next),next.compressionEnabled());catalogs.clear();events.changed();return view();
     }
     private Horizon validateHorizon(Horizon horizon,Set<String> providers){

@@ -10,7 +10,7 @@
     "byteLimit": 30000,
     "messageLimit": 2,
     "outputReserve": 2200,
-    "timeoutSeconds": 180,
+    "timeoutSeconds": 240,
     "judge": false
   },
   {
@@ -38,7 +38,7 @@
     "byteLimit": 30000,
     "messageLimit": 2,
     "outputReserve": 2200,
-    "timeoutSeconds": 90,
+    "timeoutSeconds": 120,
     "judge": false
   },
   {
@@ -52,7 +52,7 @@
     "byteLimit": 30000,
     "messageLimit": 2,
     "outputReserve": 2200,
-    "timeoutSeconds": 180,
+    "timeoutSeconds": 240,
     "judge": true
   },
   {
@@ -80,7 +80,7 @@
     "byteLimit": 30000,
     "messageLimit": 2,
     "outputReserve": 2200,
-    "timeoutSeconds": 90,
+    "timeoutSeconds": 120,
     "judge": true
   }
 ]

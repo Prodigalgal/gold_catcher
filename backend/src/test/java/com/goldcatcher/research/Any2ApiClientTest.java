@@ -5,7 +5,7 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
-    @SuppressWarnings("unchecked") private java.net.http.HttpResponse<byte[]> response(int status,String body){var result=(java.net.http.HttpResponse<byte[]>)mock(java.net.http.HttpResponse.class);when(result.statusCode()).thenReturn(status);when(result.body()).thenReturn(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));return result;}
+    @SuppressWarnings("unchecked") private java.net.http.HttpResponse<byte[]> response(int status,String body){var result=(java.net.http.HttpResponse<byte[]>)mock(java.net.http.HttpResponse.class);when(result.statusCode()).thenReturn(status);when(result.headers()).thenReturn(java.net.http.HttpHeaders.of(java.util.Map.of(),(a,b)->true));when(result.body()).thenReturn(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));return result;}
     @Test void withdrawnProviderNeverReachesCatalogOrInferenceEvenThroughDirectCalls() {
         var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
         var withdrawn=new AiRoute("withdrawn","QWEN","qwen/old","https://localhost/qwen/v1","TEST",10000,16000,30000,2,1000,2,false);
@@ -146,5 +146,41 @@ class Any2ApiClientTest {
         for(int i=0;i<6;i++)refs.add("calendar-"+i);
         assertThatCode(()->client.validate(output)).doesNotThrowAnyException();
         refs.add("extra");assertThatThrownBy(()->client.validate(output)).hasMessage("INVALID_EVIDENCE_ARRAY");
+    }
+    @Test void researchDeadlineBoundsOneHttpAttemptAndPreservesRateLimitRetryAfter()throws Exception{
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var route=new AiRoute("custom","custom","custom/model","https://localhost/v1","UI",10000,16000,30000,2,1000,180,false);
+        f.settings.registerConfiguredRoute(route,"test-credential","OPENAI_COMPATIBLE","MANUAL");var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        var limited=response(429,"{\"error\":{\"code\":\"RATE_LIMITED\"}}");when(limited.headers()).thenReturn(java.net.http.HttpHeaders.of(java.util.Map.of("Retry-After",java.util.List.of("7")),(a,b)->true));
+        when(remote.send(any(),eq(1_000_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);assertThat(request.timeout().orElseThrow()).isEqualTo(java.time.Duration.ofSeconds(2));return limited;});
+        assertThatThrownBy(()->client.complete(route,"观察",java.util.Map.of("phase",0,"evidence",java.util.Map.of("decisionExpiresAt",f.clock.instant().minusSeconds(1))),f.clock.instant().plusSeconds(2)))
+            .isInstanceOfSatisfying(Any2ApiClient.InferenceFailure.class,error->{assertThat(error.getMessage()).isEqualTo("INFERENCE_HTTP_429_RATE_LIMITED");assertThat(error.retryAfterMillis()).isEqualTo(7000);assertThat(error.partial().attempts()).hasSize(1);});
+        verify(remote,times(1)).send(any(),eq(1_000_000));
+    }
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void nativeAndEmulatedAdaptersUseOneLogicalProtocolWithoutForcingTextModelsToWriteJson(boolean nativeTool)throws Exception{
+        var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);var route=new AiRoute("vendor","vendor","vendor/model","https://localhost/vendor/v1","TEST",10000,16000,30000,2,1000,2,true);
+        var catalog=response(200,"{\"available\":true,\"capabilities\":{\"structured_output\":true,\"tools\":{\"function_calling\":true,\"strict\":true,\"bridge\":\""+(nativeTool?"native":"emulated_function_bridge")+"\"},\"supported_parameters\":{\"chat_completions\":[\"response_format\"]}}}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
+        var canonical=f.mapper.readTree("{\"title\":\"裁决\",\"output\":\"等待确认\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"MIXED\",\"selectedCandidateId\":\"WAIT\",\"quotedMessages\":[],\"evidenceRefs\":[],\"impacts\":[]}");
+        when(remote.send(any(),eq(1_000_000))).thenAnswer(call->{
+            var request=(java.net.http.HttpRequest)call.getArgument(0);var bytes=new java.io.ByteArrayOutputStream();request.bodyPublisher().orElseThrow().subscribe(new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>(){public void onSubscribe(java.util.concurrent.Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(java.nio.ByteBuffer b){var chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}public void onError(Throwable t){throw new AssertionError(t);}public void onComplete(){}});
+            var wire=f.mapper.readTree(bytes.toByteArray());assertThat(wire.has("response_format")).isFalse();assertThat(wire.has("tools")).isEqualTo(nativeTool);
+            assertThat(wire.path("messages").path(0).path("content").asText()).contains(nativeTool?"只调用 submit_research":"每行一个 key=value");
+            var message=f.mapper.createObjectNode();if(nativeTool){var function=message.putArray("tool_calls").addObject().putObject("function");function.put("name","submit_research").put("arguments",canonical.toString());}
+            else message.put("content","protocol=GOLD_RESEARCH_V1\ntitle=裁决\noutput=等待确认\nshortDirection=UNKNOWN\nlongDirection=MIXED\nselectedCandidateId=WAIT\n");
+            return response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason",nativeTool?"tool_calls":"stop","message",message)))));
+        });
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var packet=java.util.Map.of("protocol",ResearchProtocol.VERSION,"phase",3,"evidence",java.util.Map.of());
+        assertThat(client.complete(route,"冻结证据。",packet,f.clock.instant().plusSeconds(2)).output()).isEqualTo(canonical);
+    }
+    @Test void transportTimeoutReleasesProviderLeaseForTheNextBoundedResearchAttempt()throws Exception{
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var route=new AiRoute("custom","custom","custom/model","https://localhost/v1","UI",10000,16000,30000,2,1000,180,false);
+        f.settings.registerConfiguredRoute(route,"test-credential","OPENAI_COMPATIBLE","MANUAL");var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        String output="{\"title\":\"等待\",\"output\":\"观察\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"UNKNOWN\",\"plan\":{\"action\":\"WAIT\"}}";
+        var valid=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));
+        when(remote.send(any(),eq(1_000_000))).thenThrow(new java.net.http.HttpTimeoutException("dummy")).thenReturn(valid);
+        var packet=java.util.Map.of("phase",0,"evidence",java.util.Map.of());
+        assertThatThrownBy(()->client.complete(route,"观察",packet,f.clock.instant().plusSeconds(2))).hasMessage("REQUEST_TIMEOUT");
+        assertThat(client.complete(route,"观察",packet,f.clock.instant().plusSeconds(2)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+        verify(remote,times(2)).send(any(),eq(1_000_000));
     }
 }
