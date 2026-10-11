@@ -7,4 +7,5 @@ resources:
   - deployments.yaml
   - services.yaml
   - postgres.yaml
+  - cache.yaml
   - resource-quota.yaml

@@ -15,6 +15,7 @@ class PromotionContractTest(unittest.TestCase):
         self.target.mkdir(parents=True)
         base = self.root / "gold-catcher/base"
         base.mkdir()
+        (base / "kustomization.yaml").write_text(yaml.safe_dump({"resources":["configmap.yaml","deployments.yaml"]}),encoding="utf-8")
         (base / "configmap.yaml").write_text(yaml.safe_dump({"kind":"ConfigMap", "metadata":{"name":"gold-catcher-config"},
             "data":{"GOLD_RESEARCH_AUTOMATIC":"false", "KEEP":"preserved"}}), encoding="utf-8")
         (base / "deployments.yaml").write_text(yaml.safe_dump_all([{"kind":"Deployment", "metadata":{"name":"gold-catcher-server"},
@@ -62,6 +63,10 @@ class PromotionContractTest(unittest.TestCase):
         self.assertEqual(config["GOLD_RESEARCH_AUTOMATIC"], "false")
         self.assertEqual(config["GOLD_AI_DISABLED_PROVIDERS"], "qwen")
         self.assertEqual(config["KEEP"], "preserved")
+        self.assertEqual(config["GOLD_CACHE_REDIS_ENABLED"], "true")
+        self.assertIn("cache.yaml",yaml.safe_load((base/"kustomization.yaml").read_text())["resources"])
+        cache=next(item for item in yaml.safe_load_all((base/"cache.yaml").read_text()) if item["kind"]=="Deployment")
+        self.assertEqual(cache["spec"]["replicas"],1)
         server, web = yaml.safe_load_all((base / "deployments.yaml").read_text())
         self.assertEqual(server["spec"]["replicas"], 1)
         self.assertEqual(server["spec"]["template"]["spec"]["nodeSelector"], {"custom":"keep"})

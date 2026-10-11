@@ -1,12 +1,12 @@
-#gold-catcher-app { color-scheme: light dark; }
+#gold-catcher-app { color-scheme: light dark; width: 100%; min-height: 100vh; }
 .gc-app {
-  --gc-positive: light-dark(#21765e, #89c5ad); --gc-negative: light-dark(#a14e3d, #dfa08b);
-  --gc-bg: light-dark(#f6f7f9, #0d1118); --gc-surface: light-dark(#ffffff, #161c27); --gc-sidebar: light-dark(#eceff3, #10151e);
-  --gc-text: light-dark(#1c2533, #e9edf5); --gc-muted: light-dark(#667282, #97a3b6); --gc-line: light-dark(#e3e7ed, #272f3d);
-  --gc-gold: light-dark(#92651c, #dbb979); --gc-gold-fill: light-dark(#f6ebd7, #2d281e); --gc-blue: light-dark(#417198, #819fcb);
-  --gc-active: light-dark(#dfe4ec, #232d3b); --gc-space: 20px;
-  display: grid; grid-template-columns: 187px minmax(0,1fr); width: 100%; min-width: 0; color: var(--gc-text); background: var(--gc-bg);
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 13px; line-height: 1.55; text-align: left; border-radius: 12px; overflow: clip;
+  --gc-positive: #10b981; --gc-negative: #f43f5e;
+  --gc-bg: #090d16; --gc-surface: #101726; --gc-sidebar: #0b101c;
+  --gc-text: #f1f5f9; --gc-muted: #64748b; --gc-line: rgba(255, 255, 255, 0.08);
+  --gc-gold: #fbbf24; --gc-gold-fill: rgba(251, 191, 36, 0.12); --gc-blue: #38bdf8;
+  --gc-active: rgba(255, 255, 255, 0.06); --gc-space: 20px;
+  display: grid; grid-template-columns: 220px minmax(0,1fr); width: 100%; min-width: 0; color: var(--gc-text); background: var(--gc-bg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; font-size: 13px; line-height: 1.5; text-align: left;
 }
 .gc-app * { box-sizing: border-box; }
 .gc-app button, .gc-app select { font: inherit; color: inherit; }

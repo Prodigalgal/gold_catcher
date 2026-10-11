@@ -35,9 +35,14 @@ for item in objects:
             assert container["securityContext"]["capabilities"]["drop"] == ["ALL"]
             assert "readinessProbe" in container
             if args.active and kind == "Deployment":
-                assert re.fullmatch(r"docker.io/speedproxy/gold-catcher-(server|web)@sha256:[0-9a-f]{64}", container["image"])
+                if metadata["name"]=="gold-catcher-cache":
+                    assert re.fullmatch(r"docker.io/library/redis@sha256:[0-9a-f]{64}",container["image"])
+                else:
+                    assert re.fullmatch(r"docker.io/speedproxy/gold-catcher-(server|web)@sha256:[0-9a-f]{64}", container["image"])
     if kind == "HTTPRoute":
         assert item["spec"]["hostnames"] == ["gold.mnnu.eu.org"]
         assert not any(match.get("path", {}).get("value") == "/actuator" for rule in item["spec"]["rules"] for match in rule.get("matches", []))
 assert {key[2] for key in seen} >= {"gold-catcher-server", "gold-catcher-web", "gold-catcher-postgres"}
+cache=[item for item in objects if item["kind"]=="Service" and item["metadata"]["name"]=="gold-catcher-cache"]
+assert len(cache)==1 and cache[0]["spec"].get("type","ClusterIP")=="ClusterIP"
 print(f"Validated {len(objects)} deployment objects ({'active' if args.active else 'inactive'}).")

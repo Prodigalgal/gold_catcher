@@ -57,7 +57,7 @@ public class RuntimeSettings {
         String configured=text("GOLD_AI_COMPRESSION_ROUTE_JSON","");
         var route=configured.isBlank()?new AiRoute("compressor-mimo","mimo","mimo/mimo-v2.6-flash",
             text("GOLD_AI_MIMO_BASE_URL","https://any2api-direct.mnnu.eu.org/mimo/v1"),"ANY2API_MIMO_API_KEY",
-            8000,14000,24000,2,1000,75,false):mapper.readValue(configured,AiRoute.class);
+            8000,14000,24000,2,1000,300,false):mapper.readValue(configured,AiRoute.class);
         if(!route.id().equals("compressor-mimo")||route.judge())throw new IllegalArgumentException("INVALID_COMPRESSION_ROUTE");
         if(!aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         return route;

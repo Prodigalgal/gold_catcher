@@ -5,6 +5,25 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
+    @Test void requestsStreamingAndOnlySubmitsACompletedStream()throws Exception{
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var route=new AiRoute("custom","custom","custom/model","https://localhost/v1","UI",10000,16000,30000,2,1000,300,false);
+        f.settings.registerConfiguredRoute(route,"test-credential","OPENAI_COMPATIBLE","MANUAL");var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        String output="protocol=GOLD_RESEARCH_V1\ntitle=等待\noutput=观察\nshortDirection=UNKNOWN\nlongDirection=UNKNOWN\nplan.action=WAIT\n";
+        String delta="data: "+f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("index",0,"delta",java.util.Map.of("content",output)))))+"\n\n";
+        String ending="data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        var calls=new java.util.concurrent.atomic.AtomicInteger();
+        when(remote.send(any(),eq(1_000_000))).thenAnswer(call->{
+            var request=(java.net.http.HttpRequest)call.getArgument(0);var bytes=new java.io.ByteArrayOutputStream();
+            request.bodyPublisher().orElseThrow().subscribe(new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>(){
+                public void onSubscribe(java.util.concurrent.Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(java.nio.ByteBuffer b){byte[] chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}public void onError(Throwable t){throw new AssertionError(t);}public void onComplete(){}});
+            assertThat(f.mapper.readTree(bytes.toByteArray()).path("stream").asBoolean()).isTrue();
+            assertThat(request.headers().firstValue("Accept")).contains("text/event-stream");
+            assertThat(request.timeout().orElseThrow()).isEqualTo(java.time.Duration.ofSeconds(300));
+            return response(200,delta+(calls.incrementAndGet()==1?"":ending));
+        });
+        assertThatThrownBy(()->client.complete(route,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(300))).hasMessage("STREAM_INCOMPLETE");
+        assertThat(client.complete(route,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(300)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+    }
     @Test void openAny2apiCircuitCanAttemptRecoveryWithoutTreatingItAsConfirmedHealthy()throws Exception{
         var f=new TestSupport();f.environment.setProperty("GOLD_AI_ROUTES_JSON",java.nio.file.Files.readString(java.nio.file.Path.of("../config/ai-routes.fast.example.json")));
         for(var route:f.settings.allRoutes())f.environment.setProperty(route.apiKeyEnv(),"test-only");var remote=mock(RemoteHttp.class);

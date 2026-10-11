@@ -7,6 +7,10 @@ data:
   GOLD_ANY2API_BASE_URL: http://any2api-server.any2api.svc.cluster.local:8080
   GOLD_DB_URL: jdbc:postgresql://gold-catcher-postgres:5432/gold_catcher
   GOLD_DB_USERNAME: gold_catcher
+  GOLD_CACHE_REDIS_ENABLED: "true"
+  GOLD_CACHE_REDIS_HOST: gold-catcher-cache
+  GOLD_CACHE_LOCAL_MIB: "8"
+  GOLD_CACHE_VALUE_MIB: "2"
   GOLD_MARKET_ENABLED: "true"
   GOLD_NEWS_ENABLED: "true"
   GOLD_DRIVERS_ENABLED: "true"

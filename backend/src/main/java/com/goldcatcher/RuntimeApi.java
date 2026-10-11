@@ -13,6 +13,8 @@ import com.goldcatcher.research.*;
 import com.goldcatcher.simulation.SimulationLedger;
 import com.goldcatcher.simulation.FundingService;
 import com.goldcatcher.simulation.ReviewService;
+import com.goldcatcher.performance.UiReadCache;
+import com.goldcatcher.performance.ApiPerformance;
 import java.security.Principal;
 import java.time.Clock;
 import java.util.*;
@@ -33,42 +35,56 @@ public class RuntimeApi {
     private final MarketArchive archive;
     private final ReviewService reviews;private final EvidenceCompression compression;
     private final AiConfiguration aiConfiguration;
+    private final UiReadCache readCache;private final ApiPerformance performance;
     public RuntimeApi(MarketFeed market,NewsService news,SimulationLedger ledger,ResearchService research,Any2ApiClient ai,
-        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis,SourceReliability reliability,DriverSources drivers,SupplementalSources supplemental,MarketArchive archive,ReviewService reviews,EvidenceCompression compression,AiConfiguration aiConfiguration) {
+        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis,SourceReliability reliability,DriverSources drivers,SupplementalSources supplemental,MarketArchive archive,ReviewService reviews,EvidenceCompression compression,AiConfiguration aiConfiguration,UiReadCache readCache,ApiPerformance performance) {
         this.market=market;this.news=news;this.ledger=ledger;this.research=research;this.ai=ai;this.settings=settings;this.events=events;this.store=store;this.clock=clock;
         this.funding=funding;this.proxy=proxy;this.analysis=analysis;
         this.reliability=reliability;this.drivers=drivers;this.supplemental=supplemental;
         this.archive=archive;
         this.reviews=reviews;this.compression=compression;
         this.aiConfiguration=aiConfiguration;
+        this.readCache=readCache;this.performance=performance;
     }
     @GetMapping("/session") public Map<String,String> session(Principal principal,CsrfToken token) {
         return Map.of("username",principal.getName(),"csrfHeader",token.getHeaderName(),"csrfToken",token.getToken());
     }
-    @GetMapping("/dashboard") public Map<String,Object> dashboard(@RequestParam(defaultValue="XAU_USDT") String symbol) {
+    @GetMapping("/dashboard") public Map<String,Object> dashboard(@RequestParam(defaultValue="XAU_USDT") String symbol,@RequestParam(defaultValue="full") String view) {
+        if(!List.of("full","overview","sources","research","trades","review","operations").contains(view))throw new IllegalArgumentException("UNKNOWN_DASHBOARD_VIEW");
+        boolean full=view.equals("full"),sources=full||view.equals("sources"),operations=full||view.equals("operations");
         product(symbol);Map<String,Object> data=new LinkedHashMap<>();
-        data.put("serverTime",clock.instant());data.put("market",market.snapshot(symbol));data.put("marketProvenance",market.provenance(symbol));data.put("account",ledger.view(symbol));
-        var official=news.sources();data.put("news",news.news());data.put("calendar",news.calendar());data.put("sources",official);data.put("models",ai.states());
-        data.put("sourceProxy",proxy.status());
-        var trend=analysis.view(symbol);data.put("analysis",trend);
-        var channels=new ArrayList<SourceReliability.Input>();
-        official.forEach(s->channels.add(new SourceReliability.Input(s.id(),s.id(),NewsService.mediaSource(s.id())?"MEDIA":"OFFICIAL",s.url(),s.state(),news.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
-        trend.sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"DRIVER",s.url(),s.state(),drivers.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
-        trend.supplemental().sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"SUPPLEMENTAL",s.url(),s.state(),supplemental.interval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
-        data.put("sourceReliability",reliability.view(channels));
+        data.put("dashboardView",view);data.put("serverTime",clock.instant());data.put("market",market.snapshot(symbol));data.put("marketProvenance",market.provenance(symbol));data.put("account",ledger.view(symbol));
+        var official=news.sources();data.put("news",sources?readCache.get("news-list",store.revision("news"),2000,news::news):List.of());
+        data.put("calendar",sources?news.calendar():List.of());data.put("sources",sources||operations?official:List.of());
+        data.put("models",operations?readCache.get("model-states",store.revision("ai-configuration"),1000,ai::states):List.of());
+        if(sources||operations)data.put("sourceProxy",proxy.status());
+        var trend=sources||operations||view.equals("overview")?analysis.view(symbol):null;
+        if(sources)data.put("analysis",trend);
+        else if(view.equals("overview"))data.put("analysis",Map.of("symbol",trend.symbol(),"calculatedAt",trend.calculatedAt(),"method",trend.method(),"horizons",trend.horizons()));
+        if(sources||operations){
+            var channels=new ArrayList<SourceReliability.Input>();
+            official.forEach(s->channels.add(new SourceReliability.Input(s.id(),s.id(),NewsService.mediaSource(s.id())?"MEDIA":"OFFICIAL",s.url(),s.state(),news.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
+            trend.sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"DRIVER",s.url(),s.state(),drivers.pollInterval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
+            trend.supplemental().sources().forEach(s->channels.add(new SourceReliability.Input(s.id(),s.label(),"SUPPLEMENTAL",s.url(),s.state(),supplemental.interval(s.id()),s.lastSuccess(),s.nextPoll(),s.error())));
+            data.put("sourceReliability",reliability.view(channels));
+        }
         data.put("funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));
         data.put("costConfiguration",market.costConfiguration(symbol));
-        data.put("marketArchive",archive.status(symbol));
-        data.put("liveDepth",symbol.equals("XAU_USDT")?market.depth():Map.of("state","NOT_PROVIDED"));
-        data.put("budgets",settings.allRoutes().stream().map(route->Map.ofEntries(Map.entry("id",route.id()),Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("characterLimit",route.characterLimit()),
+        if(full||operations)data.put("marketArchive",archive.status(symbol));
+        if(full)data.put("liveDepth",symbol.equals("XAU_USDT")?market.depth():Map.of("state","NOT_PROVIDED"));
+        data.put("budgets",operations?settings.allRoutes().stream().map(route->Map.ofEntries(Map.entry("id",route.id()),Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("characterLimit",route.characterLimit()),
             Map.entry("byteLimit",route.byteLimit()),Map.entry("messageLimit",route.messageLimit()),Map.entry("outputReserve",route.outputReserve()),Map.entry("timeoutSeconds",route.timeoutSeconds()),Map.entry("judge",route.judge()),
-            Map.entry("headroomPercent",10),Map.entry("safetyTokens",512),Map.entry("submissionMode",settings.preferJsonText(route)?"JSON_TEXT":"CATALOG_AUTO"))).toList());
-        data.put("research",research.latest(symbol));data.put("compression",compression.status());
-        data.put("researchHistory",research.history().stream().filter(run->run.symbol.equals(symbol)).map(run->Map.of("id",run.id,"horizon",run.horizon,"status",run.status,"startedAt",run.startedAt,"stage",run.stage)).toList());
-        data.put("scheduling",research.scheduling());data.put("review",reviews.view(symbol));data.put("clock",clock instanceof ExchangeClock exchange?exchange.status():Map.of("state","TEST_CLOCK"));return data;
+            Map.entry("headroomPercent",10),Map.entry("safetyTokens",512),Map.entry("submissionMode",settings.preferJsonText(route)?"JSON_TEXT":"CATALOG_AUTO"))).toList():List.of());
+        data.put("research",readCache.get("latest-research",symbol+store.revision("research"),1000,()->research.latest(symbol)));
+        if(full||operations)data.put("compression",readCache.get("compression-status",store.revision("compression-result"),1000,compression::status));
+        data.put("researchHistory",full||view.equals("research")?research.summaries().stream().filter(run->run.symbol().equals(symbol)).map(run->Map.of("id",run.id(),"horizon",run.horizon(),"status",run.status(),"startedAt",run.startedAt(),"stage",run.stage())).toList():List.of());
+        data.put("scheduling",research.scheduling());
+        if(full||view.equals("review"))data.put("review",readCache.get("review",symbol+store.revision("research-summary")+store.revision("ledger")+store.revision("cfd-ledger"),5000,()->reviews.view(symbol)));
+        data.put("clock",clock instanceof ExchangeClock exchange?exchange.status():Map.of("state","TEST_CLOCK"));return data;
     }
-    @GetMapping("/news/{id}") public Map<String,Object> article(@PathVariable String id){return news.detail(id);}
-    @GetMapping("/compression/{id}") public Map<String,Object> compression(@PathVariable String id){return compression.detail(id);}
+    @GetMapping("/news/{id}") public tools.jackson.databind.JsonNode article(@PathVariable String id){return readCache.get("news-detail",id+store.revision("news-body")+store.revision("news"),2000,()->news.detail(id));}
+    @GetMapping("/compression/{id}") public tools.jackson.databind.JsonNode compression(@PathVariable String id){return readCache.get("compression-detail",id,300000,()->compression.detail(id));}
+    @GetMapping("/performance") public Map<String,Object> performance(){return Map.of("cache",readCache.status(),"http",performance.view());}
     @PostMapping("/compression/news/{id}/reprocess") public EvidenceCompression.Job reprocess(@PathVariable String id){return compression.reprocess(id);}
     public record ResearchRequest(String symbol,String horizon) {}
     @PostMapping("/research") public ResponseEntity<ResearchService.Run> start(@RequestBody ResearchRequest request) {

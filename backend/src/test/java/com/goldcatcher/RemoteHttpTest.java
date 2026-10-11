@@ -9,6 +9,37 @@ import java.util.zip.*;
 import org.junit.jupiter.api.Test;
 
 class RemoteHttpTest {
+    @Test void streamHeartbeatDoesNotRemoveTheTotalDeadlineAndTimeoutsAreDistinguishable()throws Exception{
+        for(String mode:java.util.List.of("first","idle","total")){
+            var body=new RemoteHttp.LimitedBody(1000);long now=System.nanoTime();
+            if(!mode.equals("first")){body.firstAt=now;body.lastAt=now;}
+            var pending=new java.util.concurrent.CompletableFuture<String>();
+            long total=java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(mode.equals("idle")?1000:80);
+            long idle=java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(mode.equals("idle")?50:1000);
+            assertThatThrownBy(()->RemoteHttp.awaitStream(pending,body,now,total,idle))
+                .hasMessage(mode.equals("first")?"STREAM_FIRST_BYTE_TIMEOUT":mode.equals("idle")?"STREAM_IDLE_TIMEOUT":"STREAM_TOTAL_TIMEOUT");
+        }
+    }
+    @Test void receivesFlushedSseChunksIncludingSplitUtf8AndReleasesTheConnectionAfterInterruption()throws Exception{
+        var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+        var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();server.setExecutor(executor);
+        byte[] expected="data: 黄金\n\ndata: [DONE]\n\n".getBytes(StandardCharsets.UTF_8);
+        server.createContext("/sse",exchange->{try(exchange){exchange.getResponseHeaders().add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0);
+            for(byte next:expected){exchange.getResponseBody().write(next);exchange.getResponseBody().flush();}
+            try{Thread.sleep(3000);}catch(InterruptedException ignored){}}});
+        server.createContext("/endless",exchange->{try(exchange){exchange.sendResponseHeaders(200,0);for(int i=0;i<40;i++){
+            exchange.getResponseBody().write(": heartbeat\n\n".getBytes(StandardCharsets.UTF_8));exchange.getResponseBody().flush();
+            try{Thread.sleep(40);}catch(InterruptedException ignored){return;}}}});
+        server.start();var http=new RemoteHttp();String base="http://127.0.0.1:"+server.getAddress().getPort();
+        try{
+            var request=java.net.http.HttpRequest.newBuilder(java.net.URI.create(base+"/sse")).header("Accept","text/event-stream").timeout(java.time.Duration.ofSeconds(2)).build();
+            long started=System.nanoTime();assertThat(http.send(request,1000).body()).isEqualTo(expected);
+            assertThat(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)).isLessThan(1500);
+            assertThatThrownBy(()->http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base+"/endless"))
+                .header("Accept","text/event-stream").timeout(java.time.Duration.ofMillis(250)).build(),1000)).hasMessage("STREAM_TOTAL_TIMEOUT");
+            assertThat(http.send(request,1000).body()).isEqualTo(expected);
+        }finally{server.stop(0);executor.shutdownNow();http.client.shutdownNow();}
+    }
     private final byte[] plain=("gold source "+"data ".repeat(500)).getBytes(StandardCharsets.UTF_8);
     @Test void decodesAllAdvertisedBrowserContentEncodingsAndEmptyConditionalResponses() throws Exception {
         var gzip=new ByteArrayOutputStream();try(var encoder=new GZIPOutputStream(gzip)){encoder.write(plain);}

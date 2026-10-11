@@ -46,6 +46,7 @@ class EvidenceCompressionTest {
         assertThat(f.store.find("research-preprocessing","failed",Map.class).orElseThrow().get("voting")).isEqualTo(false);
     }
     @Test void rawChunksAreLosslessUnicodeBoundedAndLongArticleMergesCachedSummaries() throws Exception {
+        compressionTimeout(75);
         String text=("价格 4.00 😄 is unchanged. This is not an unconditional forecast. ").repeat(600);body=body(text);
         var chunks=EvidenceCompression.chunks(text,"long",f.settings.compressionRoute());assertThat(chunks).hasSizeGreaterThan(2);
         var joined=new StringBuilder();for(var chunk:chunks){joined.append(chunk.text());assertThat(text.substring(chunk.start(),chunk.end())).isEqualTo(chunk.text());
@@ -135,6 +136,7 @@ class EvidenceCompressionTest {
         verify(ai,times(3)).compress(any(),anyString(),any());
     }
     @Test void slowSuccessfulChunksDeferTheNextRequestAndMergeWithoutCreatingUpstreamFailures() throws Exception {
+        compressionTimeout(75);
         body=body("Official rate is 4.00 and is not a forecast. ".repeat(200));
         assertThat(EvidenceCompression.chunks(body.text(),"slow",f.settings.compressionRoute())).hasSize(2);
         var monotonic=new java.util.concurrent.atomic.AtomicLong();
@@ -259,5 +261,9 @@ class EvidenceCompressionTest {
         f.clock.advance(301000);answer("{\"summary\":\"重新压缩的官方事实摘要。\"}");compression.collect();awaitPass();
         var result=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();assertThat(result.newsId()).isEqualTo("a");assertThat(result.state()).isEqualTo("EXTRACTED");
         verify(ai,times(2)).compress(any(),anyString(),any());
+    }
+    private void compressionTimeout(int seconds){
+        var route=(tools.jackson.databind.node.ObjectNode)f.mapper.valueToTree(f.settings.compressionRoute());route.put("timeoutSeconds",seconds);
+        f.environment.setProperty("GOLD_AI_COMPRESSION_ROUTE_JSON",route.toString());
     }
 }

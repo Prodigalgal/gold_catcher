@@ -34,6 +34,9 @@ spec:
                 name: gold-catcher-config
             - secretRef:
                 name: gold-catcher-runtime
+            - secretRef:
+                name: gold-catcher-cache
+                optional: true
           startupProbe:
             httpGet: {path: /actuator/health/liveness, port: 8080}
             periodSeconds: 5

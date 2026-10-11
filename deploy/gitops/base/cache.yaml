@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gold-catcher-cache
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app: gold-catcher-cache}
+  template:
+    metadata:
+      labels: {app: gold-catcher-cache}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      imagePullSecrets:
+        - name: gold-catcher-registry
+      containers:
+        - name: redis
+          image: docker.io/library/redis@sha256:a308ca111032fa8f306a2dc7be7ba5deb8b777ed5d258c733cddba48a1fd7904
+          command: [/bin/sh, -ec]
+          args:
+            - exec redis-server --bind 0.0.0.0 --requirepass "$REDISCLI_AUTH" --save "" --appendonly no --maxmemory 32mb --maxmemory-policy allkeys-lru
+          ports: [{containerPort: 6379}]
+          env:
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef: {name: gold-catcher-cache, key: GOLD_CACHE_REDIS_PASSWORD}
+          readinessProbe:
+            exec: {command: [/bin/sh, -ec, 'test "$(redis-cli --no-auth-warning ping)" = PONG']}
+          livenessProbe:
+            exec: {command: [/bin/sh, -ec, 'test "$(redis-cli --no-auth-warning ping)" = PONG']}
+            initialDelaySeconds: 10
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gold-catcher-cache
+spec:
+  selector: {app: gold-catcher-cache}
+  ports: [{port: 6379, targetPort: 6379}]

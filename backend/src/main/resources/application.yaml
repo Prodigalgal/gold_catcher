@@ -1,5 +1,9 @@
 server:
   port: 8080
+  compression:
+    enabled: true
+    min-response-size: 2048
+    mime-types: application/json,text/csv,text/plain
   shutdown: graceful
   servlet:
     session:
@@ -21,6 +25,13 @@ spring:
       maximum-pool-size: 6
   flyway:
     enabled: true
+  data:
+    redis:
+      host: ${GOLD_CACHE_REDIS_HOST:127.0.0.1}
+      port: ${GOLD_CACHE_REDIS_PORT:6379}
+      password: ${GOLD_CACHE_REDIS_PASSWORD:}
+      connect-timeout: 200ms
+      timeout: 200ms
   task:
     scheduling:
       pool:
@@ -28,6 +39,9 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 management:
+  health:
+    redis:
+      enabled: false
   endpoints:
     web:
       exposure:

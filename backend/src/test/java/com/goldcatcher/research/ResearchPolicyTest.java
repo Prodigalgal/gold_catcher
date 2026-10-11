@@ -5,6 +5,13 @@ import java.time.*;
 import org.junit.jupiter.api.Test;
 
 class ResearchPolicyTest {
+    @Test void aSlowFirstResponseGetsTheFullRequestBudgetRatherThanOneThirdOfTheStage(){
+        var policy=ResearchPolicy.defaults("SHORT");
+        assertThat(policy.attemptMillis(600000,300)).isEqualTo(300000);
+        assertThat(policy.attemptMillis(45000,300)).isEqualTo(45000);
+        for(String code:new String[]{"STREAM_FIRST_BYTE_TIMEOUT","STREAM_IDLE_TIMEOUT","STREAM_TOTAL_TIMEOUT","STREAM_INCOMPLETE","INFERENCE_STREAM_ERROR_UPSTREAM_FAILED"})
+            assertThat(ResearchPolicy.retryable(code)).isTrue();
+    }
     @Test void transportAndFormatErrorsAreRetryableButCredentialsBudgetsAndCancellationAreNot(){
         for(String code:new String[]{"REQUEST_TIMEOUT","UPSTREAM_TRANSPORT_FAILED","INFERENCE_HTTP_429_RATE_LIMITED","INFERENCE_HTTP_503","INVALID_DIRECTION","INVALID_JUDGE_CANDIDATE","PLAN_NARRATIVE_TOO_LONG",
             "PLAN_NARRATIVE_TOO_LONG_INVALIDATE","INVALID_STRUCTURED_OUTPUT_CONFLICT_PLAN_ACTION","MISSING_REQUIRED_OUTPUT_PLAN_ACTION"})assertThat(ResearchPolicy.retryable(code)).isTrue();

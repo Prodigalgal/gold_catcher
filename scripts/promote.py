@@ -17,7 +17,7 @@ def runtime_changes(root: Path) -> list[tuple[Path, str]]:
     template = yaml.safe_load((source / "configmap.yaml").read_text(encoding="utf-8"))
     if config.get("kind") != "ConfigMap" or config.get("metadata", {}).get("name") != "gold-catcher-config":
         raise ValueError("unexpected runtime ConfigMap")
-    for key in ("GOLD_DRIVERS_ENABLED", "GOLD_COMPRESSION_ENABLED", "GOLD_COMPRESSION_CHUNKS_PER_PASS", "GOLD_MARKET_ARCHIVE_RETENTION_DAYS"):
+    for key in ("GOLD_DRIVERS_ENABLED", "GOLD_COMPRESSION_ENABLED", "GOLD_COMPRESSION_CHUNKS_PER_PASS", "GOLD_MARKET_ARCHIVE_RETENTION_DAYS", "GOLD_CACHE_REDIS_ENABLED", "GOLD_CACHE_REDIS_HOST", "GOLD_CACHE_LOCAL_MIB", "GOLD_CACHE_VALUE_MIB"):
         config["data"][key] = template["data"][key]
     disabled = {value.strip().lower() for value in (config["data"].get("GOLD_AI_DISABLED_PROVIDERS", "") + "," + template["data"]["GOLD_AI_DISABLED_PROVIDERS"]).split(",") if value.strip()}
     config["data"]["GOLD_AI_DISABLED_PROVIDERS"] = ",".join(sorted(disabled))
@@ -31,7 +31,17 @@ def runtime_changes(root: Path) -> list[tuple[Path, str]]:
         raise ValueError("expected exactly one Gold Catcher server container")
     server_template = next(item for item in templates if item["metadata"]["name"] == "gold-catcher-server")
     containers[0]["resources"] = server_template["spec"]["template"]["spec"]["containers"][0]["resources"]
-    return [(paths[0], yaml.safe_dump(config, sort_keys=False)), (paths[1], yaml.safe_dump_all(deployments, sort_keys=False))]
+    env_from=containers[0].setdefault("envFrom",[])
+    if not any(item.get("secretRef",{}).get("name")=="gold-catcher-cache" for item in env_from):
+        env_from.append({"secretRef":{"name":"gold-catcher-cache","optional":True}})
+    cache=list(yaml.safe_load_all((source/"cache.yaml").read_text(encoding="utf-8")))
+    for item in cache:
+        if item["kind"]=="Deployment":item["spec"]["replicas"]=servers[0]["spec"].get("replicas",0)
+    kustomization_path=target/"kustomization.yaml"
+    kustomization=yaml.safe_load(kustomization_path.read_text(encoding="utf-8"))
+    if "cache.yaml" not in kustomization["resources"]:kustomization["resources"].append("cache.yaml")
+    return [(paths[0], yaml.safe_dump(config, sort_keys=False)), (paths[1], yaml.safe_dump_all(deployments, sort_keys=False)),
+        (target/"cache.yaml",yaml.safe_dump_all(cache,sort_keys=False)),(kustomization_path,yaml.safe_dump(kustomization,sort_keys=False))]
 
 
 def promote(root: Path, inputs: Path, commit: str) -> None:
