@@ -49,7 +49,12 @@ public class ApiPerformance extends OncePerRequestFilter {
             String path=matched==null?(List.of("/api/auth/login","/api/auth/logout").contains(request.getRequestURI())?request.getRequestURI():"UNMAPPED"):matched.toString();
             String method=List.of("GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS").contains(request.getMethod())?request.getMethod():"OTHER";
             String route=method+" "+path;
-            windows.computeIfAbsent(route,unused->new Window()).add(new Sample((System.nanoTime()-started)/1000,bytes[0],response.getStatus()));
+            if(path.equals("/api/dashboard")){
+                String page=request.getParameter("view");if(page==null)page="full";
+                route+=" ["+(List.of("full","overview","sources","research","trades","review","operations").contains(page)?page:"INVALID")+"]";
+            }
+            var sample=new Sample((System.nanoTime()-started)/1000,bytes[0],response.getStatus());
+            windows.compute(route,(unused,window)->{if(window==null)window=new Window();window.add(sample);return window;});
         }
     }
     public Map<String,Object> view(){return Map.of("scope","THIS_PROCESS; LAST_128_SAMPLES_PER_ROUTE; APPLICATION_BYTES_BEFORE_COMPRESSION; SSE_EXCLUDED","routes",windows.entrySet().stream().sorted(Map.Entry.comparingByKey()).map(entry->entry.getValue().view(entry.getKey())).toList());}
