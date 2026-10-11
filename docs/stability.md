@@ -27,6 +27,6 @@ python scripts/verify_stability.py --seconds 600 --interval 20 --output artifact
 
 ## 尚未通过的验收
 
-更早的启动验证曾被工具策略拒绝，返回 `blocked by policy`，没有触发细节；不能据此判断为交易鉴权或模型故障。2026-10-11 已启用自动研究，0.4.5长线研究 `24205d50-dee1-47eb-b9ce-3f5be684525f` 完成四阶段与三个有效裁决，其他轮次仍有超时/格式失败。0.4.6协议、重试和恢复规则见 [research-resilience.md](research-resilience.md)，其线上整轮验收与长期可用率仍需分别记录。离线、摘要、UI和CI结果不能替代真实模型与内部订单结果。
+更早的启动验证曾被工具策略拒绝，返回 `blocked by policy`，没有触发细节；不能据此判断为交易鉴权或模型故障。2026-10-11 已启用自动研究，0.4.5长线研究 `24205d50-dee1-47eb-b9ce-3f5be684525f` 完成四阶段与三个有效裁决，其他轮次仍有超时/格式失败。0.4.6协议、重试和恢复规则见 [research-resilience.md](research-resilience.md)，真实三方文本裁决及两次部署恢复见[线上验收记录](reports/research-resilience-live-2026-10-11.md)。长期可用率仍需独立观察，离线、摘要、UI和CI结果不能替代真实模型与内部订单结果。
 
 CNBC公开盘中美债/TIPS和财经RSS为部分覆盖，报价日期/时区、首次收到与过期状态分别保留；开市连续性与首发延迟待实测。具有延迟保证的分钟级现金美债/TIPS、授权商业快讯、CME 授权深度/期权、CFD swap 结算细节仍按当前公开覆盖与未知项显示，不能用容器健康状态消除这些缺口。
