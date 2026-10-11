@@ -149,7 +149,7 @@ public class EvidenceCompression {
         if(!enabled()||settings.secret(route).isBlank()||retryAt.isAfter(cutoff)||pending!=null&&!pending.isDone()||!ai.compressionAvailable(route))return;
         // Fresh evidence first, then the least recently attempted article; one slow report cannot monopolize the worker.
         var priority=news.selectedEvidence(cutoff,4).stream().map(NewsService.News::id).toList();
-        var candidate=candidates.stream().min(Comparator.comparing((Candidate c)->c.job()!=null&&c.cached()==null?0:1)
+        var candidate=candidates.stream().min(Comparator.comparing((Candidate c)->c.job()!=null?0:1)
             .thenComparing(c->c.cached()==null?0:1).thenComparingInt(c->priority.contains(c.article().id())?priority.indexOf(c.article().id()):Integer.MAX_VALUE)
             .thenComparing(c->c.cached()==null?Instant.EPOCH:c.cached().completedAt())).orElse(null);
         if(candidate!=null){String runtime=checkpointId;workingOn=candidate.article().id();pending=worker.submit(()->{String error=null;

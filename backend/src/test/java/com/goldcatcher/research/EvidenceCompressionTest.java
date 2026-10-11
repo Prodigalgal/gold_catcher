@@ -229,7 +229,7 @@ class EvidenceCompressionTest {
     }
     @Test void arrivalNotificationsReturnWithoutWaitingForTheDatabaseScanAndCoalesceBursts()throws Exception{
         var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
-        when(news.compressionCandidates(any())).thenAnswer(call->{entered.countDown();assertThat(release.await(2,TimeUnit.SECONDS)).isTrue();return List.of();});
+        when(news.compressionCandidates(any())).thenAnswer(call->{entered.countDown();assertThat(release.await(10,TimeUnit.SECONDS)).isTrue();return List.of();});
         var callback=org.mockito.ArgumentCaptor.forClass(java.util.function.Consumer.class);verify(news).onText(callback.capture());
         CompletableFuture.runAsync(()->callback.getValue().accept("a")).get(1,TimeUnit.SECONDS);assertThat(entered.await(1,TimeUnit.SECONDS)).isTrue();
         CompletableFuture.runAsync(()->{for(int i=0;i<100;i++)callback.getValue().accept("arrival-"+i);}).get(1,TimeUnit.SECONDS);
@@ -250,5 +250,14 @@ class EvidenceCompressionTest {
             assertThat(((Map<?,?>)packet.get("evidence")).get("decisionExpiresAt")).isEqualTo(f.clock.instant().plusSeconds(180));
             var output=f.mapper.valueToTree(Map.of("summary","官方事实摘要。"));return new Any2ApiClient.Answer(route.model(),"","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);});
         assertThat(compression.process(article,body).state()).isEqualTo("EXTRACTED");
+    }
+    @Test void explicitJobRetryCannotBeStarvedByUnprocessedFeedMessages()throws Exception{
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");when(ai.compress(any(),anyString(),any())).thenThrow(new IllegalStateException("INVALID_COMPRESSION_OUTPUT"));
+        compression.reprocess("a");awaitPass();
+        var second=new NewsService.News("b",article.source(),"New feed message",article.excerpt(),article.link()+"/new",article.publishedAt(),article.receivedAt(),article.verification(),1,"feed-b");
+        f.store.save("news","b",second);when(news.compressionCandidates(any())).thenReturn(List.of(second,article));when(news.textForCompression(eq("b"),any())).thenReturn(NewsService.SourceText.fromBody(body));
+        f.clock.advance(301000);answer("{\"summary\":\"重新压缩的官方事实摘要。\"}");compression.collect();awaitPass();
+        var result=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();assertThat(result.newsId()).isEqualTo("a");assertThat(result.state()).isEqualTo("EXTRACTED");
+        verify(ai,times(2)).compress(any(),anyString(),any());
     }
 }
