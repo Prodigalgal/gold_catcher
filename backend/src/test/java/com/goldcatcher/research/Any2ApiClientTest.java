@@ -11,21 +11,23 @@ class Any2ApiClientTest {
         var withdrawn=new AiRoute("withdrawn","QWEN","qwen/old","https://localhost/qwen/v1","TEST",10000,16000,30000,2,1000,2,false);
         var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
         assertThatThrownBy(()->client.complete(withdrawn,"instruction",java.util.Map.of())).hasMessage("AI_PROVIDER_DISABLED");
-        assertThatThrownBy(()->client.selectRoutes(java.util.List.of(withdrawn),java.util.List.of())).hasMessage("NO_AVAILABLE_INDEPENDENT_JUDGE");
+        assertThatThrownBy(()->client.selectRoutes(java.util.List.of(withdrawn),java.util.List.of())).hasMessage("NO_AVAILABLE_JUDGE_QUORUM");
         verifyNoInteractions(remote);
     }
-    @Test void readinessUsesCachedCatalogOnlyAndFallbackJudgeRemainsAnIndependentModel() throws Exception {
+    @Test void readinessUsesCachedCatalogOnlyAndTrioModelsCanReturnAsDistinctJudges() throws Exception {
         var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
         var first=new AiRoute("a","a","a/one","https://localhost/a/v1","TEST",10000,16000,30000,2,1000,2,false);
         var second=new AiRoute("b","b","b/two","https://localhost/b/v1","TEST",10000,16000,30000,2,1000,2,false);
         var unavailable=new AiRoute("j","arena","arena/offline","https://localhost/arena/v1","TEST",10000,16000,30000,2,1000,2,true);
         var sharedResearcher=new AiRoute("d","deepseek","deepseek/default","https://localhost/deepseek/v1","TEST",10000,16000,30000,2,1000,2,false);
         var backup=new AiRoute("backup","deepseek","deepseek/default","https://localhost/deepseek/v1","TEST",10000,16000,30000,2,1000,2,true);
-        var preferred=java.util.List.of(first,second,sharedResearcher,unavailable);
+        var judge2=new AiRoute("j2","glm","glm/four","https://localhost/glm/v1","TEST",10000,16000,30000,2,1000,2,true);
+        var judge3=new AiRoute("j3","grok","grok/five","https://localhost/grok/v1","TEST",10000,16000,30000,2,1000,2,true);
+        var preferred=java.util.List.of(first,second,sharedResearcher,unavailable,judge2,judge3);
         f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(preferred));
         f.environment.setProperty("GOLD_AI_FALLBACK_ROUTES_JSON",f.mapper.writeValueAsString(java.util.List.of(backup)));
         var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
-        assertThat(client.routeReadiness("LONG")).containsEntry("state","NO_AVAILABLE_INDEPENDENT_JUDGE");verifyNoInteractions(remote);
+        assertThat(client.routeReadiness("LONG")).containsEntry("state","NO_AVAILABLE_JUDGE_QUORUM");verifyNoInteractions(remote);
         when(remote.send(any(),eq(500_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);
             return response(200,"{\"available\":"+!request.uri().getPath().contains("offline")+"}");});
         client.warmCatalogs();clearInvocations(remote);
@@ -33,11 +35,11 @@ class Any2ApiClientTest {
         assertThat(preview.path("state").asText()).isEqualTo("READY");
         var selectedIds=new java.util.ArrayList<String>();for(var route:preview.path("selected"))selectedIds.add(route.path("routeId").asText());
         var checkStates=new java.util.ArrayList<String>();for(var check:preview.path("checks"))checkStates.add(check.path("state").asText());
-        assertThat(selectedIds).containsExactly("a","b","backup");
+        assertThat(selectedIds).containsExactly("a","b","d","j2","j3","backup");
         assertThat(checkStates).contains("MODEL_NOT_AVAILABLE");verifyNoInteractions(remote);
-        assertThat(client.selectRoutes(preferred,java.util.List.of(backup))).extracting(AiRoute::id).containsExactly("a","b","backup");
+        assertThat(client.selectRoutes(preferred,java.util.List.of(backup))).extracting(AiRoute::id).containsExactly("a","b","d","j2","j3","backup");
         verifyNoInteractions(remote);
-        f.clock.advance(300001);assertThat(client.routeReadiness("LONG")).containsEntry("state","NO_AVAILABLE_INDEPENDENT_JUDGE");verifyNoInteractions(remote);
+        f.clock.advance(300001);assertThat(client.routeReadiness("LONG")).containsEntry("state","NO_AVAILABLE_JUDGE_QUORUM");verifyNoInteractions(remote);
     }
     @Test void availableFallbacksAreFixedDistinctModelsAndEmulatedToolsUseJsonText() throws Exception {
         var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);
@@ -46,9 +48,11 @@ class Any2ApiClientTest {
         var second=new AiRoute("b","b","b/second","https://localhost/b/v1","TEST",10000,16000,30000,2,2200,2,false);
         var judge=new AiRoute("j","j","j/judge","https://localhost/j/v1","TEST",10000,16000,30000,2,2200,2,true);
         var fallback=new AiRoute("c","c","c/third","https://localhost/c/v1","TEST",10000,16000,30000,2,2200,2,false);
-        var reservedMimo=new AiRoute("m","mimo","mimo/mimo-v2.6-pro","https://localhost/mimo/v1","TEST",10000,16000,30000,2,2200,2,false);
+        var participatingMimo=new AiRoute("m","mimo","mimo/mimo-v2.6-pro","https://localhost/mimo/v1","TEST",10000,16000,30000,2,2200,2,false);
+        var judge2=new AiRoute("j2","mimo","mimo/mimo-v2.6-pro","https://localhost/mimo/v1","TEST",10000,16000,30000,2,2200,2,true);
+        var judge3=new AiRoute("j3","b","b/second","https://localhost/b/v1","TEST",10000,16000,30000,2,2200,2,true);
         var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
-        assertThat(client.selectRoutes(java.util.List.of(first,second,judge),java.util.List.of(reservedMimo,fallback))).extracting(AiRoute::id).containsExactly("b","c","j");
+        assertThat(client.selectRoutes(java.util.List.of(first,second,participatingMimo,judge,judge2,judge3),java.util.List.of(f.settings.compressionRoute(),fallback))).extracting(AiRoute::id).containsExactly("b","m","c","j","j2","j3");
         java.util.List<String> bodies=new java.util.ArrayList<>();
         when(remote.send(any(),eq(1_000_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);var bytes=new java.io.ByteArrayOutputStream();var publisher=request.bodyPublisher().orElseThrow();
             publisher.subscribe(new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>(){public void onSubscribe(java.util.concurrent.Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(java.nio.ByteBuffer b){var chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}public void onError(Throwable t){throw new AssertionError(t);}public void onComplete(){}});
@@ -58,6 +62,16 @@ class Any2ApiClientTest {
         var answer=client.complete(second,"只返回JSON",java.util.Map.of("evidence",java.util.Map.of("decisionExpiresAt",f.clock.instant().plusSeconds(30))));
         assertThat(answer.attempts()).hasSize(2);assertThat(answer.attempts().getFirst().httpStatus()).isEqualTo(503);
         for(var body:bodies){assertThat(f.mapper.readTree(body).has("tools")).isFalse();assertThat(f.mapper.readTree(body).path("response_format").path("type").asText()).isEqualTo("json_object");}
+    }
+    @Test void anUnavailableMemberCannotReduceTheFixedTrioOrStartInference() throws Exception {
+        var f=new TestSupport();f.environment.setProperty("GOLD_AI_ROUTES_JSON",java.nio.file.Files.readString(java.nio.file.Path.of("../config/ai-routes.fast.example.json")));
+        for(var route:f.settings.allRoutes())f.environment.setProperty(route.apiKeyEnv(),"test-only");
+        var remote=mock(RemoteHttp.class);when(remote.send(any(),eq(500_000))).thenAnswer(call->{
+            var request=(java.net.http.HttpRequest)call.getArgument(0);return response(200,"{\"available\":"+!request.uri().getPath().contains("mimo")+"}");});
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);client.warmCatalogs();
+        assertThat(client.routeReadiness("SHORT")).containsEntry("state","NO_AVAILABLE_JUDGE_QUORUM");
+        assertThatThrownBy(()->client.selectRoutes(f.settings.routes(),java.util.List.of())).hasMessage("NO_AVAILABLE_JUDGE_QUORUM");
+        verify(remote,never()).send(any(),eq(1_000_000));
     }
     @Test void mimoPreprocessingChunksHaveIndependentBudgetsAndCannotSubmitTradingPlans() throws Exception {
         var f=new TestSupport();f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");var remote=mock(RemoteHttp.class);

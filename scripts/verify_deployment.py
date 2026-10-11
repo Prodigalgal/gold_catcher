@@ -59,10 +59,11 @@ if api.get("sourceCommit") != commit or api.get("mode") != "INTERNAL_SIMULATION_
 if set(api.get('products', [])) != {'XAU_USDT', 'GATE:XAUUSD'}:
     raise SystemExit('unexpected active products')
 expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION', 'FOUR_STAGE_DIVERSE_RESEARCH',
+                     'THREE_MODEL_RESEARCH_AND_JUDGING', 'BLIND_THREE_JUDGE_VOTING', 'PERSISTED_AI_PROVIDER_CONFIGURATION',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
                      'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS'}
-if api.get('version') != '0.4.4' or not expected_features <= set(api.get('features', [])):
+if api.get('version') != '0.4.5' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -77,13 +78,30 @@ while time.monotonic() < deadline:
         break
     time.sleep(5)
 else:
-    raise SystemExit('Gate data acceptance timed out')
+    details = {'perpetualState': perpetual['market']['state'], 'perpetualIndicators': len(perpetual['market']['indicators']),
+               'perpetualQuoteSource': (perpetual['market'].get('quote') or {}).get('source'),
+               'cfdState': cfd['market']['state'], 'cfdIndicators': len(cfd['market']['indicators']),
+               'cfdRulesState': cfd['marketProvenance'].get('rulesState')}
+    raise SystemExit('Gate data acceptance timed out: ' + json.dumps(details))
 if (cfd['account']['symbol'] != 'GATE:XAUUSD' or cfd['account']['currency'] != 'USD'
         or cfd['account']['balance'] is None or not cfd['account']['costStatus'].startswith('CFD_QUOTE_SCENARIO;')
         or 'SWAP_' not in cfd['account']['costStatus']):
     raise SystemExit('separate CFD ledger, units or unknown-cost scope mismatch')
 compression = perpetual.get('compression') or {}
 schedule = perpetual.get('scheduling') or {}
+deadline = time.monotonic() + 120
+while time.monotonic() < deadline:
+    configuration = snapshot('/api/ai/configuration')
+    readiness = schedule.get('routeReadiness', [])
+    if (configuration['encryptionConfigured'] is True
+            and all(len(configuration[key]['researchers']) == len(configuration[key]['judges']) == 3 for key in ('shortRoutes', 'longRoutes'))
+            and len(readiness) == 2 and all(len([r for r in row['checks'] if r['judge'] is judging]) == 3 for row in readiness for judging in (False, True))):
+        break
+    time.sleep(5)
+    perpetual = snapshot('/api/dashboard?symbol=XAU_USDT')
+    schedule = perpetual.get('scheduling') or {}
+else:
+    raise SystemExit('Persistent three-model UI configuration acceptance timed out')
 if 'qwen' not in schedule.get('disabledProviders', []) or any(model['provider'].strip().lower() == 'qwen' for model in perpetual['models']):
     raise SystemExit('withdrawn QWEN provider was not excluded')
 readiness = schedule.get('routeReadiness', [])
@@ -93,8 +111,21 @@ for row in readiness:
     if row.get('basis') != 'CREDENTIALS_CATALOG_AND_FAILURE_COOLDOWN_ONLY; NOT_INFERENCE_OR_CONTEXT_ACCEPTANCE':
         raise SystemExit('research readiness overstates its evidence')
     assert all(route['provider'].strip().lower() != 'qwen' for route in row['selected'])
-    identities = [route['model'].strip().lower().split('/', 1)[-1] for route in row['selected']]
-    assert len(identities) == len(set(identities))
+    assert row.get('judgeMinimum') == row.get('researcherMinimum') == 3
+    for judging in (False, True):
+        identities = [route['model'].strip().lower().split('/', 1)[-1] for route in row['selected'] if route['judge'] is judging]
+        assert len(identities) == len(set(identities))
+        configured = [route for route in row['checks'] if route['judge'] is judging]
+        assert len(configured) == 3 and len({route['provider'] for route in configured}) == 3
+    if row['state'] == 'READY':
+        assert len(row['selected']) == 6
+        research_models = {route['model'] for route in row['selected'] if not route['judge']}
+        judge_models = {route['model'] for route in row['selected'] if route['judge']}
+        assert len(research_models) == len(judge_models) == 3
+assert configuration['encryptionConfigured'] is True
+assert all('apiKey' not in provider and 'encryptedApiKey' not in provider for provider in configuration['providers'])
+assert all(len(configuration[key]['researchers']) == len(configuration[key]['judges']) == 3 for key in ('shortRoutes', 'longRoutes'))
+assert configuration['compression']['provider'] == 'mimo'
 assert schedule.get('state') in {'DISABLED', 'RUNNING', 'MONITORING'}
 if compression.get('provider') != 'mimo' or compression.get('voting') is not False:
     raise SystemExit('MIMO preprocessing role mismatch')

@@ -27,6 +27,11 @@ body { margin:0; background:#0d1118; }
 .gc-readiness-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:14px;margin:16px 0; }
 .gc-readiness-card { border:1px solid var(--gc-line);border-radius:10px;padding:16px;min-width:0;overflow-wrap:anywhere; }
 .gc-readiness-card h4 { margin:0; }.gc-readiness-card p { font-size:12px;line-height:1.7; }.gc-readiness-card .gc-panel-head { flex-wrap:wrap; }
+.gc-judge-panel { min-width:0;overflow-wrap:anywhere; }
+.gc-judge-panel .gc-panel-head { flex-wrap:wrap;gap:8px; }
+.gc-judge-vote { border:1px solid var(--gc-line);border-radius:9px;padding:12px;margin:12px 0; }
+.gc-judge-vote b { font-size:12px; }.gc-judge-vote summary { font-size:11px;color:var(--gc-muted);cursor:pointer; }
+.gc-judge-choice { display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:var(--gc-gold); }
 .gc-live-table { width:100%;border-collapse:collapse;font-size:11px; }
 .gc-live-table th { white-space:nowrap;color:var(--gc-muted);text-align:left; }
 .gc-live-table td { white-space:nowrap; }
@@ -209,3 +214,4 @@ body { margin:0; background:#0d1118; }
 .gc-compression-row small { display: block; color: var(--gc-muted); line-height: 1.7; margin-top: 5px; }
 .gc-compression-audit { margin-top: 8px; }
 .gc-compression-message .gc-live-avatar { background: var(--gc-surface); }
+.gc-ai-config fieldset{border:1px solid var(--gc-line);border-radius:10px;padding:18px;min-width:0}.gc-ai-config legend{padding:0 8px;font-size:14px;font-weight:600}.gc-ai-provider-grid,.gc-ai-model-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:16px 0}.gc-ai-provider,.gc-ai-slot{border:1px solid var(--gc-line);border-radius:8px;padding:14px;min-width:0;overflow-wrap:anywhere}.gc-ai-provider>label{margin:14px 0}.gc-ai-slot-head{display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px}.gc-ai-slot-head small,.gc-ai-provider>small{font-size:11px;color:var(--gc-muted)}.gc-ai-slot-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.gc-ai-config select{background:var(--gc-surface);color:var(--gc-text);border:1px solid var(--gc-line);border-radius:8px;padding:10px;min-width:0;width:100%;box-sizing:border-box;font:inherit}.gc-ai-slot-budget{margin-top:14px;font-size:12px}.gc-ai-slot-budget summary{cursor:pointer;line-height:1.8}.gc-ai-budget-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.gc-ai-role-group{margin-top:20px}.gc-ai-config .gc-panel-head{flex-wrap:wrap;gap:10px}.gc-ai-config .gc-chart-frames{margin-top:12px}.gc-ai-config fieldset>p{line-height:1.8}.gc-ai-config fieldset[disabled]{opacity:.75}@media(max-width:1100px){.gc-ai-provider-grid,.gc-ai-model-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.gc-ai-provider-grid,.gc-ai-model-grid{grid-template-columns:1fr}.gc-ai-config fieldset{padding:12px}.gc-ai-slot-fields,.gc-ai-budget-grid{grid-template-columns:1fr}.gc-ai-config input,.gc-ai-config select{font-size:16px}}

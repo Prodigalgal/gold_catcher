@@ -24,6 +24,22 @@ class RuntimeSettingsTest {
         assertThat(f.settings.aiProviderEnabled(route("a","GLM"))).isFalse();
         assertThat(f.settings.aiProviderEnabled(route("b","minmax"))).isTrue();
     }
+    @Test void allProfilesUseTheSameTrioForResearchAndJudgingWithSeparateMimoCompression() throws Exception {
+        var f=new TestSupport();
+        for(String profile:List.of("balanced","fast","deep")) {
+            f.environment.setProperty("GOLD_AI_ROUTES_JSON",java.nio.file.Files.readString(java.nio.file.Path.of("../config/ai-routes."+profile+".example.json")));
+            var researchers=f.settings.routes().stream().filter(route->!route.judge()).toList();
+            var judges=f.settings.routes().stream().filter(RuntimeSettings.AiRoute::judge).toList();
+            assertThat(researchers).hasSize(3);assertThat(judges).hasSize(3);
+            assertThat(researchers).extracting(RuntimeSettings.AiRoute::provider).containsExactly("mimo","deepseek","grok_web");
+            assertThat(judges).extracting(RuntimeSettings.AiRoute::model).containsExactlyElementsOf(researchers.stream().map(RuntimeSettings.AiRoute::model).toList());
+            assertThat(researchers).noneMatch(route->route.id().equals("compressor-mimo"));
+        }
+        f.environment.setProperty("GOLD_AI_FALLBACK_ROUTES_JSON",java.nio.file.Files.readString(java.nio.file.Path.of("../config/ai-routes.fallback.example.json")));
+        assertThat(f.settings.fallbackRoutes()).isEmpty();
+        assertThat(f.settings.compressionRoute().provider()).isEqualTo("mimo");
+        assertThat(f.settings.compressionRoute().model()).isNotEqualTo(f.settings.routes().getFirst().model());
+    }
     private RuntimeSettings.AiRoute route(String id,String provider) {
         return new RuntimeSettings.AiRoute(id,provider,id+"-model","https://localhost/v1","TEST",10000,16000,30000,2,1000,2,false);
     }

@@ -11,12 +11,17 @@ import tools.jackson.databind.ObjectMapper;
 public class RuntimeSettings {
     private final Environment environment;
     private final ObjectMapper mapper;
+    public record ResearchRoutes(long revision,java.util.Map<String,List<AiRoute>> horizons,AiRoute compressionRoute,Boolean compressionEnabled) {}
+    public record RouteSnapshot(long revision,List<AiRoute> routes) {}
+    private volatile ResearchRoutes researchRoutes=new ResearchRoutes(0,java.util.Map.of(),null,null);
+    private record ConfiguredCredential(String key,String protocol,String catalogMode) {}
+    private final java.util.Map<AiRoute,ConfiguredCredential> configuredCredentials=java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
     public RuntimeSettings(Environment environment, ObjectMapper mapper) {
         this.environment = environment; this.mapper = mapper;
     }
-    public String text(String key, String fallback) { return environment.getProperty(key, fallback); }
+    public String text(String key, String fallback) {var override=researchRoutes.compressionEnabled();return key.equals("GOLD_COMPRESSION_ENABLED")&&override!=null?override.toString():environment.getProperty(key, fallback);}
     public int integer(String key, int fallback) { return environment.getProperty(key, Integer.class, fallback); }
-    public boolean enabled(String key) { return environment.getProperty(key, Boolean.class, false); }
+    public boolean enabled(String key) {var override=researchRoutes.compressionEnabled();return key.equals("GOLD_COMPRESSION_ENABLED")&&override!=null?override:environment.getProperty(key, Boolean.class, false);}
     public List<String> disabledAiProviders() {
         var providers=new java.util.TreeSet<String>();providers.add("qwen");
         java.util.Arrays.stream(text("GOLD_AI_DISABLED_PROVIDERS","").split(","))
@@ -33,9 +38,20 @@ public class RuntimeSettings {
     public List<AiRoute> routes() {
         return parseRoutes(text("GOLD_AI_ROUTES_JSON", "[]"));
     }
-    public List<AiRoute> routes(String horizon){return parseRoutes(text("GOLD_AI_"+horizon+"_ROUTES_JSON",text("GOLD_AI_ROUTES_JSON","[]")));}
-    public List<AiRoute> fallbackRoutes(){return parseRoutes(text("GOLD_AI_FALLBACK_ROUTES_JSON","[]"),true);}
+    public List<AiRoute> routes(String horizon){return researchRouteSnapshot(horizon).routes();}
+    public RouteSnapshot researchRouteSnapshot(String horizon){
+        if(!List.of("SHORT","LONG").contains(horizon))throw new IllegalArgumentException("INVALID_HORIZON");
+        var current=researchRoutes;var override=current.horizons().get(horizon);
+        return new RouteSnapshot(current.revision(),override==null?bootstrapRoutes(horizon):override.stream().filter(this::aiProviderEnabled).toList());
+    }
+    public List<AiRoute> bootstrapRoutes(String horizon){return parseRoutes(text("GOLD_AI_"+horizon+"_ROUTES_JSON",text("GOLD_AI_ROUTES_JSON","[]")));}
+    public void applyResearchRoutes(long revision,java.util.Map<String,List<AiRoute>> horizons,AiRoute compressionRoute,boolean compressionEnabled){
+        var frozen=new java.util.LinkedHashMap<String,List<AiRoute>>();horizons.forEach((key,value)->frozen.put(key,List.copyOf(value)));
+        researchRoutes=new ResearchRoutes(revision,java.util.Map.copyOf(frozen),compressionRoute,compressionEnabled);
+    }
+    public List<AiRoute> fallbackRoutes(){return researchRoutes.horizons().isEmpty()?parseRoutes(text("GOLD_AI_FALLBACK_ROUTES_JSON","[]"),true):List.of();}
     public AiRoute compressionRoute(){
+        var override=researchRoutes.compressionRoute();if(override!=null)return override;
         String configured=text("GOLD_AI_COMPRESSION_ROUTE_JSON","");
         var route=configured.isBlank()?new AiRoute("compressor-mimo","mimo","mimo/mimo-v2.6-flash",
             text("GOLD_AI_MIMO_BASE_URL","https://any2api-direct.mnnu.eu.org/mimo/v1"),"ANY2API_MIMO_API_KEY",
@@ -45,7 +61,8 @@ public class RuntimeSettings {
         return route;
     }
     public List<AiRoute> allRoutes(){var routes=new java.util.LinkedHashMap<String,AiRoute>();
-        for(var group:List.of(routes(),routes("SHORT"),routes("LONG"),fallbackRoutes(),List.of(compressionRoute())))for(var route:group){var previous=routes.putIfAbsent(route.id(),route);
+        var defaults=researchRoutes.horizons().isEmpty()?routes():List.<AiRoute>of();
+        for(var group:List.of(defaults,routes("SHORT"),routes("LONG"),fallbackRoutes(),List.of(compressionRoute())))for(var route:group){var previous=routes.putIfAbsent(route.id(),route);
             if(previous!=null&&(!previous.provider().equals(route.provider())||!previous.model().equals(route.model())))throw new IllegalArgumentException("CONFLICTING_ROUTE_ID");}
         return List.copyOf(routes.values());}
     private List<AiRoute> parseRoutes(String json){
@@ -55,10 +72,13 @@ public class RuntimeSettings {
         List<AiRoute> configured=mapper.readValue(json, new TypeReference<List<AiRoute>>() {});
         List<AiRoute> routes=configured.stream().filter(this::aiProviderEnabled).toList();
         if(routes.stream().map(AiRoute::id).distinct().count()!=routes.size())throw new IllegalArgumentException("DUPLICATE_ROUTE_ID");
-        if(!fallback&&routes.stream().filter(AiRoute::judge).count()>1)throw new IllegalArgumentException("ONE_JUDGE_REQUIRED");
         return routes;
     }
-    public String secret(AiRoute route) { return text(route.apiKeyEnv(), ""); }
+    public void registerConfiguredRoute(AiRoute route,String key,String protocol,String catalogMode){configuredCredentials.put(route,new ConfiguredCredential(key,protocol,catalogMode));}
+    public String secret(AiRoute route) {var configured=configuredCredentials.get(route);return configured==null?text(route.apiKeyEnv(), ""):configured.key();}
+    public boolean genericAiEndpoint(AiRoute route){var configured=configuredCredentials.get(route);return configured!=null&&configured.protocol().equals("OPENAI_COMPATIBLE");}
+    public boolean manualAiCatalog(AiRoute route){var configured=configuredCredentials.get(route);return configured!=null&&configured.catalogMode().equals("MANUAL");}
+    public String requestModel(AiRoute route){return genericAiEndpoint(route)&&route.model().startsWith(route.provider()+"/")?route.model().substring(route.provider().length()+1):route.model();}
     public boolean preferJsonText(AiRoute route) {
         return java.util.Arrays.stream(text("GOLD_AI_JSON_TEXT_PROVIDERS","mimo,glm").split(","))
             .map(String::strip).anyMatch(route.provider()::equals);

@@ -33,9 +33,13 @@ const messages: Message[] = [
   {id:'c-revision',actor:'C',role:'成交与成本',stage:2,time:'14:32',title:'保留成交核验，补充等待时的成本复核',reference:'a-review',quote:'A：新证据或报价条件成立时，应立即重新研究。',
     analysis:'我接受及时复核的建议。行情条件变化时，成交价、可成交数量与持有成本也需要同步更新，不能沿用旧估算。',
     output:'修订：重新评估触发时，由 Java 提供最新报价、成本与账户快照，再判断净收益和风险。证据不足时继续等待。'},
-  {id:'judge',actor:'J',role:'综合裁决',stage:3,time:'14:33',title:'保留偏多候选，当前结论为等待确认',reference:'a-revision',quote:'A：保留方向，增加事件、报价和成本条件。',
+  {id:'judge-1',actor:'J1',role:'综合裁决',stage:3,time:'14:33',title:'保留偏多候选，当前结论为等待确认',reference:'a-revision',quote:'A：保留方向，增加事件、报价和成本条件。',
     analysis:'趋势观点提供候选方向，B 的事件反证与 C 的成交核验限制其可执行性。不能仅按发言数量或篇幅裁决。',
     output:'最终示例：等待回踩与新证据确认，再评估候选计划。采纳 B 的事件失效条件和 C 的成本核验；保留宏观方向分歧。'},
+  {id:'judge-2',actor:'J2',role:'盲评裁决',stage:3,time:'14:33',title:'等待成本与报价条件齐全',reference:'c-revision',quote:'C：由 Java 提供最新报价、成本与账户快照。',
+    analysis:'本轮独立检查同一批候选；不读取其他裁决者的输出。当前可执行条件不足。',output:'示例投票：WAIT。保留 C 的费用与报价核验要求。'},
+  {id:'judge-3',actor:'J3',role:'盲评裁决',stage:3,time:'14:33',title:'认可趋势候选，继续等待确认',reference:'a-revision',quote:'A：保留方向，增加事件、报价和成本条件。',
+    analysis:'趋势是候选依据，不能替代当前费用和可成交性。采用新上下文评审修订方案。',output:'示例投票：WAIT。三份有效裁决选择等待，不生成内部订单。'},
 ];
 
 export default function ResearchRoom({ product, stage, onStageChange, onTrades }: {
@@ -55,7 +59,7 @@ export default function ResearchRoom({ product, stage, onStageChange, onTrades }
     }));
   };
   return <>
-    <section className="gc-panel gc-room-header"><div><span className="gc-eyebrow">研究室 · {product} · 设计样例</span><h2>多 AI 交叉研究与辩论</h2><p>独立分析 → 引用与反驳 → 修订提案 → 综合裁决</p></div><div className="gc-room-count"><b>3 位研究 AI + 1 位裁决 AI</b><span>模型路由待配置 · 内容为示例</span></div></section>
+    <section className="gc-panel gc-room-header"><div><span className="gc-eyebrow">研究室 · {product} · 设计样例</span><h2>多 AI 交叉研究与辩论</h2><p>独立分析 → 引用与反驳 → 修订提案 → 综合裁决</p></div><div className="gc-room-count"><b>3 位辩论 · 3 位裁决</b><span>默认 MIMO / DeepSeek / Grok · 内容为示例</span></div></section>
     <div className="gc-rounds" aria-label="研究消息阶段">{[['完整对话',-1],...stages.map((name,index)=>[name,index] as const)].map(([name,value])=><button key={name} type="button" aria-pressed={stage===value} onClick={()=>onStageChange(value as number)}>{name}</button>)}</div>
     <div className="gc-room-layout"><section className="gc-chat-stream" aria-label="多 AI 讨论消息">
       <div className="gc-chat-system">同一材料截止快照 · 各阶段完成后，同批共享给下一阶段</div>
@@ -63,7 +67,7 @@ export default function ResearchRoom({ product, stage, onStageChange, onTrades }
       {shown.map((message,index)=><div className="gc-chat-record" key={message.id}>
         {(index===0 || shown[index-1].stage!==message.stage)&&<div className="gc-chat-divider"><span>{stages[message.stage]}</span>{message.stage===0&&<small>独立稿在阶段截止后统一解封</small>}{message.stage===1&&<small>本轮引用上一轮材料</small>}</div>}
         <article className={`gc-chat-message ${highlighted===message.id?'gc-message-highlight':''}`} id={`gc-message-${message.id}`}>
-          <div className={`gc-ai-avatar ${message.actor==='J'?'gc-judge-avatar':''}`} aria-hidden="true">{message.actor}</div>
+          <div className={`gc-ai-avatar ${message.actor.startsWith('J')?'gc-judge-avatar':''}`} aria-hidden="true">{message.actor}</div>
           <div className="gc-chat-bubble"><div className="gc-message-meta"><b>AI {message.actor}</b><span>{message.role}</span><span className="gc-message-time">示例 {message.time} · {stages[message.stage]}</span></div>
             {message.reference&&<button type="button" className="gc-message-quote" onClick={()=>quote(message.reference!)}><span>引用上轮发言 ↗</span>{message.quote}</button>}
             <h3>{message.title}</h3><div className="gc-message-analysis"><span>思考 / 分析摘要 · 示例</span><p>{message.analysis}</p></div>
@@ -76,7 +80,7 @@ export default function ResearchRoom({ product, stage, onStageChange, onTrades }
       {notes.map((note,index)=><article className="gc-chat-message" key={`note-${index}`}><div className="gc-ai-avatar" aria-hidden="true">你</div><div className="gc-chat-bubble"><div className="gc-message-meta"><b>观察者关注点</b><span>本地演示 · 下一轮材料</span></div><p className="gc-observer-note">{note}</p></div></article>)}
       <div className="gc-chat-composer"><label htmlFor="gc-research-question">补充下一轮的关注点</label><textarea id="gc-research-question" value={question} onChange={event=>setQuestion(event.target.value)} placeholder="例如：请各方进一步讨论这条快讯是否已被价格消化。" rows={2}/><div><span>设计演示只记录本地消息</span><button type="button" disabled={!question.trim()} onClick={()=>{setNotes([...notes,question.trim()]);setQuestion('');}}>记录关注点</button></div></div>
     </section><aside className="gc-room-sidebar" aria-label="研究参与者与结论">
-      <section className="gc-panel"><div className="gc-panel-head"><h3>参与者</h3><span className="gc-badge gc-muted-badge">路由待配置</span></div>{[['A','趋势分析'],['B','宏观与事件'],['C','成交与成本'],['J','综合裁决']].map(([actor,role])=><div className="gc-participant" key={actor}><div className="gc-ai-avatar" aria-hidden="true">{actor}</div><div><b>AI {actor}</b><span>{role}</span></div><span className="gc-participant-state">示例</span></div>)}</section>
+      <section className="gc-panel"><div className="gc-panel-head"><h3>参与者</h3><span className="gc-badge gc-muted-badge">路由待配置</span></div>{[['A','趋势分析'],['B','宏观与事件'],['C','成交与成本'],['J1','MIMO 裁决'],['J2','DeepSeek 裁决'],['J3','Grok 裁决']].map(([actor,role])=><div className="gc-participant" key={actor}><div className="gc-ai-avatar" aria-hidden="true">{actor}</div><div><b>AI {actor}</b><span>{role}</span></div><span className="gc-participant-state">示例</span></div>)}</section>
       <section className="gc-panel gc-room-verdict"><span className="gc-eyebrow">置顶裁决 · 示例</span><h3>偏多候选，等待确认</h3><p>采纳事件风险与成本核验，保留不同意见。</p><div className="gc-factor"><span>短线</span><b>等待回踩与新证据</b></div><div className="gc-factor"><span>较长周期</span><b>保留宏观分歧</b></div><button type="button" className="gc-text-button" onClick={onTrades}>查看候选计划 ↗</button></section>
       <section className="gc-panel"><div className="gc-panel-head"><h3>讨论材料</h3></div><div className="gc-room-material"><span>价格与 Java 指标</span><span>消息影响与经济日历</span><span>产品、报价与交易成本</span><span>匿名观点与上一轮反馈</span></div><button type="button" className="gc-text-button" aria-expanded={audit} onClick={()=>setAudit(!audit)}>{audit?'收起':'展开'} 输入与讨论审计 ↗</button>{audit&&<div className="gc-room-audit"><p>相同截止快照，首轮相互不可见。</p><p>各通道分别核验上下文预算；阅读次序轮换。</p><p>迟到输出归档，不倒填已经结束的阶段。</p><p>界面完整记录与模型实际输入包分别保存。</p></div>}</section>
     </aside></div>

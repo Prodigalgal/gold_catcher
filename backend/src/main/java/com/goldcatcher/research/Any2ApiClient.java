@@ -40,7 +40,7 @@ public class Any2ApiClient {
         JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError,Budget lastBudget,Instant lastBudgetAt,String catalogError) {}
     public record RouteCheck(String routeId,String provider,String model,boolean judge,String state,Instant catalogRetrievedAt,Instant retryAt) {}
     public record RouteSelection(String state,List<AiRoute> routes,List<RouteCheck> checks,String basis) {}
-    private record Cached(JsonNode catalog,Instant at) {}
+    private record Cached(JsonNode catalog,Instant at,String routeKey) {}
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
     private final Map<String,Cached> catalogs=new ConcurrentHashMap<>();
     private final Map<String,Semaphore> leases=new ConcurrentHashMap<>();
@@ -50,7 +50,7 @@ public class Any2ApiClient {
     public Any2ApiClient(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,Clock clock) {
         this.settings=settings;this.http=http;this.mapper=mapper;this.clock=clock;
     }
-    public List<ModelState> states() {return settings.allRoutes().stream().map(route->{var cached=catalogs.get(route.id());
+    public List<ModelState> states() {return settings.allRoutes().stream().map(route->{var cached=currentCatalog(route);
         return new ModelState(route.id(),route.provider(),route.model(),!settings.secret(route).isBlank(),cached==null?null:cached.catalog(),
             cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()),budgets.get(route.id()),budgetTimes.get(route.id()),catalogErrors.get(route.id()));}).toList();}
     @org.springframework.scheduling.annotation.Scheduled(fixedDelay=300000,initialDelay=5000) public void warmCatalogs(){
@@ -66,22 +66,23 @@ public class Any2ApiClient {
         var preferred=settings.routes(horizon);var selection=selection(preferred,settings.fallbackRoutes(),false);
         String error=ResearchService.configuredRouteError(preferred);
         return Map.of("horizon",horizon,"state",error==null?selection.state():error,"basis",selection.basis(),"checks",selection.checks(),
+            "judgeMinimum",AdjudicationPanel.MINIMUM_JUDGES,"researcherMinimum",ResearchService.RESEARCH_MODEL_COUNT,
             "selected",selection.routes().stream().map(route->Map.of("routeId",route.id(),"provider",route.provider(),"model",route.model(),"judge",route.judge())).toList());
     }
     private RouteSelection selection(List<AiRoute> preferred,List<AiRoute> fallback,boolean refresh) {
         var pool=new ArrayList<>(preferred);for(var route:fallback)if(pool.stream().noneMatch(p->p.id().equals(route.id())))pool.add(route);
         var checks=new ArrayList<RouteCheck>();var ready=new HashSet<String>();
         for(var route:pool) {
-            String state="READY";Instant retryAt=null;var cached=catalogs.get(route.id());
+            String state="READY";Instant retryAt=null;var cached=currentCatalog(route);
             if(!settings.aiProviderEnabled(route))state="PROVIDER_DISABLED";
-            else if(Boolean.parseBoolean(settings.text("GOLD_COMPRESSION_ENABLED","true"))&&route.provider().equals("mimo"))state="RESERVED_FOR_COMPRESSION";
+            else if(route.id().equals("compressor-mimo"))state="RESERVED_FOR_COMPRESSION";
             else if(settings.secret(route).isBlank())state="CREDENTIAL_MISSING";
             else {
                 var failed=failedAt.get(modelKey(route));
                 if(failed!=null&&failed.plusSeconds(settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600)).isAfter(clock.instant())) {
                     state="FAILURE_COOLDOWN";retryAt=failed.plusSeconds(settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600));
                 } else if(refresh) {
-                    try {if(!catalog(route).path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";cached=catalogs.get(route.id());}
+                    try {if(!catalog(route).path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";cached=currentCatalog(route);}
                     catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));state="CATALOG_QUERY_FAILED";}
                 } else if(cached==null)state=catalogErrors.containsKey(route.id())?"CATALOG_QUERY_FAILED":"CATALOG_NOT_CHECKED";
                 else if(!cached.catalog().path("available").asBoolean(false))state="MODEL_NOT_AVAILABLE";
@@ -90,16 +91,20 @@ public class Any2ApiClient {
             checks.add(new RouteCheck(route.id(),route.provider(),route.model(),route.judge(),state,cached==null?null:cached.at(),retryAt));
             if(state.equals("READY"))ready.add(route.id());
         }
-        var selected=new ArrayList<AiRoute>();var identities=new HashSet<String>();
+        var selected=new ArrayList<AiRoute>();
         int desired=(int)preferred.stream().filter(settings::aiProviderEnabled).filter(r->!r.judge()).count();
-        for(boolean judge:List.of(true,false))for(var route:pool) {
-            if(!ready.contains(route.id()))continue;
-            if(route.judge()!=judge||selected.stream().filter(r->r.judge()==judge).count()>=(judge?1:desired))continue;
-            if(identities.contains(ResearchService.modelIdentity(route)))continue;
-            selected.add(route);identities.add(ResearchService.modelIdentity(route));
+        int desiredJudges=Math.max(AdjudicationPanel.MINIMUM_JUDGES,(int)preferred.stream().filter(settings::aiProviderEnabled).filter(AiRoute::judge).count());
+        for(boolean judge:List.of(true,false)) {
+            var identities=new HashSet<String>();
+            for(var route:pool) {
+                if(!ready.contains(route.id()))continue;
+                if(route.judge()!=judge||selected.stream().filter(r->r.judge()==judge).count()>=(judge?desiredJudges:desired))continue;
+                if(identities.contains(ResearchService.modelIdentity(route)))continue;
+                selected.add(route);identities.add(ResearchService.modelIdentity(route));
+            }
         }
-        String state=selected.stream().noneMatch(AiRoute::judge)?"NO_AVAILABLE_INDEPENDENT_JUDGE":
-            selected.stream().filter(r->!r.judge()).count()<2?"NO_AVAILABLE_MODEL_QUORUM":"READY";
+        String state=selected.stream().filter(AiRoute::judge).count()<AdjudicationPanel.MINIMUM_JUDGES?"NO_AVAILABLE_JUDGE_QUORUM":
+            selected.stream().filter(r->!r.judge()).count()<ResearchService.RESEARCH_MODEL_COUNT?"NO_AVAILABLE_MODEL_QUORUM":"READY";
         return new RouteSelection(state,selected.stream().sorted(Comparator.comparing(AiRoute::judge)).toList(),List.copyOf(checks),
             "CREDENTIALS_CATALOG_AND_FAILURE_COOLDOWN_ONLY; NOT_INFERENCE_OR_CONTEXT_ACCEPTANCE");
     }
@@ -121,7 +126,8 @@ public class Any2ApiClient {
             JsonNode catalog=catalog(route);
             if(!catalog.path("available").asBoolean(false))throw new IllegalStateException("MODEL_NOT_AVAILABLE");
             JsonNode capabilities=catalog.path("capabilities");
-            Map<String,Object> request=new LinkedHashMap<>();request.put("model",route.model());
+            Map<String,Object> request=new LinkedHashMap<>();request.put("model",settings.requestModel(route));
+            boolean adjudication=!compression&&mapper.valueToTree(packet).path("phase").asInt(-1)==3;
             request.put("messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",mapper.writeValueAsString(packet))));
             var parameters=capabilities.path("supported_parameters").path("chat_completions");
             boolean structuredTool=!compression&&!settings.preferJsonText(route)&&capabilities.path("tools").path("function_calling").asBoolean(false)
@@ -137,12 +143,13 @@ public class Any2ApiClient {
                 if(format>=0&&wait>format)request.put("messages",List.of(Map.of("role","system","content",instruction.substring(0,format)+instruction.substring(wait)),
                     Map.of("role","user","content",mapper.writeValueAsString(packet))));
             }
-            if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",outputSchema()))));
+            if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",outputSchema(adjudication)))));
                 request.put("tool_choice",Map.of("type","function","function",Map.of("name","submit_research")));}
             String outputParameter=null;
             for(String candidate:List.of("max_tokens","max_completion_tokens","max_output_tokens"))
                 for(JsonNode parameter:parameters)if(parameter.asText().equals(candidate)
                     &&capabilities.path("parameter_adaptation").path(candidate).path("mode").asText().equals("mapped")){outputParameter=candidate;break;}
+            if(settings.genericAiEndpoint(route))outputParameter="max_tokens";
             if(outputParameter!=null)request.put(outputParameter,route.outputReserve());
             var limits=ContextWindow.limits(route,catalog);
             var prepared=ContextWindow.prepare(mapper,request,packet,limits);String body=prepared.body();
@@ -184,6 +191,7 @@ public class Any2ApiClient {
             if(!submitted&&!finish.equals("stop"))throw new IllegalStateException("OUTPUT_NOT_COMPLETE_"+finish.toUpperCase(Locale.ROOT));
             JsonNode output=parseOutput(raw);
             if(compression)validateCompression(output);else validate(output);
+            if(adjudication&&(!output.path("selectedCandidateId").isTextual()||output.path("selectedCandidateId").asText().isBlank()))throw new IllegalStateException("MISSING_JUDGE_VOTE");
             String analysis=reasoning.isBlank()?output.path("analysisSummary").asText():reasoning;
             String source=reasoning.isBlank()?(analysis.isBlank()?"NOT_PROVIDED":"EXPLICIT_OUTPUT_SUMMARY"):"PROVIDER_FIELD";
             inference.put(route.id(),"VALID_OUTPUT");failures.remove(route.id());
@@ -203,17 +211,32 @@ public class Any2ApiClient {
     private JsonNode catalog(AiRoute route) throws Exception {
         if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         if(settings.secret(route).isBlank())throw new IllegalStateException("CREDENTIAL_NOT_CONFIGURED");
-        var cached=catalogs.get(route.id());
+        var cached=currentCatalog(route);
         if(cached!=null&&cached.at().isAfter(clock.instant().minusSeconds(cached.catalog().path("available").asBoolean(false)?300:60)))return cached.catalog();
+        if(settings.genericAiEndpoint(route)) {
+            var body=mapper.createObjectNode();body.put("id",route.model());body.put("available",true);body.putObject("capabilities");
+            body.put("availabilityBasis",settings.manualAiCatalog(route)?"MANUAL_CONFIGURATION; NOT_INFERENCE_ACCEPTANCE":"ADVERTISED_MODEL_ONLY; NOT_INFERENCE_ACCEPTANCE");
+            if(!settings.manualAiCatalog(route)) {
+                var response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("models"))).timeout(Duration.ofSeconds(12))
+                    .header("Authorization","Bearer "+settings.secret(route)).GET().build(),500_000);
+                if(response.statusCode()!=200)throw new IllegalStateException("CATALOG_HTTP_"+response.statusCode());
+                var advertised=mapper.readTree(response.body()).path("data");boolean present=false;
+                for(var item:advertised)if(List.of(route.model(),settings.requestModel(route)).contains(item.path("id").asText()))present=true;
+                if(!present)throw new IllegalStateException("MODEL_NOT_ADVERTISED");
+            }
+            catalogs.put(route.id(),new Cached(body,clock.instant(),routeKey(route)));catalogErrors.remove(route.id());return body;
+        }
         String model=route.model();
         if(URI.create(route.baseUrl()).getPath().matches(".*/"+java.util.regex.Pattern.quote(route.provider())+"/v1/?$")&&model.startsWith(route.provider()+"/"))model=model.substring(route.provider().length()+1);
         model=Arrays.stream(model.split("/",-1)).map(part->URLEncoder.encode(part,StandardCharsets.UTF_8).replace("+","%20")).collect(java.util.stream.Collectors.joining("/"));
         var response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("models/"+model)))
             .timeout(Duration.ofSeconds(12)).header("Authorization","Bearer "+settings.secret(route)).GET().build(),500_000);
         if(response.statusCode()!=200)throw new IllegalStateException("CATALOG_HTTP_"+response.statusCode());
-        JsonNode body=mapper.readTree(response.body());catalogs.put(route.id(),new Cached(body,clock.instant()));catalogErrors.remove(route.id());return body;
+        JsonNode body=mapper.readTree(response.body());catalogs.put(route.id(),new Cached(body,clock.instant(),routeKey(route)));catalogErrors.remove(route.id());return body;
     }
-    private String modelKey(AiRoute route){return route.provider()+"/"+ResearchService.modelIdentity(route);}
+    private String routeKey(AiRoute route){return route.provider()+"|"+route.model()+"|"+route.baseUrl()+"|"+settings.genericAiEndpoint(route)+"|"+settings.manualAiCatalog(route)+"|"+NewsService.hash(settings.secret(route));}
+    private Cached currentCatalog(AiRoute route){var cached=catalogs.get(route.id());return cached!=null&&cached.routeKey().equals(routeKey(route))?cached:null;}
+    private String modelKey(AiRoute route){return route.provider()+"/"+ResearchService.modelIdentity(route)+"|"+route.baseUrl()+"|"+NewsService.hash(settings.secret(route));}
     public Budget verify(AiRoute route,String body,JsonNode catalog,boolean outputRequested) {
         var limits=ContextWindow.limits(route,catalog);var size=ContextWindow.size(body,2);
         var prepared=new ContextWindow.Prepared(body,null,size,size,List.of());
@@ -256,7 +279,7 @@ public class Any2ApiClient {
             ||!List.of("BULLISH","BEARISH","UNKNOWN","MIXED").contains(impact.path("direction").asText())
             ||impact.path("reason").asText().length()>500||impact.path("counter").asText().length()>400)throw new IllegalStateException("INVALID_IMPACT");
     }
-    private Map<String,Object> outputSchema() {
+    private Map<String,Object> outputSchema(boolean adjudication) {
         Map<String,Object> properties=new LinkedHashMap<>();
         for(var field:List.of("title","analysisSummary","output","changes"))properties.put(field,Map.of("type","string"));
         for(var field:List.of("shortDirection","longDirection"))properties.put(field,Map.of("type","string","enum",List.of("BULLISH","BEARISH","UNKNOWN","MIXED")));
@@ -264,9 +287,12 @@ public class Any2ApiClient {
         properties.put("impacts",Map.of("type","array","items",Map.of("type","object","properties",Map.of(
             "newsId",Map.of("type","string"),"horizon",Map.of("type","string","enum",List.of("SHORT","LONG")),"direction",properties.get("shortDirection"),
             "reason",Map.of("type","string"),"counter",Map.of("type","string")),"required",List.of("newsId","horizon","direction","reason","counter"),"additionalProperties",false)));
-        Map<String,Object> plan=new LinkedHashMap<>();plan.put("action",Map.of("type","string","enum",List.of("WAIT","CREATE","CANCEL","CLOSE","MODIFY","REDUCE")));
-        for(var field:List.of("orderId","side","type","quantity","leverage","entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation","expiresAt","holdUntil","riskAssessment","invalidate"))plan.put(field,Map.of("type",List.of("string","null")));
-        properties.put("plan",Map.of("type","object","properties",plan,"required",List.copyOf(plan.keySet()),"additionalProperties",false));
+        if(adjudication)properties.put("selectedCandidateId",Map.of("type","string"));
+        else {
+            Map<String,Object> plan=new LinkedHashMap<>();plan.put("action",Map.of("type","string","enum",List.of("WAIT","CREATE","CANCEL","CLOSE","MODIFY","REDUCE")));
+            for(var field:List.of("orderId","side","type","quantity","leverage","entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation","expiresAt","holdUntil","riskAssessment","invalidate"))plan.put(field,Map.of("type",List.of("string","null")));
+            properties.put("plan",Map.of("type","object","properties",plan,"required",List.copyOf(plan.keySet()),"additionalProperties",false));
+        }
         return Map.of("type","object","properties",properties,"required",List.copyOf(properties.keySet()),"additionalProperties",false);
     }
     public static class InferenceFailure extends IllegalStateException {
