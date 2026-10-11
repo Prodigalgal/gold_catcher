@@ -30,8 +30,8 @@ spring:
       host: ${GOLD_CACHE_REDIS_HOST:127.0.0.1}
       port: ${GOLD_CACHE_REDIS_PORT:6379}
       password: ${GOLD_CACHE_REDIS_PASSWORD:}
-      connect-timeout: 200ms
-      timeout: 200ms
+      connect-timeout: ${GOLD_CACHE_REDIS_CONNECT_TIMEOUT:1s}
+      timeout: ${GOLD_CACHE_REDIS_TIMEOUT:500ms}
   task:
     scheduling:
       pool:

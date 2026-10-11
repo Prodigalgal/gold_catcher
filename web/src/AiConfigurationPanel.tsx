@@ -107,7 +107,7 @@ function ModelSlot({
             : states[catalog?.state ?? 'NOT_CHECKED']}
         </span>
       </div>
-      <div className="gc-ai-slot-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: '8px' }}>
+      <div className="gc-ai-slot-fields" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.2fr)', gap: '8px' }}>
         <label>
           提供商
           <select
@@ -383,7 +383,7 @@ export default function AiConfigurationPanel({
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))',
                   gap: '14px',
                 }}
               >
@@ -632,7 +632,7 @@ export default function AiConfigurationPanel({
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))',
                       gap: '12px',
                     }}
                   >

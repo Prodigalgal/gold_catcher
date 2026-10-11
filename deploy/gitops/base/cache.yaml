@@ -11,6 +11,14 @@ spec:
       labels: {app: gold-catcher-cache}
     spec:
       automountServiceAccountToken: false
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: {app: gold-catcher-server}
+                topologyKey: kubernetes.io/hostname
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

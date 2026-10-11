@@ -26,6 +26,7 @@ public class UiReadCache {
     private final boolean enabled;private final long maxValueBytes;
     private final AtomicLong localHits=new AtomicLong(),redisHits=new AtomicLong(),loads=new AtomicLong(),redisFailures=new AtomicLong();
     private volatile Instant retryAt=Instant.EPOCH;private volatile boolean redisUsed;
+    private volatile String lastFailure="";private volatile Instant lastFailureAt;
     @Autowired public UiReadCache(RuntimeSettings settings,ObjectMapper mapper,Clock clock,ObjectProvider<StringRedisTemplate> redis){
         this(settings,mapper,clock,redis.getIfAvailable());
     }
@@ -55,7 +56,7 @@ public class UiReadCache {
                             }
                         }
                     }
-                }catch(RuntimeException unavailable){failed(now);}
+                }catch(RuntimeException unavailable){failed(now,unavailable);}
             }
             JsonNode value=mapper.valueToTree(loader.get());loads.incrementAndGet();
             // Expiry starts when loading began, so a slow calculation cannot extend a stale view's life.
@@ -64,18 +65,24 @@ public class UiReadCache {
             if(enabled&&redis!=null&&!clock.instant().isBefore(retryAt)&&bytes<=maxValueBytes){
                 try{long remaining=Duration.between(clock.instant(),now.plusMillis(ttlMillis)).toMillis();
                     if(remaining>0)redis.opsForValue().set(key,encoded,Duration.ofMillis(remaining));redisUsed=true;
-                }catch(RuntimeException unavailable){failed(clock.instant());}
+                }catch(RuntimeException unavailable){failed(clock.instant(),unavailable);}
             }
             return new Entry(value,now.plusMillis(ttlMillis),Math.max(1,Math.min(Integer.MAX_VALUE/3,bytes)*3));
         });
         return result.value().deepCopy();
     }
-    private void failed(Instant now){redisFailures.incrementAndGet();redisUsed=false;retryAt=now.plusSeconds(30);}
+    private void failed(Instant now,RuntimeException error){
+        Throwable root=error;for(int depth=0;depth<16&&root.getCause()!=null&&root.getCause()!=root;depth++)root=root.getCause();
+        // Exception messages can contain credentials or connection URLs. Only publish type names.
+        lastFailure=error.getClass().getSimpleName()+":"+root.getClass().getSimpleName();lastFailureAt=now;
+        redisFailures.incrementAndGet();redisUsed=false;retryAt=now.plusSeconds(30);
+    }
     public Map<String,Object> status(){
         var data=new LinkedHashMap<String,Object>();data.put("redisEnabled",enabled);
         data.put("redisState",!enabled?"DISABLED":clock.instant().isBefore(retryAt)?"BACKOFF":redisUsed?"AVAILABLE":redisFailures.get()>0?"RETRY_PENDING":"NOT_USED");
         data.put("retryAt",clock.instant().isBefore(retryAt)?retryAt:null);data.put("localHits",localHits.get());data.put("redisHits",redisHits.get());
         data.put("loads",loads.get());data.put("redisFailures",redisFailures.get());data.put("entries",local.estimatedSize());
+        data.put("lastFailure",lastFailure);data.put("lastFailureAt",lastFailureAt);
         data.put("scope","UI_READS_ONLY; LIVE_QUOTES_ACCOUNTS_AND_EXECUTION_BYPASS; REDIS_FAILURE_FALLS_BACK_TO_LOCAL_AND_DATABASE");return data;
     }
 }
