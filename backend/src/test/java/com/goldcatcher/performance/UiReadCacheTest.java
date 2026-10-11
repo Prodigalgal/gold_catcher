@@ -43,6 +43,14 @@ class UiReadCacheTest {
         for(int i=0;i<2;i++)assertThatThrownBy(()->cache.get("news","missing",1000,()->{calls.incrementAndGet();throw new IllegalArgumentException("NEWS_NOT_FOUND");})).hasMessage("NEWS_NOT_FOUND");
         assertThat(calls).hasValue(2);
     }
+    @Test void diagnosticsExposeTypesAndTimeWithoutCredentialBearingMessages(){
+        var f=new TestSupport();f.environment.setProperty("GOLD_CACHE_REDIS_ENABLED","true");var redis=mock(StringRedisTemplate.class);ValueOperations<String,String> values=mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);when(values.get(anyString())).thenThrow(new IllegalStateException("redis://user:private-password@host",new java.net.ConnectException("sensitive-url")));
+        var cache=new UiReadCache(f.settings,f.mapper,f.clock,redis);
+        assertThat(cache.get("news","version",1000,()->Map.of("ready",true)).path("ready").asBoolean()).isTrue();
+        assertThat(cache.status()).containsEntry("lastFailure","IllegalStateException:ConnectException").containsEntry("lastFailureAt",f.clock.instant());
+        assertThat(f.mapper.writeValueAsString(cache.status())).doesNotContain("private-password","sensitive-url");
+    }
     @Test void documentVersionOnlyAdvancesAfterCommitAndDoesNotPublishRollback(){
         var f=new TestSupport();String before=f.store.revision("news");
         f.store.transaction(()->{f.store.save("news","one",Map.of("value",1));assertThat(f.store.revision("news")).isEqualTo(before);return null;});

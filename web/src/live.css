@@ -1190,7 +1190,7 @@ body {
 
 .gc-form-grid, .gc-ai-budget-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
   gap: 12px;
   margin: 12px 0;
 }
@@ -1198,9 +1198,19 @@ body {
 .gc-form-grid label, .gc-ai-budget-grid label, .gc-control-form label {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 4px;
   font-size: 12px;
   color: var(--gc-text-secondary);
+}
+
+.gc-ai-slot-fields label { min-width: 0; }
+.gc-ai-slot-fields input, .gc-ai-slot-fields select,
+.gc-ai-budget-grid input {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .gc-control-form input,
@@ -1271,5 +1281,7 @@ body {
   }
   .gc-main {
     padding: 14px;
+    overflow-wrap: anywhere;
   }
+  .gc-main pre { max-width: 100%; overflow-x: auto; }
 }
