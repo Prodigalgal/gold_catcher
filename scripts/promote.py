@@ -19,6 +19,8 @@ def runtime_changes(root: Path) -> list[tuple[Path, str]]:
         raise ValueError("unexpected runtime ConfigMap")
     for key in ("GOLD_DRIVERS_ENABLED", "GOLD_COMPRESSION_ENABLED", "GOLD_COMPRESSION_CHUNKS_PER_PASS", "GOLD_MARKET_ARCHIVE_RETENTION_DAYS"):
         config["data"][key] = template["data"][key]
+    disabled = {value.strip().lower() for value in (config["data"].get("GOLD_AI_DISABLED_PROVIDERS", "") + "," + template["data"]["GOLD_AI_DISABLED_PROVIDERS"]).split(",") if value.strip()}
+    config["data"]["GOLD_AI_DISABLED_PROVIDERS"] = ",".join(sorted(disabled))
     deployments = list(yaml.safe_load_all(paths[1].read_text(encoding="utf-8")))
     templates = list(yaml.safe_load_all((source / "deployments.yaml").read_text(encoding="utf-8")))
     servers = [item for item in deployments if item.get("kind") == "Deployment" and item.get("metadata", {}).get("name") == "gold-catcher-server"]

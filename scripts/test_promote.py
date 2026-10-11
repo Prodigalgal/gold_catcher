@@ -60,6 +60,7 @@ class PromotionContractTest(unittest.TestCase):
         self.assertEqual(config["GOLD_COMPRESSION_ENABLED"], "true")
         self.assertEqual(config["GOLD_MARKET_ARCHIVE_RETENTION_DAYS"], "3")
         self.assertEqual(config["GOLD_RESEARCH_AUTOMATIC"], "false")
+        self.assertEqual(config["GOLD_AI_DISABLED_PROVIDERS"], "qwen")
         self.assertEqual(config["KEEP"], "preserved")
         server, web = yaml.safe_load_all((base / "deployments.yaml").read_text())
         self.assertEqual(server["spec"]["replicas"], 1)
@@ -74,3 +75,11 @@ class PromotionContractTest(unittest.TestCase):
             promote(self.root, self.inputs, self.commit)
         self.assertEqual(before, self.file.read_bytes())
         self.assertFalse((self.target / "release.json").exists())
+
+    def test_withdrawn_provider_is_added_without_removing_other_provider_exclusions(self):
+        file = self.root / "gold-catcher/base/configmap.yaml"
+        config = yaml.safe_load(file.read_text())
+        config["data"]["GOLD_AI_DISABLED_PROVIDERS"] = " Arena, arena "
+        file.write_text(yaml.safe_dump(config), encoding="utf-8")
+        promote(self.root, self.inputs, self.commit)
+        self.assertEqual(yaml.safe_load(file.read_text())["data"]["GOLD_AI_DISABLED_PROVIDERS"], "arena,qwen")
