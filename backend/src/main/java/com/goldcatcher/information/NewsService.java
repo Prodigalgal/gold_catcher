@@ -45,6 +45,9 @@ public class NewsService {
     }
     public record ArticleBody(String id,String source,String link,String text,String state,String hash,Instant receivedAt,
         Instant checkedAt,Instant nextPoll,int version,String error,boolean truncated,String feedHash,Instant releaseAt,String format) {}
+    public record SourceText(String text,String hash,String format,Instant receivedAt,String bodyHash,boolean truncated) {
+        public static SourceText fromBody(ArticleBody body){return new SourceText(body.text(),body.hash(),body.format(),body.receivedAt(),body.hash(),body.truncated());}
+    }
     public record SourceQuality(int records,int datedRecords,int bodies,int excludedRecords,Instant lastPublishedAt,
         Instant lastReceivedAt,Instant lastBodySuccess,String connection,String publication,String content,String note) {}
     public record SourceState(String id,String url,String state,int intervalSeconds,Instant lastSuccess,
@@ -85,6 +88,7 @@ public class NewsService {
     private final SourceReliability reliability;
     private final ReleasePolling polling;
     private volatile Consumer<String> newsTrigger=id->{};
+    private final List<Consumer<String>> textTriggers=new java.util.concurrent.CopyOnWriteArrayList<>();
     public NewsService(RuntimeSettings settings,RemoteHttp http,DocumentStore store,EventHub events,Clock clock) {
         this(settings,http,store,events,clock,null);
     }
@@ -110,6 +114,10 @@ public class NewsService {
                 state.error()!=null&&state.nextPoll()!=null&&state.nextPoll().isAfter(clock.instant())?state.nextPoll():clock.instant(),state.error(),state.entries(),state.quality(),state.route()));
     }
     public void onNews(Consumer<String> trigger){newsTrigger=trigger;}
+    public void onText(Consumer<String> trigger){textTriggers.add(trigger);}
+    private void textReceived(String id){for(var trigger:textTriggers)try{trigger.accept(id);}catch(RuntimeException failure){
+        org.slf4j.LoggerFactory.getLogger(NewsService.class).warn("Compression queue notification failed; scheduled scan will retry",failure);
+    }}
     public static boolean mediaSource(String id){return id.startsWith("CNBC_");}
     public int pollInterval(String id){return mediaSource(id)?30:polling.interval(id,id.endsWith("_CALENDAR")?3600:Math.max(15,settings.integer("GOLD_NEWS_POLL_SECONDS",30)));}
     public List<News> news(){return distinctArticles(store.list("news",News.class,1000)).stream().map(this::decorate)
@@ -177,6 +185,19 @@ public class NewsService {
     }
     private static String canonicalBojUrl(String link){return link.startsWith("http://www.boj.or.jp/")?"https"+link.substring(4):link;}
     public ArticleBody bodyForEvidence(String id,Instant cutoff){return store.find("news",id,News.class).map(n->knownBody(n,cutoff)).orElse(null);}
+    /** Compression may prepare future/unverified publications, but research evidence retains its time checks. */
+    public List<News> compressionCandidates(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
+        .filter(n->!n.receivedAt().isAfter(cutoff)).toList()).stream().map(n->decorate(n,cutoff))
+        .filter(n->!Boolean.TRUE.equals(n.archived()))
+        .filter(n->(n.publishedAt()==null?n.receivedAt():n.publishedAt()).isAfter(cutoff.minus(Duration.ofDays(7))))
+        .sorted(Comparator.comparing(News::receivedAt).reversed()).toList();}
+    public SourceText textForCompression(String id,Instant cutoff){
+        var original=store.find("news",id,News.class).filter(n->!n.receivedAt().isAfter(cutoff)).orElse(null);if(original==null)return null;
+        var body=knownBody(original,cutoff);
+        if(body!=null&&body.hash()!=null&&body.error()==null&&!body.text().isBlank())return SourceText.fromBody(body);
+        String text=original.title()+((original.excerpt()==null||original.excerpt().isBlank())?"":"\n"+original.excerpt());
+        return text.isBlank()?null:new SourceText(text,hash(text),original.excerpt()==null||original.excerpt().isBlank()?"HEADLINE_ONLY":"FEED_SUMMARY",original.receivedAt(),null,false);
+    }
     private ArticleBody knownBody(News news,Instant cutoff) {
         var body=bodies.get(news.id());
         return body!=null&&body.receivedAt()!=null&&!body.receivedAt().isAfter(cutoff)&&Objects.equals(body.feedHash(),news.contentHash())?body:null;
@@ -214,10 +235,14 @@ public class NewsService {
         var article=store.find("news",id,News.class).orElseThrow(()->new IllegalArgumentException("NEWS_NOT_FOUND"));
         Map<String,Object> result=new LinkedHashMap<>();result.put("news",decorate(article));result.put("body",bodies.get(id));return result;
     }
-    public List<Map<String,Object>> freezeEvidence(Instant cutoff,String runId,int limit) {
+    public List<News> selectedEvidence(Instant cutoff,int limit) {
         var candidates=evidence(cutoff);var selected=new ArrayList<News>();var families=new HashSet<String>();var links=new HashSet<String>();
         for(var article:candidates){String family=article.source().split("_")[0];if(selected.size()<limit&&families.add(family)&&links.add(article.link()))selected.add(article);}
         for(var article:candidates)if(selected.size()<limit&&links.add(article.link()))selected.add(article);
+        return List.copyOf(selected);
+    }
+    public List<Map<String,Object>> freezeEvidence(Instant cutoff,String runId,int limit) {
+        var selected=selectedEvidence(cutoff,limit);
         var packet=new ArrayList<Map<String,Object>>();var archive=new ArrayList<Map<String,Object>>();
         for(var article:selected) {
             var original=store.find("news",article.id(),News.class).orElseThrow();
@@ -231,8 +256,10 @@ public class NewsService {
             evidence.put("source",article.source());evidence.put("publishedAt",article.publishedAt());evidence.put("receivedAt",article.receivedAt());
             evidence.put("publishedPrecision",article.publishedPrecision());evidence.put("sourcePublishedAt",article.sourcePublishedAt());
             evidence.put("version",article.version());evidence.put("bodyHash",body==null?null:body.hash());
+            var sourceText=textForCompression(article.id(),cutoff);
+            evidence.put("sourceTextHash",sourceText==null?null:sourceText.hash());evidence.put("sourceTextFormat",sourceText==null?null:sourceText.format());
             evidence.put("contentState",body==null?(mediaSource(article.source())?"PUBLIC_FEED_SUMMARY":"HEADLINE_OR_FEED_SUMMARY"):body.state());packet.add(evidence);
-            Map<String,Object> snapshot=new LinkedHashMap<>();snapshot.put("news",original);snapshot.put("body",body);archive.add(snapshot);
+            Map<String,Object> snapshot=new LinkedHashMap<>();snapshot.put("news",original);snapshot.put("body",body);snapshot.put("sourceText",sourceText);archive.add(snapshot);
         }
         store.save("research-news",runId,Map.of("cutoff",cutoff,"articles",archive));return packet;
     }
@@ -250,7 +277,7 @@ public class NewsService {
         }
     }
     void enrich(News article) {
-        var previous=bodies.get(article.id());ArticleBody body;long started=reliability.begin();
+        var previous=bodies.get(article.id());ArticleBody body;long started=reliability.begin();boolean triggerResearch=false;
         try {
             String link=article.link();var extracted=OfficialArticle.extract(article.source(),articleBytes(article.source(),link),link);
             if(extracted.linkedMinutes()!=null) {link=extracted.linkedMinutes();extracted=OfficialArticle.extract("FED_PRESS",articleBytes("FED_PRESS",link),link);}
@@ -266,7 +293,7 @@ public class NewsService {
             ArticleBody saved=body;store.transaction(()->{store.save("news-body",article.id(),saved);if(changed)store.event(article.id(),"NEWS_BODY_VERSION",saved);return saved;});
             reliability.success(article.source(),"BODY",started,1);
             if(revision)reliability.arrived(article.source(),article.id()+":"+body.hash(),extracted.releaseAt()!=null?extracted.releaseAt():article.publishedAt(),body.receivedAt(),extracted.releaseAt()!=null?"DECLARED_RELEASE_TIME":verifiedTime(article)?"EXACT_PUBLICATION":"PUBLICATION_UNVERIFIED");
-            if(changed&&article.publishedAt()!=null&&article.publishedAt().isAfter(now.minusSeconds(1800)))newsTrigger.accept(article.id());
+            triggerResearch=changed&&article.publishedAt()!=null&&article.publishedAt().isAfter(now.minusSeconds(1800));
         }catch(Exception failure) {
             Instant now=clock.instant();
             String error=failure instanceof IllegalStateException&&failure.getMessage()!=null&&failure.getMessage().matches("[A-Z0-9_]+")?failure.getMessage():"ARTICLE_FETCH_FAILED";
@@ -276,7 +303,7 @@ public class NewsService {
                 previous==null?null:previous.hash(),previous==null?null:previous.receivedAt(),now,now.plusSeconds(SourcePolling.retrySeconds(failure,now,retry)),previous==null?0:previous.version(),error,
                 previous!=null&&previous.truncated(),previous==null?article.contentHash():previous.feedHash(),previous==null?null:previous.releaseAt(),previous==null?null:previous.format());store.save("news-body",article.id(),body);
         }
-        bodies.put(article.id(),body);events.changed();
+        bodies.put(article.id(),body);textReceived(article.id());if(triggerResearch)newsTrigger.accept(article.id());events.changed();
     }
     private byte[] articleBytes(String source,String link) throws Exception {
         URI target=URI.create(link);
@@ -348,6 +375,7 @@ public class NewsService {
             if(previous.isPresent()&&previous.get().contentHash().equals(fingerprint)){entries++;continue;}
             var article=new News(id,"BEA_NEWS",title,"",url,published,clock.instant(),"OFFICIAL_SOURCE",previous.map(n->n.version()+1).orElse(1),fingerprint);
             store.transaction(()->{store.save("news",id,article);store.event(id,"NEWS_VERSION",article);return article;});entries++;
+            textReceived(id);
             reliability.arrived(article.source(),article.id()+":"+article.contentHash(),article.publishedAt(),article.receivedAt(),"EXACT_PUBLICATION");
             if(published.isAfter(clock.instant().minusSeconds(1800)))newsTrigger.accept(id);
         }
@@ -410,6 +438,7 @@ public class NewsService {
                 previous.map(n->n.version()+1).orElse(1),fingerprint,published==null?"UNKNOWN":mediaSource(source)?"PROVIDER_REPORTED_TIME":feedTime||source.startsWith("BLS_")&&atom?"FEED_TIMESTAMP":"EXACT",
                 null,null,null,null,null,null,null);
             store.transaction(()->{store.save("news",id,article);store.event(id,"NEWS_VERSION",article);return article;});changed++;
+            textReceived(id);
             reliability.arrived(source,article.id()+":"+fingerprint,published,article.receivedAt(),mediaSource(source)?"PROVIDER_REPORTED_PUBLICATION":verifiedTime(article)?"EXACT_PUBLICATION":"PUBLICATION_UNVERIFIED");
             if(previous.isPresent()||(published!=null&&published.isAfter(clock.instant().minusSeconds(1800))))newsTrigger.accept(id);
         }

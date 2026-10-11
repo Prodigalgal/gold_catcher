@@ -216,6 +216,38 @@ class ResearchServiceTest {
         f.clock.advance(31000);research.automatic();verify(ai,times(4)).selectRoutes(anyList(),anyList());
         assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();verify(ledger,never()).propose(anyString(),anyString(),any());
     }
+    private EvidenceCompression preparedScheduler(){
+        research.stop();var compression=mock(EvidenceCompression.class);when(compression.configurationKey()).thenReturn("test-compression");
+        when(compression.needsPreparation(anyInt())).thenReturn(true);when(compression.preparationSeconds()).thenReturn(75);
+        when(compression.apply(anyList(),any(),anyString())).thenAnswer(call->call.getArgument(0));
+        research=new ResearchService(f.settings,f.store,market,new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock),ledger,ai,f.mapper,new EventHub(),f.clock,null,compression);
+        var config=new ResearchService.ScheduleConfig();config.automatic=true;config.symbols=List.of("XAU_USDT");research.configure(config);
+        return compression;
+    }
+    private void refreshMarket(){
+        var old=market.snapshot("XAU_USDT");var quote=new Quote("XAU_USDT","TEST",2,f.clock.instant(),f.clock.instant(),d("102"),d("103"),d("1"),d("1"),d("102"),d("102"),f.clock.instant(),d("0"),f.clock.instant().plusSeconds(3600),true);
+        when(market.snapshot("XAU_USDT")).thenReturn(new Snapshot("XAU_USDT","LIVE",quote,old.rules(),Map.of(),List.of(),f.clock.instant(),null));
+        when(ledger.view("XAU_USDT",quote)).thenReturn(new SimulationLedger.View("XAU_USDT","USDT","VALUED","1000","1000","1000","0","0","0",f.clock.instant(),List.of(),"UNKNOWN","TEST"));
+    }
+    @Test void automaticPreparationFinishesEarlyWithoutConsumingIntervalsAndFreezesFreshMarket()throws Exception{
+        var compression=preparedScheduler();research.automatic();assertThat(research.scheduling()).containsEntry("state","PREPARING_EVIDENCE");
+        assertThat(research.history()).isEmpty();assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();verify(ai,never()).selectRoutes(anyList(),anyList());
+        verify(compression).collect();verify(ledger,never()).propose(anyString(),anyString(),any());
+        f.clock.advance(2000);refreshMarket();when(compression.needsPreparation(anyInt())).thenReturn(false);
+        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
+        research.automatic();var completed=await(research.history().getFirst().id);
+        assertThat(completed.evidenceCutoff).isEqualTo(f.clock.instant());assertThat(completed.evidence.path("quote").path("bid").asText()).isEqualTo("102");
+        assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).hasSize(1);assertThat(research.scheduling().get("preparingUntil")).isNull();
+    }
+    @Test void preparationDeadlineSurvivesRestartAndCannotPostponeResearchIndefinitely()throws Exception{
+        var compression=preparedScheduler();research.automatic();var until=research.scheduling().get("preparingUntil");research.stop();
+        research=new ResearchService(f.settings,f.store,market,new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock),ledger,ai,f.mapper,new EventHub(),f.clock,null,compression);
+        research.recover();assertThat(research.scheduling()).containsEntry("preparingUntil",until);
+        f.clock.advance(76000);refreshMarket();when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
+        research.automatic();var completed=await(research.history().getFirst().id);
+        assertThat(completed.evidenceCutoff).isEqualTo(f.clock.instant());assertThat(completed.status).isEqualTo("COMPLETED");
+        assertThat(research.scheduling().get("preparingUntil")).isNull();verify(compression,times(1)).collect();
+    }
     @Test void failedJudgeStopsAfterConfiguredAttemptsWithoutRepeatingOtherJudges()throws Exception{
         f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","6");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");f.environment.setProperty("GOLD_RESEARCH_RETRY_MAX_SECONDS","1");
         var counts=new ConcurrentHashMap<String,Integer>();

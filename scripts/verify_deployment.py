@@ -64,8 +64,9 @@ expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
                      'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS',
-                     'DIVERSE_NEWS_CANDIDATE_POOL', 'PREEMPTIBLE_MIMO_COMPRESSION', 'ANY2API_CIRCUIT_RECOVERY'}
-if api.get('version') != '0.4.7' or not expected_features <= set(api.get('features', [])):
+                     'DIVERSE_NEWS_CANDIDATE_POOL', 'PREEMPTIBLE_MIMO_COMPRESSION', 'ANY2API_CIRCUIT_RECOVERY', 'IMMEDIATE_SOURCE_PREPROCESSING',
+                     'SUMMARY_ONLY_NEWS_ADMISSION', 'CONFIGURABLE_COMPRESSION_REPROCESSING', 'BOUNDED_PRE_RESEARCH_PREPARATION'}
+if api.get('version') != '0.4.8' or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -127,7 +128,8 @@ for row in readiness:
 assert configuration['encryptionConfigured'] is True
 assert all('apiKey' not in provider and 'encryptedApiKey' not in provider for provider in configuration['providers'])
 assert all(len(configuration[key]['researchers']) == len(configuration[key]['judges']) == 3 for key in ('shortRoutes', 'longRoutes'))
-assert configuration['compression']['provider'] == 'mimo'
+assert configuration['compression']['provider'] in {p['id'] for p in configuration['providers']}
+assert configuration['compression']['provider'] != 'qwen'
 for key in ('shortPolicy', 'longPolicy'):
     policy = configuration[key]
     assert 1 <= policy['maxAttempts'] <= 6
@@ -135,19 +137,31 @@ for key in ('shortPolicy', 'longPolicy'):
     assert 30 <= policy['stageSeconds'] <= 1800 and 30 <= policy['judgeSeconds'] <= 1800
     assert max(policy['stageSeconds'], policy['judgeSeconds']) <= policy['workflowSeconds'] <= 7200
     assert 30 <= policy['decisionSeconds'] <= 172800
-assert schedule.get('state') in {'DISABLED', 'RUNNING', 'MONITORING'}
-if compression.get('provider') != 'mimo' or compression.get('voting') is not False:
-    raise SystemExit('MIMO preprocessing role mismatch')
+assert schedule.get('state') in {'DISABLED', 'RUNNING', 'MONITORING', 'PREPARING_EVIDENCE'}
+if compression.get('provider') != configuration['compression']['provider'] or compression.get('voting') is not False:
+    raise SystemExit('Source preprocessing role mismatch')
 if compression.get('state') not in {'DISABLED', 'CREDENTIAL_MISSING', 'RUNNING', 'UPSTREAM_BACKOFF', 'PAUSED_PROVIDER_RESEARCH', 'SCANNING', 'QUEUED', 'ARTICLE_RETRY_WAIT', 'NO_ELIGIBLE_BODY', 'UP_TO_DATE'}:
-    raise SystemExit('MIMO preprocessing scheduling state missing')
+    raise SystemExit('Source preprocessing scheduling state missing')
 queue = compression.get('queue') or {}
+assert compression.get('method') == 'source-summary-v5'
+for product in (perpetual, cfd):
+    run = product.get('research') or {}
+    preprocessing = run.get('preprocessing') or {}
+    if preprocessing.get('method') == 'source-summary-v5':
+        articles = preprocessing.get('articles') or []
+        admitted = [a for a in articles if a['state'] == 'EXTRACTED']
+        assert preprocessing['completedArticles'] == len(admitted)
+        assert preprocessing['omittedArticles'] == len(articles) - len(admitted)
+        assert all(0 < a['sentCharacters'] <= 300 for a in admitted)
+        assert all(a['sentCharacters'] == 0 for a in articles if a['state'] != 'EXTRACTED')
+        assert {a['newsId'] for a in admitted} == {n['id'] for n in run['evidence']['news']}
 for field in ('candidateArticles', 'eligibleBodies', 'completedSummaries', 'queuedArticles', 'processingArticles', 'retryingArticles', 'missingBodies', 'unsuitableBodies'):
     assert isinstance(queue.get(field), int) and queue[field] >= 0
 assert queue['candidateArticles'] == queue['eligibleBodies'] + queue['missingBodies'] + queue['unsuitableBodies']
 assert queue['eligibleBodies'] == queue['completedSummaries'] + queue['queuedArticles'] + queue['processingArticles'] + queue['retryingArticles']
-if not any(model['routeId'] == 'compressor-mimo' and model['provider'] == 'mimo'
+if not any(model['routeId'] == 'compressor-mimo' and model['provider'] == configuration['compression']['provider']
            and model['credentialConfigured'] for model in perpetual['models']):
-    raise SystemExit('MIMO preprocessing route is not credential-configured')
+    raise SystemExit('Source preprocessing route is not credential-configured')
 deadline = time.monotonic() + 120
 while time.monotonic() < deadline:
     runtime = snapshot('/api/dashboard?symbol=XAU_USDT')
@@ -285,4 +299,4 @@ client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:
     raise SystemExit("web source commit mismatch")
-print("Argo digests, PoW session, Gate feeds, separate CFD ledger, MIMO role, sequenced depth/archive, exports, seventeen official and three public media channels, nine driver/calendar channels, eight supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified. Live research completion is a separate acceptance.")
+print("Argo digests, PoW session, Gate feeds, separate CFD ledger, configurable source compression role, sequenced depth/archive, exports, seventeen official and three public media channels, nine driver/calendar channels, eight supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified. Live research completion is a separate acceptance.")

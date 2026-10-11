@@ -58,8 +58,8 @@ public class RuntimeSettings {
         var route=configured.isBlank()?new AiRoute("compressor-mimo","mimo","mimo/mimo-v2.6-flash",
             text("GOLD_AI_MIMO_BASE_URL","https://any2api-direct.mnnu.eu.org/mimo/v1"),"ANY2API_MIMO_API_KEY",
             8000,14000,24000,2,1000,75,false):mapper.readValue(configured,AiRoute.class);
-        if(!route.id().equals("compressor-mimo")||!route.provider().equals("mimo")||route.judge())
-            throw new IllegalArgumentException("COMPRESSION_FIXED_TO_MIMO");
+        if(!route.id().equals("compressor-mimo")||route.judge())throw new IllegalArgumentException("INVALID_COMPRESSION_ROUTE");
+        if(!aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         return route;
     }
     public List<AiRoute> allRoutes(){var routes=new java.util.LinkedHashMap<String,AiRoute>();

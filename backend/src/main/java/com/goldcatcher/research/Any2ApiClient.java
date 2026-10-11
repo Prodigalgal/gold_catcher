@@ -163,7 +163,7 @@ public class Any2ApiClient {
         return complete(route,instruction,packet,false,attemptDeadline);
     }
     public Answer compress(AiRoute route,String instruction,Object packet) throws Exception {
-        if(!route.provider().equals("mimo")||!route.id().equals("compressor-mimo"))throw new IllegalArgumentException("COMPRESSION_FIXED_TO_MIMO");
+        if(!route.id().equals("compressor-mimo")||route.judge())throw new IllegalArgumentException("INVALID_COMPRESSION_ROUTE");
         return complete(route,instruction,packet,true,null);
     }
     private Answer complete(AiRoute route,String instruction,Object packet,boolean compression,Instant attemptDeadline) throws Exception {

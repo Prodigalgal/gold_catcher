@@ -15,7 +15,7 @@ class EvidenceCompressionTest {
         f=new TestSupport();ai=mock(Any2ApiClient.class);news=mock(NewsService.class);when(ai.compressionAvailable(any())).thenReturn(true);
         article=new NewsService.News("a","FED_PRESS","官方事实","摘要","https://www.federalreserve.gov/test",f.clock.instant().minusSeconds(10),f.clock.instant().minusSeconds(5),"OFFICIAL",1,"feed");
         body=body("The rate is 4.00 percent. However, this is not a forecast. A revision may change the prior value. ");
-        f.store.save("news","a",article);when(news.bodyForEvidence(eq("a"),any())).thenAnswer(call->body);
+        f.store.save("news","a",article);when(news.textForCompression(eq("a"),any())).thenAnswer(call->NewsService.SourceText.fromBody(body));
         compression=new EvidenceCompression(f.settings,news,ai,f.store,f.mapper,f.clock,new EventHub());
     }
     NewsService.ArticleBody body(String text){return new NewsService.ArticleBody("a","FED_PRESS",article.link(),text,"AVAILABLE",NewsService.hash(text),f.clock.instant().minusSeconds(2),f.clock.instant(),f.clock.instant().plusSeconds(100),1,null,false,"feed",null,"HTML");}
@@ -25,20 +25,20 @@ class EvidenceCompressionTest {
         answer("{\"summary\":\"利率为4.00%，此数据不构成预测；历史值可能修订。\"}");Instant before=f.clock.instant().minusMillis(1);var result=compression.process(article,body);
         assertThat(result.state()).isEqualTo("EXTRACTED");assertThat(result.excerpt()).contains("4.00%","不构成预测");assertThat(result.selectedSpans()).isEmpty();
         var frozen=new LinkedHashMap<String,Object>();frozen.put("id","a");frozen.put("bodyHash",body.hash());frozen.put("excerpt","old deterministic");frozen.put("actual","4.00");
-        assertThat(compression.apply(List.of(frozen),before,"earlier").getFirst().get("excerpt")).isEqualTo("old deterministic");
+        assertThat(compression.apply(List.of(frozen),before,"earlier")).isEmpty();
         var evidence=compression.apply(List.of(frozen),f.clock.instant(),"later").getFirst();
         assertThat(evidence).containsExactlyInAnyOrderEntriesOf(new LinkedHashMap<>(Map.of("id","a","bodyHash",body.hash(),"excerpt",result.excerpt(),"actual","4.00")));
         assertThat(compression.detail(result.id()).toString()).contains("VERIFIED");
         f.clock.advance(10);var repeated=compression.process(article,body);verify(ai,times(1)).compress(any(),anyString(),any());
         assertThat(compression.find(result.id())).isEqualTo(result);assertThat(repeated.excerpt()).isEqualTo(result.excerpt());
         body=body("The rate has since changed. ");frozen.put("bodyHash",body.hash());
-        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"revised").getFirst().get("excerpt")).isEqualTo("old deterministic");
+        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"revised")).isEmpty();
     }
-    @Test void extraTradingOutputAndInvalidSummariesFallBackWithoutVoting() throws Exception {
+    @Test void extraTradingOutputAndInvalidSummariesAreOmittedWithoutVoting() throws Exception {
         answer("{\"summary\":\"利率未变\",\"plan\":{\"action\":\"CREATE\"}}");var result=compression.process(article,body);
         assertThat(result.state()).isEqualTo("FAILED");assertThat(result.error()).isEqualTo("INVALID_COMPRESSION_OUTPUT");
         var frozen=Map.<String,Object>of("id","a","bodyHash",body.hash(),"excerpt","official fallback");
-        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"failed").getFirst().get("excerpt")).isEqualTo("official fallback");
+        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"failed")).isEmpty();
         for(String invalid:List.of("{}","{\"selectedIds\":[]}","{\"summary\":\" \"}","{\"summary\":123}",f.mapper.writeValueAsString(Map.of("summary","😄".repeat(301)))))
             assertThatThrownBy(()->EvidenceCompression.validate(f.mapper.readTree(invalid))).hasMessage("INVALID_COMPRESSION_OUTPUT");
         assertThat(EvidenceCompression.validate(f.mapper.readTree(f.mapper.writeValueAsString(Map.of("summary","😄".repeat(300)))))).hasSize(600);
@@ -57,28 +57,31 @@ class EvidenceCompressionTest {
             return new Any2ApiClient.Answer("mimo/mimo-v2.6-pro","","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);});
         var partial=compression.process(article,body);assertThat(partial.state()).isEqualTo("PARTIAL");assertThat(partial.processedChunks()).isEqualTo(2);assertThat(tasks).doesNotContain("MERGE");
         var frozen=Map.<String,Object>of("id","a","bodyHash",body.hash(),"excerpt","original fallback");
-        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"pending").getFirst().get("excerpt")).isEqualTo("original fallback");
+        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"pending")).isEmpty();
         EvidenceCompression.Result complete=partial;for(int i=0;i<chunks.size()&&complete.state().equals("PARTIAL");i++)complete=compression.process(article,body);
         assertThat(complete.state()).isEqualTo("EXTRACTED");assertThat(complete.excerpt()).startsWith("全文要点");assertThat(Collections.frequency(tasks,"SUMMARIZE")).isEqualTo(chunks.size());
         assertThat(compression.apply(List.of(frozen),f.clock.instant(),"merged").getFirst().get("excerpt")).isEqualTo(complete.excerpt());
         int requests=tasks.size();compression.process(article,body);assertThat(tasks).hasSize(requests);assertThat(compression.find(partial.id())).isEqualTo(partial);
     }
-    @Test void explicitNonMimoConfigurationIsRejected() throws Exception {
+    @Test void compressionProviderCanChangeButReservedRoleAndDisabledProviderAreEnforced() throws Exception {
         var wrong=new RuntimeSettings.AiRoute("compressor-mimo","glm","glm/test","https://localhost/v1","TEST",2000,2000,6000,2,128,1,false);
         f.environment.setProperty("GOLD_AI_COMPRESSION_ROUTE_JSON",f.mapper.writeValueAsString(wrong));
-        assertThatThrownBy(f.settings::compressionRoute).hasMessage("COMPRESSION_FIXED_TO_MIMO");
+        assertThat(f.settings.compressionRoute().provider()).isEqualTo("glm");
+        var disabled=new RuntimeSettings.AiRoute("compressor-mimo","qwen","qwen/test","https://localhost/v1","TEST",2000,2000,6000,2,128,1,false);
+        f.environment.setProperty("GOLD_AI_COMPRESSION_ROUTE_JSON",f.mapper.writeValueAsString(disabled));
+        assertThatThrownBy(f.settings::compressionRoute).hasMessage("AI_PROVIDER_DISABLED");
     }
     @Test void endpointChangeCannotReuseSummaryFromThePreviousProviderEndpoint()throws Exception{
         answer("{\"summary\":\"官方事实摘要\"}");var original=compression.process(article,body);
         f.environment.setProperty("GOLD_AI_MIMO_BASE_URL","https://new.example.test/mimo/v1");
         var frozen=Map.<String,Object>of("id","a","bodyHash",body.hash(),"excerpt","original fallback");
-        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"new-endpoint").getFirst().get("excerpt")).isEqualTo("original fallback");
+        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"new-endpoint")).isEmpty();
         var updated=compression.process(article,body);assertThat(updated.cacheKey()).isNotEqualTo(original.cacheKey());verify(ai,times(2)).compress(any(),anyString(),any());
     }
     @Test void upstreamOutageBacksOffAcrossArticlesInsteadOfSendingEveryPendingDocument() throws Exception {
         f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(20));
         var second=new NewsService.News("b",article.source(),article.title(),article.excerpt(),article.link(),article.publishedAt(),article.receivedAt(),article.verification(),article.version(),article.contentHash());
-        when(news.evidence(any())).thenReturn(List.of(article,second));when(news.bodyForEvidence(eq("b"),any())).thenAnswer(call->body);
+        when(news.selectedEvidence(any(),anyInt())).thenReturn(List.of(article));when(news.compressionCandidates(any())).thenReturn(List.of(article,second));when(news.textForCompression(eq("b"),any())).thenAnswer(call->NewsService.SourceText.fromBody(body));
         when(ai.compress(any(),anyString(),any())).thenThrow(new IllegalStateException("INFERENCE_HTTP_503_MODEL_UNAVAILABLE"));
         compression.collect();long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
         while(String.valueOf(compression.status().get("retryAt")).isBlank()&&System.nanoTime()<deadline)Thread.sleep(10);
@@ -89,7 +92,7 @@ class EvidenceCompressionTest {
     }
     @Test void timeoutBackoffSurvivesRestartEscalatesAndClearsAfterSuccessfulSummary() throws Exception {
         f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(20));
-        when(news.evidence(any())).thenReturn(List.of(article));
+        when(news.selectedEvidence(any(),anyInt())).thenReturn(List.of(article));when(news.compressionCandidates(any())).thenReturn(List.of(article));
         when(ai.compress(any(),anyString(),any())).thenThrow(new java.net.http.HttpTimeoutException("test timeout"));
         compression.collect();awaitPass();
         assertThat(compression.status()).containsEntry("consecutiveFailures",1).containsEntry("error","REQUEST_TIMEOUT")
@@ -115,7 +118,7 @@ class EvidenceCompressionTest {
         f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(130));
         var second=new NewsService.News("b",article.source(),"另一份官方资料",article.excerpt(),article.link(),article.publishedAt(),article.receivedAt(),article.verification(),article.version(),article.contentHash());
         var shortBody=new NewsService.ArticleBody("b",body.source(),body.link(),"Official rate 4.00. ".repeat(40),body.state(),"short",body.receivedAt(),body.checkedAt(),body.nextPoll(),1,null,false,"feed",null,"HTML");
-        when(news.evidence(any())).thenReturn(List.of(article,second));when(news.bodyForEvidence(eq("b"),any())).thenReturn(shortBody);
+        when(news.selectedEvidence(any(),anyInt())).thenReturn(List.of(article));when(news.compressionCandidates(any())).thenReturn(List.of(article,second));when(news.textForCompression(eq("b"),any())).thenReturn(NewsService.SourceText.fromBody(shortBody));
         when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var packet=(Map<?,?>)call.getArgument(2);
             if(packet.get("title").equals(article.title())&&((Number)packet.get("chunkIndex")).intValue()>0)throw new java.net.http.HttpTimeoutException("test timeout");
             var output=f.mapper.valueToTree(Map.of("summary","利率4.00，保留原口径。"));
@@ -151,7 +154,7 @@ class EvidenceCompressionTest {
         f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(15));
         var media=new NewsService.News("media","CNBC_WORLD","Media headline","Feed summary","https://www.cnbc.com/story",
             f.clock.instant().minusSeconds(5),f.clock.instant().minusSeconds(1),"MEDIA_REPORT",1,"media-feed");
-        when(news.evidence(any())).thenReturn(List.of(media,article));when(ai.compressionAvailable(any())).thenReturn(false);
+        when(news.selectedEvidence(any(),anyInt())).thenReturn(List.of(article));when(news.compressionCandidates(any())).thenReturn(List.of(media,article));when(ai.compressionAvailable(any())).thenReturn(false);
         compression.collect();var paused=f.mapper.valueToTree(compression.status());
         assertThat(paused.path("state").asText()).isEqualTo("PAUSED_PROVIDER_RESEARCH");
         assertThat(paused.path("queue").path("candidateArticles").asInt()).isEqualTo(2);
@@ -164,7 +167,7 @@ class EvidenceCompressionTest {
         assertThat(ready.path("queue").path("queuedArticles").asInt()).isZero();verify(ai,times(1)).compress(any(),anyString(),any());
     }
     @Test void preemptionKeepsRawAttemptAndResumesWithoutUpstreamFailureBackoff()throws Exception{
-        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(15));when(news.evidence(any())).thenReturn(List.of(article));
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");body=body(body.text().repeat(15));when(news.selectedEvidence(any(),anyInt())).thenReturn(List.of(article));when(news.compressionCandidates(any())).thenReturn(List.of(article));
         when(ai.compress(any(),anyString(),any())).thenAnswer(call->{Thread.currentThread().interrupt();throw new InterruptedException("research priority");});
         compression.collect();awaitPass();var deferred=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
         assertThat(deferred.state()).isEqualTo("DEFERRED");assertThat(deferred.error()).isEqualTo("REQUEST_CANCELED");
@@ -174,5 +177,52 @@ class EvidenceCompressionTest {
         f.clock.advance(11000);answer("{\"summary\":\"利率为4.00%，数据不是预测，历史值可能修订。\"}");compression.collect();awaitPass();
         assertThat(f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst().state()).isEqualTo("EXTRACTED");
         assertThat(compression.find(deferred.id()).error()).isEqualTo("REQUEST_CANCELED");
+    }
+    @Test void shortFeedSummaryIsCompressedImmediatelyOnTextArrivalAndNeverPretendsToBeFullBody()throws Exception{
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");
+        var text=new NewsService.SourceText("Market headline\nProvider says rates unchanged.","feed-text","FEED_SUMMARY",article.receivedAt(),null,false);
+        when(news.textForCompression(eq("a"),any())).thenReturn(text);when(news.compressionCandidates(any())).thenReturn(List.of(article));
+        when(news.selectedEvidence(any(),anyInt())).thenReturn(List.of(article));
+        when(ai.compress(any(),anyString(),any())).thenAnswer(call->{var packet=f.mapper.valueToTree(call.getArgument(2));
+            assertThat(packet.path("sourceFormat").asText()).isEqualTo("FEED_SUMMARY");assertThat(packet.path("text").asText()).isEqualTo(text.text());
+            var output=f.mapper.valueToTree(Map.of("summary","RSS摘要称利率未变，未取得全文。"));
+            return new Any2ApiClient.Answer("mimo/mimo-v2.6-flash","","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);});
+        var callback=org.mockito.ArgumentCaptor.forClass(java.util.function.Consumer.class);verify(news).onText(callback.capture());callback.getValue().accept("a");awaitPass();
+        var result=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();assertThat(result.sourceCharacters()).isLessThan(600);
+        assertThat(result.bodyHash()).isNull();assertThat(result.sourceTextHash()).isEqualTo("feed-text");assertThat(result.sourceFormat()).isEqualTo("FEED_SUMMARY");
+        var frozen=new LinkedHashMap<String,Object>();frozen.put("id","a");frozen.put("bodyHash",null);frozen.put("sourceTextHash",text.hash());frozen.put("excerpt",text.text());
+        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"short-feed").getFirst().get("excerpt")).isEqualTo(result.excerpt());
+    }
+    @Test void explicitRecompressionBypassesChunkCacheRetainsPreviousSummaryOnFailureAndArchivesEveryVersion()throws Exception{
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");answer("{\"summary\":\"第一版利率摘要。\"}");var first=compression.process(article,body);
+        var frozen=Map.<String,Object>of("id","a","bodyHash",body.hash(),"excerpt","raw must not pass");
+        when(ai.compress(any(),anyString(),any())).thenThrow(new IllegalStateException("INVALID_COMPRESSION_OUTPUT"));
+        f.clock.advance(1);var failedJob=compression.reprocess("a");awaitPass();var failed=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
+        assertThat(failed.state()).isEqualTo("FAILED");assertThat(failed.generation()).isEqualTo(failedJob.generation());assertThat(failed.id()).isNotEqualTo(first.id());
+        assertThat(compression.apply(List.of(frozen),f.clock.instant(),"failed-recompression").getFirst().get("excerpt")).isEqualTo(first.excerpt());
+        answer("{\"summary\":\"第二版保留原口径的利率摘要。\"}");f.clock.advance(10);compression.reprocess("a");awaitPass();
+        var latest=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();assertThat(latest.state()).isEqualTo("EXTRACTED");
+        assertThat(latest.excerpt()).contains("第二版");assertThat(latest.id()).isNotEqualTo(first.id());verify(ai,times(3)).compress(any(),anyString(),any());
+        assertThat(compression.find(first.id())).isEqualTo(first);assertThat(compression.find(failed.id())).isEqualTo(failed);
+        assertThat(compression.apply(List.of(frozen),first.completedAt(),"before-new-version").getFirst().get("excerpt")).isEqualTo(first.excerpt());
+    }
+    @Test void changingCompressionProviderDoesNotInheritAnotherProvidersOutageOrUseItsCachedSummary()throws Exception{
+        f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");when(news.compressionCandidates(any())).thenReturn(List.of(article));
+        when(ai.compress(any(),anyString(),any())).thenThrow(new java.net.http.HttpTimeoutException("old provider"));compression.collect();awaitPass();
+        assertThat(compression.status()).containsEntry("consecutiveFailures",1);
+        var replacement=new RuntimeSettings.AiRoute("compressor-mimo","deepseek","deepseek/default","https://localhost/new/v1","TEST_KEY",8000,14000,24000,2,1000,75,false);
+        f.environment.setProperty("GOLD_AI_COMPRESSION_ROUTE_JSON",f.mapper.writeValueAsString(replacement));f.environment.setProperty("TEST_KEY","test-new-provider");
+        assertThat(compression.status()).containsEntry("provider","deepseek").containsEntry("retryAt","").containsEntry("consecutiveFailures",0);
+        f.clock.advance(1);answer("{\"summary\":\"新模型核验后的摘要。\"}");compression.collect();awaitPass();var latest=f.store.list("compression-result",EvidenceCompression.Result.class,1).getFirst();
+        assertThat(latest.provider()).isEqualTo("deepseek");assertThat(latest.model()).isEqualTo("deepseek/default");verify(ai,times(2)).compress(any(),anyString(),any());
+    }
+    @Test void sourceRevisionAfterFreezeCannotReplaceTheArchivedTextOrItsAcceptedSummary()throws Exception{
+        answer("{\"summary\":\"冻结版本的4.00%利率摘要。\"}");var first=compression.process(article,body);
+        Instant cutoff=f.clock.instant();f.store.save("research-news","frozen-race",Map.of("cutoff",cutoff,"articles",List.of(Map.of("news",article,"sourceText",NewsService.SourceText.fromBody(body)))));
+        f.clock.advance(10);var revised=new NewsService.News("a",article.source(),"未来的修订标题","new",article.link(),article.publishedAt(),f.clock.instant(),article.verification(),2,"new-feed");f.store.save("news","a",revised);
+        when(news.textForCompression(eq("a"),any())).thenThrow(new AssertionError("Frozen research must use its archived source text"));
+        var frozen=Map.<String,Object>of("id","a","bodyHash",body.hash(),"sourceTextHash",body.hash(),"excerpt","archived original","actual","4.00");
+        var admitted=compression.apply(List.of(frozen),cutoff,"frozen-race").getFirst();assertThat(admitted).containsEntry("excerpt",first.excerpt()).containsEntry("actual","4.00");
+        assertThat(admitted).doesNotContainKey("sourceTextHash");assertThat(f.mapper.valueToTree(compression.status()).path("recent").size()).isEqualTo(1);
     }
 }

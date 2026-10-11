@@ -69,6 +69,7 @@ public class RuntimeApi {
     }
     @GetMapping("/news/{id}") public Map<String,Object> article(@PathVariable String id){return news.detail(id);}
     @GetMapping("/compression/{id}") public Map<String,Object> compression(@PathVariable String id){return compression.detail(id);}
+    @PostMapping("/compression/news/{id}/reprocess") public EvidenceCompression.Job reprocess(@PathVariable String id){return compression.reprocess(id);}
     public record ResearchRequest(String symbol,String horizon) {}
     @PostMapping("/research") public ResponseEntity<ResearchService.Run> start(@RequestBody ResearchRequest request) {
         product(request.symbol());return ResponseEntity.accepted().body(research.start(request.symbol(),request.horizon()));
