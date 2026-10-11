@@ -25,14 +25,16 @@ class RemoteHttpTest {
         var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();server.setExecutor(executor);
         byte[] expected="data: 黄金\n\ndata: [DONE]\n\n".getBytes(StandardCharsets.UTF_8);
         server.createContext("/sse",exchange->{try(exchange){exchange.getResponseHeaders().add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0);
-            for(byte next:expected){exchange.getResponseBody().write(next);exchange.getResponseBody().flush();}}});
+            for(byte next:expected){exchange.getResponseBody().write(next);exchange.getResponseBody().flush();}
+            try{Thread.sleep(3000);}catch(InterruptedException ignored){}}});
         server.createContext("/endless",exchange->{try(exchange){exchange.sendResponseHeaders(200,0);for(int i=0;i<40;i++){
             exchange.getResponseBody().write(": heartbeat\n\n".getBytes(StandardCharsets.UTF_8));exchange.getResponseBody().flush();
             try{Thread.sleep(40);}catch(InterruptedException ignored){return;}}}});
         server.start();var http=new RemoteHttp();String base="http://127.0.0.1:"+server.getAddress().getPort();
         try{
             var request=java.net.http.HttpRequest.newBuilder(java.net.URI.create(base+"/sse")).header("Accept","text/event-stream").timeout(java.time.Duration.ofSeconds(2)).build();
-            assertThat(http.send(request,1000).body()).isEqualTo(expected);
+            long started=System.nanoTime();assertThat(http.send(request,1000).body()).isEqualTo(expected);
+            assertThat(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)).isLessThan(1500);
             assertThatThrownBy(()->http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(base+"/endless"))
                 .header("Accept","text/event-stream").timeout(java.time.Duration.ofMillis(250)).build(),1000)).hasMessage("STREAM_TOTAL_TIMEOUT");
             assertThat(http.send(request,1000).body()).isEqualTo(expected);

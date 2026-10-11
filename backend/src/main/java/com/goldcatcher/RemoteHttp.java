@@ -33,8 +33,11 @@ public class RemoteHttp {
         boolean streaming=request.headers().firstValue("Accept").orElse("").contains("text/event-stream");
         var body=new LimitedBody(maximumBytes);
         long started=System.nanoTime(),duration=request.timeout().orElse(Duration.ofSeconds(20)).toNanos();
-        var pending=connection.sendAsync(request,info->HttpResponse.BodySubscribers.mapping(body,
-            bytes->decode(bytes,info.headers().firstValue("content-encoding").orElse(""),maximumBytes)));
+        var pending=connection.sendAsync(request,info->{
+            String encoding=info.headers().firstValue("content-encoding").orElse("");
+            body.stopAtDone=streaming&&info.statusCode()==200&&(encoding.isBlank()||encoding.equalsIgnoreCase("identity"));
+            return HttpResponse.BodySubscribers.mapping(body,bytes->decode(bytes,encoding,maximumBytes));
+        });
         try {
             if(!streaming)return pending.get(duration,TimeUnit.NANOSECONDS);
             return awaitStream(pending,body,started,duration,Duration.ofSeconds(120).toNanos());
@@ -88,6 +91,8 @@ public class RemoteHttp {
         private final int maximum;
         private Flow.Subscription subscription;
         volatile long firstAt,lastAt;
+        volatile boolean stopAtDone;
+        private final StringBuilder linePrefix=new StringBuilder();private int lineLength;private boolean doneLine;
         LimitedBody(int maximum) { this.maximum=maximum; }
         public CompletionStage<byte[]> getBody() { return completion; }
         public void onSubscribe(Flow.Subscription subscription) { this.subscription=subscription;subscription.request(1); }
@@ -98,10 +103,25 @@ public class RemoteHttp {
                     subscription.cancel();completion.completeExceptionally(new IllegalStateException("RESPONSE_TOO_LARGE"));return;
                 }
                 byte[] chunk=new byte[buffer.remaining()];buffer.get(chunk);bytes.writeBytes(chunk);
+                if(stopAtDone&&endsStream(chunk)){
+                    // [DONE] is the SSE terminator; a provider need not close its TCP connection immediately.
+                    completion.complete(bytes.toByteArray());subscription.cancel();return;
+                }
             }
             subscription.request(1);
         }
         public void onError(Throwable error) { completion.completeExceptionally(error); }
         public void onComplete() { completion.complete(bytes.toByteArray()); }
+        private boolean endsStream(byte[] chunk){
+            for(byte value:chunk){
+                if(value=='\r')continue;
+                if(value=='\n'){
+                    if(lineLength==0&&doneLine)return true;
+                    doneLine=lineLength==linePrefix.length()&&(linePrefix.toString().equals("data: [DONE]")||linePrefix.toString().equals("data:[DONE]"));
+                    linePrefix.setLength(0);lineLength=0;
+                }else{lineLength++;if(linePrefix.length()<32)linePrefix.append((char)(value&255));}
+            }
+            return false;
+        }
     }
 }

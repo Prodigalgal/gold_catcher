@@ -223,7 +223,7 @@ public class Any2ApiClient {
                 var began=clock.instant();long measured=System.nanoTime();
                 try{response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("chat/completions")))
                     .timeout(Duration.ofMillis(Math.min(route.timeoutSeconds()*1000L,remaining))).header("Authorization","Bearer "+settings.secret(route))
-                    .header("Content-Type","application/json").header("Accept","text/event-stream")
+                    .header("Content-Type","application/json").header("Accept","text/event-stream").header("Accept-Encoding","identity")
                     .POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),1_000_000);
                     attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,response.statusCode(),response.statusCode()==200?null:"INFERENCE_HTTP_"+response.statusCode()));
                     retryAfter=response.statusCode()==200?0:retryAfterMillis(response.headers().firstValue("Retry-After").orElse(""),clock.instant());

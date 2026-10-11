@@ -1196,7 +1196,7 @@ function App() {
 
         {/* Global Footer */}
         <footer className="gc-footer">
-          <span>GOLD CATCHER · v{status?.version ?? '0.4.9'} · 机构级黄金 AI 研究终端</span>
+          <span>GOLD CATCHER · v{status?.version ?? '—'} · 机构级黄金 AI 研究终端</span>
           <span>快照同步: {time(data?.serverTime)} · 北京时间</span>
         </footer>
       </div>
