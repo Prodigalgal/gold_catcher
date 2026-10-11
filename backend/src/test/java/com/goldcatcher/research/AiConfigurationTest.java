@@ -47,6 +47,16 @@ class AiConfigurationTest {
         assertThat(f.settings.text("GOLD_COMPRESSION_ENABLED","true")).isEqualTo("false");
     }
     @Test void staleSaveCannotOverwriteNewerVersion(){service.save(update(0,null));assertThatThrownBy(()->service.save(update(0,"stale-test-secret"))).hasMessage("AI_CONFIG_REVISION_CONFLICT");assertThat(service.view()).containsEntry("revision",1L);}
+    @Test void compressionProviderIsConfigurableAndPersistsWithoutChangingResearchOrExposingCredentials(){
+        var u=update(0,null);var selected=u.shortRoutes().researchers().stream().filter(s->s.provider().equals("deepseek")).findFirst().orElseThrow();
+        service.save(new AiConfiguration.Update(0,u.providers(),u.shortRoutes(),u.longRoutes(),true,selected));
+        assertThat(f.settings.compressionRoute().provider()).isEqualTo("deepseek");assertThat(f.settings.compressionRoute().judge()).isFalse();
+        assertThat(f.settings.compressionRoute().id()).isEqualTo("compressor-mimo");
+        var restarted=new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote);restarted.recover();
+        assertThat(f.settings.compressionRoute().provider()).isEqualTo("deepseek");assertThat(f.settings.secret(f.settings.compressionRoute())).isEqualTo("bootstrap-test-credential");
+        assertThat(f.mapper.writeValueAsString(restarted.view())).doesNotContain("bootstrap-test-credential","encryptedApiKey");
+        assertThat(f.settings.routes("SHORT")).hasSize(6);
+    }
     @Test void retryPolicyPersistsAndOldEncryptedRevisionCanRestoreBindingsAfterProviderChanges(){
         var u=update(0,"first-test-secret");var policy=new ResearchPolicy(4,1,15,300,300,1200,180);
         service.save(new AiConfiguration.Update(0,u.providers(),u.shortRoutes(),u.longRoutes(),true,u.compression(),policy,null));

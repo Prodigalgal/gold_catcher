@@ -8,6 +8,18 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void textArrivalQueuesImmediatelyButFuturePublicationsRemainOutsideResearch()throws Exception{
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var news=new NewsService(f.settings,remote,f.store,new EventHub(),f.clock);
+        var queued=new ArrayList<String>();news.onText(id->{assertThat(f.store.find("news",id,NewsService.News.class)).isPresent();queued.add(id);});
+        String xml="<rss><channel><item><guid>future</guid><title>Future release</title><link>https://www.cnbc.com/future.html</link><description>Public source summary</description><pubDate>Thu, 08 Oct 2026 00:01:00 GMT</pubDate></item></channel></rss>";
+        news.parseRss("CNBC_TOP",bytes(xml));assertThat(queued).hasSize(1);var text=news.textForCompression(queued.getFirst(),f.clock.instant());
+        assertThat(text.format()).isEqualTo("FEED_SUMMARY");assertThat(text.bodyHash()).isNull();assertThat(text.text()).contains("Public source summary");
+        assertThat(news.compressionCandidates(f.clock.instant())).hasSize(1);assertThat(news.freezeEvidence(f.clock.instant(),"future",4)).isEmpty();
+        news.parseRss("CNBC_TOP",bytes(xml));assertThat(queued).hasSize(1);
+        f.clock.advance(61000);var frozen=news.freezeEvidence(f.clock.instant(),"now-known",4);assertThat(frozen).hasSize(1);
+        assertThat(frozen.getFirst()).containsEntry("sourceTextHash",text.hash()).containsEntry("sourceTextFormat","FEED_SUMMARY");
+        verifyNoInteractions(remote);
+    }
     @Test void aBusyMediaFeedCannotExcludeOfficialFamiliesBeforeTheResearchLimit(){
         var f=new TestSupport();var news=new NewsService(f.settings,mock(RemoteHttp.class),f.store,new EventHub(),f.clock);
         for(int i=0;i<20;i++){

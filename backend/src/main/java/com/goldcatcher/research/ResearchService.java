@@ -5,6 +5,7 @@ import com.goldcatcher.RuntimeSettings.AiRoute;
 import com.goldcatcher.information.NewsService;
 import com.goldcatcher.analysis.TrendAnalysis;
 import com.goldcatcher.market.MarketFeed;
+import com.goldcatcher.market.MarketTypes;
 import com.goldcatcher.persistence.DocumentStore;
 import com.goldcatcher.simulation.SimulationLedger;
 import jakarta.annotation.PostConstruct;
@@ -68,6 +69,8 @@ public class ResearchService {
     private record NewsTrigger(String id,Instant at) {}
     private final AtomicReference<NewsTrigger> pendingNews=new AtomicReference<>();private volatile Instant lastAutomatic=Instant.EPOCH;
     private volatile String automaticError;
+    public record Preparation(String key,Instant until) {}
+    private volatile Preparation preparation;
     public static class ScheduleConfig {
         public boolean automatic;public int shortIntervalSeconds=300,longIntervalSeconds=1800,newsDebounceSeconds=15;
         public List<String> symbols=new ArrayList<>(List.of("XAU_USDT","GATE:XAUUSD"));
@@ -102,7 +105,8 @@ public class ResearchService {
         for(int i=0;i<run.messages.size();i++){var message=run.messages.get(i);if(List.of("WAITING_RESPONSE","RETRY_WAITING").contains(message.state()))
             run.messages.set(i,new Message(message.id(),message.actorId(),message.role(),message.stage(),"INTERRUPTED",message.startedAt(),clock.instant(),"REQUEST_INTERRUPTED_BY_RESTART",message.readingOrder(),message.answer(),Math.max(1,message.attempt()),null));}
         run.status="RECOVERY_PENDING";run.completedAt=null;run.recoveryCount++;save(run);recovery.add(run);}
-        automaticTimes.putAll(store.find("research-scheduling","times",new tools.jackson.core.type.TypeReference<Map<String,Instant>>(){}).orElse(Map.of()));}
+        automaticTimes.putAll(store.find("research-scheduling","times",new tools.jackson.core.type.TypeReference<Map<String,Instant>>(){}).orElse(Map.of()));
+        preparation=store.find("research-scheduling","preparation",Preparation.class).filter(p->!p.key().isBlank()).orElse(null);}
     private ResearchPolicy policy(String horizon){return configuration==null?ResearchPolicy.from(settings,horizon):configuration.policy(horizon);}
     @Scheduled(fixedDelay=1000,initialDelay=8000) void resumePending(){
         if(stopping||recovery.isEmpty()||!running.tryAcquire())return;
@@ -189,12 +193,13 @@ public class ResearchService {
             var frozenNews=news.freezeEvidence(run.evidenceCutoff,run.id,newsLimit);
             if(compression!=null){frozenNews=compression.apply(frozenNews,run.evidenceCutoff,run.id);run.preprocessing=store.find("research-preprocessing",run.id,JsonNode.class).orElse(null);}
             core.put("news",frozenNews);
+            if(run.preprocessing!=null)core.put("newsCoverage",Map.of("completed",frozenNews.size(),"omitted",run.preprocessing.path("omittedArticles").asInt(),"rule","Only completed source summaries; pending text omitted."));
             core.put("newsLimit",newsLimit);
             core.put("calendar",news.calendar().stream().filter(event->event.receivedAt()!=null&&!event.receivedAt().isAfter(run.evidenceCutoff)&&inTradingWindow(event,run.evidenceCutoff)).limit(6)
                 .map(event->{Map<String,Object> row=new LinkedHashMap<>();row.put("id",event.id());row.put("title",event.title());row.put("source",event.source());
                     row.put("scheduledAt",event.scheduledAt());row.put("scheduledDate",event.scheduledDate());row.put("endDate",event.endDate());row.put("timePrecision",event.timePrecision());return row;}).toList());
             core.put("sourceGaps",news.sources().stream().filter(source->source.error()!=null).map(source->source.id()+":"+source.error()).toList());
-            core.put("selectionNote","近7日新闻按newsLimit先选不同信源组，再按新近补足；未来48h最多6安排，非全覆盖。持仓/同伴计划预留预算；活动订单CSV，完整账户封存，peer仅上轮，摘要删减记审计。");
+            core.put("selectionNote","近7日新闻按newsLimit先选不同信源组，再按新近补足；只送已完成摘要，未完成见newsCoverage；未来48h最多6安排。活动订单CSV，完整账户封存，peer仅上轮，摘要删减记审计。");
             var evidenceIds=new ArrayList<>(List.of("market:quote","market:rules","account","indicators"));
             if(analysis!=null){var frozen=new LinkedHashMap<>(analysis.freeze(symbol,run.evidenceCutoff,run.id));
                 frozen.remove("evidenceIds");core.put("analysis",frozen);
@@ -363,8 +368,23 @@ public class ResearchService {
         config.updatedAt=clock.instant();store.save("research-scheduling","config",config);store.event("research-scheduling","CONFIG_CHANGED",config);events.changed();return scheduling();}
     public Map<String,Object> scheduling(){var queued=pendingNews.get();var config=scheduleConfig();var result=new LinkedHashMap<String,Object>(Map.of("automatic",config.automatic,"config",config,"running",running.availablePermits()==0||!recovery.isEmpty(),
         "lastAutomatic",lastAutomatic,"lastByProductHorizon",Map.copyOf(automaticTimes),"queuedNews",queued==null?"":queued.id(),"error",automaticError==null?"":automaticError,
-        "state",!config.automatic?"DISABLED":running.availablePermits()==0?"RUNNING":"MONITORING",
-        "disabledProviders",settings.disabledAiProviders(),"routeReadiness",List.of(ai.routeReadiness("SHORT"),ai.routeReadiness("LONG"))));result.put("startRetryAt",Map.copyOf(automaticRetryTimes));result.put("pendingRecovery",recovery.size());return result;}
+        "state",!config.automatic?"DISABLED":running.availablePermits()==0?"RUNNING":preparation!=null&&preparation.until().isAfter(clock.instant())?"PREPARING_EVIDENCE":"MONITORING",
+        "disabledProviders",settings.disabledAiProviders(),"routeReadiness",List.of(ai.routeReadiness("SHORT"),ai.routeReadiness("LONG"))));result.put("startRetryAt",Map.copyOf(automaticRetryTimes));result.put("pendingRecovery",recovery.size());
+        result.put("preparingUntil",preparation==null?null:preparation.until());return result;}
+    private void clearPreparation(){if(preparation!=null){preparation=null;store.save("research-scheduling","preparation",new Preparation("",Instant.EPOCH));}}
+    private boolean prepareAutomatic(String key,String symbol,MarketTypes.Snapshot snapshot){
+        if(compression==null)return false;
+        key=key+"/"+compression.configurationKey();
+        var orders=snapshot.quote()==null?List.<SimulationLedger.Order>of():ledger.view(symbol,snapshot.quote()).orders();
+        int limit=Math.max(1,Math.min(4,settings.integer("GOLD_RESEARCH_NEWS_LIMIT",orders.stream().noneMatch(order->order.openQuantity.signum()>0||List.of("PENDING","PARTIALLY_FILLED").contains(order.status))?2:1)));
+        if(!compression.needsPreparation(limit)){clearPreparation();return false;}
+        if(preparation==null||!preparation.key().equals(key)){
+            preparation=new Preparation(key,clock.instant().plusSeconds(compression.preparationSeconds()));
+            store.save("research-scheduling","preparation",preparation);events.changed();
+        }
+        if(!preparation.until().isAfter(clock.instant()))return false;
+        compression.collect();return true;
+    }
     @PreDestroy void stop(){stopping=true;for(var run:active.values())synchronized(run){if(run.status.equals("RUNNING")){run.status="RECOVERY_PENDING";run.error="REQUEST_INTERRUPTED_BY_RESTART";run.completedAt=null;save(run);}}
         workers.shutdownNow();try{workers.awaitTermination(5,TimeUnit.SECONDS);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}}
     @Scheduled(fixedDelay=10000,initialDelay=10000)
@@ -379,8 +399,9 @@ public class ResearchService {
             if(!snapshot.state().equals("LIVE")&&!closedLong)continue;
             int interval=parts[1].equals("SHORT")?config.shortIntervalSeconds:config.longIntervalSeconds;
             var last=automaticTimes.getOrDefault(key,Instant.EPOCH);if(last.plusSeconds(interval).isAfter(clock.instant())&&(!newsDue||last.plusSeconds(30).isAfter(clock.instant())))continue;
+            if(prepareAutomatic(key,parts[0],snapshot))return;
             try{start(parts[0],parts[1]);automaticError=null;automaticRetryTimes.remove(key);if(newsDue)pendingNews.compareAndSet(trigger,null);
-                automaticTimes.put(key,clock.instant());lastAutomatic=clock.instant();store.save("research-scheduling","times",automaticTimes);return;}
+                clearPreparation();automaticTimes.put(key,clock.instant());lastAutomatic=clock.instant();store.save("research-scheduling","times",automaticTimes);return;}
             catch(IllegalArgumentException invalid){automaticError=invalid.getMessage();automaticRetryTimes.put(key,clock.instant().plusSeconds(policy(parts[1]).retryMaxSeconds()));events.changed();}
         }
     }

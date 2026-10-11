@@ -96,7 +96,7 @@ public class AiConfiguration {
             if(key.length()>16384||key.contains("\n")||key.contains("\r"))throw new IllegalArgumentException("INVALID_AI_CREDENTIAL");
             providers.add(new Provider(input.id(),input.label().strip(),input.baseUrl().replaceAll("/+$",""),input.protocol(),input.catalogMode(),encrypt(key)));
         }
-        if(!ids.contains("mimo")||update.compression()==null||!"mimo".equals(update.compression().provider()))throw new IllegalArgumentException("COMPRESSION_FIXED_TO_MIMO");
+        if(update.compression()==null)throw new IllegalArgumentException("INVALID_AI_MODEL_SELECTION");
         var shortRoutes=validateHorizon(update.shortRoutes(),ids);var longRoutes=validateHorizon(update.longRoutes(),ids);
         var compression=validateSelections(List.of(update.compression()),ids).getFirst();
         var shortPolicy=(update.shortPolicy()==null?current.shortPolicy():update.shortPolicy()).validated();
@@ -126,7 +126,7 @@ public class AiConfiguration {
         return List.copyOf(result);
     }
     private void publish(Configuration config){settings.applyResearchRoutes(config.revision(),buildRoutes(config),buildCompression(config),config.compressionEnabled());}
-    private AiRoute buildCompression(Configuration config){var s=config.compression();var p=config.providers().stream().filter(provider->provider.id().equals("mimo")).findFirst().orElseThrow();
+    private AiRoute buildCompression(Configuration config){var s=config.compression();var p=config.providers().stream().filter(provider->provider.id().equals(s.provider())).findFirst().orElseThrow();
         var route=new AiRoute("compressor-mimo",p.id(),s.model(),p.baseUrl(),"UI_CONFIGURED",s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),false);
         settings.registerConfiguredRoute(route,credential(p),p.protocol(),p.catalogMode());return route;}
     private Map<String,List<AiRoute>> buildRoutes(Configuration config){

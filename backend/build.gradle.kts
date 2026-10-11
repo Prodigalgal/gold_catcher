@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.goldcatcher"
-version = "0.4.7"
+version = "0.4.8"
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(25) }
