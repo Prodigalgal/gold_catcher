@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.goldcatcher"
-version = "0.5.1"
+version = "0.5.2"
 
 springBoot { buildInfo() }
 

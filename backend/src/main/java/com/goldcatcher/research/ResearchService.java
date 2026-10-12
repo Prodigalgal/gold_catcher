@@ -303,7 +303,7 @@ public class ResearchService {
                     try {
                     long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(batchDeadline-System.nanoTime()));
                     var route=bindings.get(actor.id());long allowance=run.retryPolicy.attemptMillis(remaining,Any2ApiClient.requestSeconds(route));
-                    var answer=route.fallback()!=null&&!correction.isBlank()?ai.completeFallback(route,stage==3?JUDGE_INSTRUCTION:INSTRUCTION,packet,clock.instant().plusMillis(allowance),correction):ai.complete(route,stage==3?JUDGE_INSTRUCTION:INSTRUCTION,packet,clock.instant().plusMillis(allowance));
+                    var answer=ai.complete(route,stage==3?JUDGE_INSTRUCTION:INSTRUCTION,packet,clock.instant().plusMillis(allowance));
                     provided=answer;
                     if(stage==3)AdjudicationPanel.validateVote(answer.output(),previous);
                     if(stage==3&&previous.size()<2&&!answer.output().path("selectedCandidateId").asText().equals("WAIT"))throw new IllegalStateException("INSUFFICIENT_CANDIDATE_QUORUM");

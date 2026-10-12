@@ -222,6 +222,8 @@ public class Any2ApiClient {
             if(!structuredTool&&jsonMode&&!unified)for(var parameter:parameters)if(parameter.asText().equals("response_format"))request.put("response_format",Map.of("type","json_object"));
             if(unified&&!compression)request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(adjudication,structuredTool,ResearchProtocol.onlyWait(mapper.valueToTree(packet)))),Map.of("role","user","content",mapper.writeValueAsString(packet))));
             var sourceOptions=new LinkedHashMap<String,Object>();
+            // One external research seat must not silently launch a second team inside MiniMax.
+            if(route.provider().equals("minmax")&&capabilities.path("provider_options").has("enable_team"))sourceOptions.put("enable_team",false);
             if(capabilities.path("provider_options").has("web_search_status")&&capabilities.path("parameter_adaptation").path("search").path("mode").asText().equals("mapped"))sourceOptions.put("web_search_status","disabled");
             if(compression&&capabilities.path("provider_options").has("thinking"))sourceOptions.put("thinking",false);
             if(!sourceOptions.isEmpty())request.put("provider_options",Map.of(route.provider(),sourceOptions));
@@ -256,7 +258,7 @@ public class Any2ApiClient {
                 try{response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("chat/completions")))
                     .timeout(Duration.ofMillis(Math.min(route.timeoutSeconds()*1000L,remaining))).header("Authorization","Bearer "+settings.secret(route))
                     .header("Content-Type","application/json").header("Accept","text/event-stream").header("Accept-Encoding","identity")
-                    .POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),1_000_000);
+                    .POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),8_000_000);
                     attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,response.statusCode(),response.statusCode()==200?null:"INFERENCE_HTTP_"+response.statusCode()));
                     retryAfter=response.statusCode()==200?0:retryAfterMillis(response.headers().firstValue("Retry-After").orElse(""),clock.instant());
                     if(attempt==attemptLimit||!List.of(408,425,429,500,502,503,504).contains(response.statusCode())||Duration.between(clock.instant(),deadline).toSeconds()<5)break;

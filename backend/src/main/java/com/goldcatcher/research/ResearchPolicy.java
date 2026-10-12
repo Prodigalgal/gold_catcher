@@ -38,7 +38,7 @@ public record ResearchPolicy(int maxAttempts,int retryBaseSeconds,int retryMaxSe
     private static final Set<String> REPAIRABLE=Set.of("INVALID_STRUCTURED_OUTPUT","MISSING_REQUIRED_OUTPUT","OUTPUT_FIELDS_TOO_LONG",
         "INVALID_DIRECTION","INVALID_EVIDENCE_ARRAY","PLAN_NARRATIVE_TOO_LONG","INVALID_IMPACT","MISSING_JUDGE_VOTE",
         "INVALID_JUDGE_CANDIDATE","INVALID_PREVIOUS_STAGE_REFERENCE","INVALID_NEWS_REFERENCE","INVALID_EVIDENCE_REFERENCE",
-        "REQUIRED_SUBMISSION_MISSING","INSUFFICIENT_CANDIDATE_QUORUM");
+        "REQUIRED_SUBMISSION_MISSING","INSUFFICIENT_CANDIDATE_QUORUM","RESPONSE_TOO_LARGE","STREAM_OUTPUT_LIMIT");
     public static boolean repairable(String code){return code!=null&&(REPAIRABLE.contains(code)||code.startsWith("OUTPUT_NOT_COMPLETE_")
         ||code.startsWith("INVALID_STRUCTURED_OUTPUT_")||code.startsWith("MISSING_REQUIRED_OUTPUT_")||code.startsWith("PLAN_NARRATIVE_TOO_LONG_"));}
     public static boolean retryable(String code){return code!=null&&(repairable(code)||Set.of("REQUEST_TIMEOUT","PROVIDER_REQUEST_STILL_RUNNING",

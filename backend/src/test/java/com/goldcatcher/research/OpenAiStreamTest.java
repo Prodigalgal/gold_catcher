@@ -27,6 +27,18 @@ class OpenAiStreamTest {
         assertThat(function.path("name").asText()).isEqualTo("submit_research");
         assertThat(function.path("arguments").asText()).isEqualTo("{\"plan\":{\"action\":\"WAIT\"}}");
     }
+    @Test void repeatedFramingMetadataDoesNotCountAsModelOutput(){
+        String event="data: "+f.mapper.writeValueAsString(Map.of("metadata","x".repeat(180),"choices",List.of(Map.of("index",0,"delta",Map.of("content","a")))))+"\n\n";
+        String payload=event.repeat(5000)+frame(Map.of(),"stop")+"data: [DONE]\n\n";
+        assertThat(payload.getBytes(StandardCharsets.UTF_8).length).isGreaterThan(1_000_000);
+        assertThat(decode(payload).path("choices").path(0).path("message").path("content").asText()).hasSize(5000);
+    }
+    @Test void combinedThinkingAndAnswerBytesRemainBounded(){
+        String thought=frame(Map.of("reasoning_content","金".repeat(50000)),null);
+        String answer=frame(Map.of("content","a".repeat(100000)),null);
+        assertThatThrownBy(()->decode(thought.repeat(6)+answer.repeat(2)+frame(Map.of(),"stop")+"data: [DONE]\n\n")).hasMessage("STREAM_OUTPUT_LIMIT");
+        assertThatThrownBy(()->decode("{\"choices\":[{\"message\":{\"content\":\""+"a".repeat(1000001)+"\"}}]}")).hasMessage("STREAM_OUTPUT_LIMIT");
+    }
     @Test void rejectsInterruptedStreamsEvenWhenTheyAlreadyContainValidLookingJson(){
         String answer=frame(Map.of("content","{\"plan\":{\"action\":\"WAIT\"}}"),null);
         for(String broken:List.of(answer,answer+frame(Map.of(),"stop"),answer+"data: [DONE]\n\n",answer+frame(Map.of(),"stop")+"data: [DONE]"))

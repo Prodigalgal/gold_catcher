@@ -160,6 +160,9 @@ class ResearchServiceTest {
     }
     @Test void invalidReferenceIsReturnedToSameModelForRepairWithoutLeakingSameStageReplies()throws Exception{
         f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","5");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");var seen=new ConcurrentHashMap<String,Integer>();
+        var routes=f.settings.routes().stream().map(route->new RuntimeSettings.AiRoute(route.id(),route.provider(),route.model(),route.baseUrl(),route.apiKeyEnv(),route.inputEstimateLimit(),route.characterLimit(),route.byteLimit(),route.messageLimit(),route.outputReserve(),route.timeoutSeconds(),route.judge(),
+            new RuntimeSettings.AiRoute(route.id()+"-fallback","arena","arena/Max","https://localhost/arena/v1","TEST_KEY",10000,14000,30000,2,1000,2,route.judge()))).toList();
+        f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(routes));
         when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));var answer=waiting(route,packet);
             if(route.id().equals("q")&&packet.path("phase").asInt()==0){int attempt=seen.merge("q",1,Integer::sum);
@@ -169,6 +172,7 @@ class ResearchServiceTest {
             }return answer;
         });
         var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("COMPLETED");assertThat(seen.get("q")).isEqualTo(2);
+        verify(ai,never()).completeFallback(any(),anyString(),any(),any(Instant.class),anyString());
         assertThat(saved.messages.stream().filter(m->m.error()!=null)).anyMatch(m->m.answer()!=null&&m.answer().output().path("quotedMessages").path(0).asText().equals("invented-reference"));
     }
     @Test void expiredTradingEvidenceStillCompletesAllFourStagesAndThreeJudgeVotes()throws Exception{
