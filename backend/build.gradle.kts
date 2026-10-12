@@ -5,7 +5,9 @@ plugins {
 }
 
 group = "com.goldcatcher"
-version = "0.5.0"
+version = "0.5.1"
+
+springBoot { buildInfo() }
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(25) }

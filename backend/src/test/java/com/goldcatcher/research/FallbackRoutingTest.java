@@ -61,9 +61,14 @@ class FallbackRoutingTest {
         assertThatThrownBy(()->client.complete(route,"观察",packet(),f.clock.instant().plusSeconds(300))).hasMessage("REQUEST_TIMEOUT");
         verify(remote,times(1)).send(any(),eq(1_000_000));
     }
-    @Test void allSixLogicalSeatsCanRemainConfiguredWhileSharingTheArenaFallback()throws Exception{
+    @SuppressWarnings("unchecked") @Test void allSixLogicalSeatsCanRemainConfiguredWhileSharingTheArenaFallback()throws Exception{
         var routes=new ArrayList<AiRoute>();for(boolean judge:List.of(false,true))for(String name:List.of("mimo","deepseek","grok")){var route=route(name,judge);routes.add(new AiRoute(name+(judge?"-judge":"-research"),route.provider(),route.model(),route.baseUrl(),route.apiKeyEnv(),route.inputEstimateLimit(),route.characterLimit(),route.byteLimit(),2,2200,300,judge,new AiRoute(name+(judge?"-jf":"-rf"),"arena","arena/Max",route.fallback().baseUrl(),"TEST",10000,20000,30000,2,2200,300,judge)));}
         catalogs();assertThat(client.selectRoutes(routes,List.of())).containsExactlyElementsOf(routes);
+        f.settings.applyResearchRoutes(1,Map.of("SHORT",routes),f.settings.compressionRoute(),true);
+        var checks=(List<Any2ApiClient.RouteCheck>)client.routeReadiness("SHORT").get("checks");
+        assertThat(checks).filteredOn(check->check.fallbackFor()==null).hasSize(6);
+        assertThat(checks).filteredOn(check->check.fallbackFor()!=null).hasSize(6)
+            .allSatisfy(check->assertThat(routes).anyMatch(primary->primary.id().equals(check.fallbackFor())&&primary.fallback().id().equals(check.routeId())));
         verify(remote,never()).send(any(),eq(1_000_000));
     }
     @Test void threeArenaFallbackCallsCanAdvanceConcurrently()throws Exception{

@@ -74,13 +74,17 @@ jobs:
       - name: Configure repository-scoped GitOps SSH key
         env:
           DEPLOY_KEY: ${{ secrets.GITOPS_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           test -n "$DEPLOY_KEY"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$DEPLOY_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null
-          curl --fail --silent https://api.github.com/meta | python3 -c 'import json,sys; print("\n".join("github.com " + key for key in json.load(sys.stdin)["ssh_keys"]))' > ~/.ssh/known_hosts
+          curl --fail --silent --show-error --retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 20 \
+            -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/meta -o "$RUNNER_TEMP/github-meta.json"
+          python3 -c 'import json,sys; keys=json.load(open(sys.argv[1]))["ssh_keys"]; assert keys, "GitHub host keys missing"; print("\n".join("github.com " + key for key in keys))' "$RUNNER_TEMP/github-meta.json" > ~/.ssh/known_hosts
       - name: Promote both digests in one GitOps commit
         env:
           GH_TOKEN: ${{ github.token }}

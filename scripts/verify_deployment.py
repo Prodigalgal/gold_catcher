@@ -66,7 +66,8 @@ expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION',
                      'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS',
                      'DIVERSE_NEWS_CANDIDATE_POOL', 'PREEMPTIBLE_MIMO_COMPRESSION', 'ANY2API_CIRCUIT_RECOVERY', 'IMMEDIATE_SOURCE_PREPROCESSING',
                      'SUMMARY_ONLY_NEWS_ADMISSION', 'CONFIGURABLE_COMPRESSION_REPROCESSING', 'BOUNDED_PRE_RESEARCH_PREPARATION'}
-if api.get('version') != '0.5.0' or not expected_features <= set(api.get('features', [])):
+expected_version = json.loads(Path('web/package.json').read_text())['version']
+if api.get('version') != expected_version or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -98,7 +99,7 @@ while time.monotonic() < deadline:
     readiness = schedule.get('routeReadiness', [])
     if (configuration['encryptionConfigured'] is True
             and all(len(configuration[key]['researchers']) == len(configuration[key]['judges']) == 3 for key in ('shortRoutes', 'longRoutes'))
-            and len(readiness) == 2 and all(len([r for r in row['checks'] if r['judge'] is judging]) == 3 for row in readiness for judging in (False, True))):
+            and len(readiness) == 2 and all(len([r for r in row['checks'] if r['judge'] is judging and not r.get('fallbackFor')]) == 3 for row in readiness for judging in (False, True))):
         break
     time.sleep(5)
     perpetual = snapshot('/api/dashboard?symbol=XAU_USDT')
@@ -118,7 +119,7 @@ for row in readiness:
     for judging in (False, True):
         identities = [route['model'].strip().lower().split('/', 1)[-1] for route in row['selected'] if route['judge'] is judging]
         assert len(identities) == len(set(identities))
-        configured = [route for route in row['checks'] if route['judge'] is judging]
+        configured = [route for route in row['checks'] if route['judge'] is judging and not route.get('fallbackFor')]
         assert len(configured) == 3 and len({route['provider'] for route in configured}) == 3
     if row['state'] == 'READY':
         assert len(row['selected']) == 6

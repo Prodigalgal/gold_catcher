@@ -46,6 +46,7 @@ jobs:
       - run: python3 -m pip install -r scripts/requirements.txt
       - name: Check release mutations and manifests
         run: |
+          python3 scripts/check_versions.py
           python3 -m unittest discover -s scripts -p 'test_*.py'
           kubectl kustomize deploy/gitops/oracle > rendered.yaml
           python3 scripts/check_manifests.py rendered.yaml

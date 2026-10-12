@@ -43,7 +43,7 @@ public class Any2ApiClient {
     public record Attempt(int number,Instant startedAt,long durationMs,Integer httpStatus,String error) {}
     public record ModelState(String routeId,String provider,String model,boolean credentialConfigured,
         JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError,Budget lastBudget,Instant lastBudgetAt,String catalogError,Routing lastRouting) {}
-    public record RouteCheck(String routeId,String provider,String model,boolean judge,String state,Instant catalogRetrievedAt,Instant retryAt) {}
+    public record RouteCheck(String routeId,String provider,String model,boolean judge,String state,Instant catalogRetrievedAt,Instant retryAt,String fallbackFor) {}
     public record RouteSelection(String state,List<AiRoute> routes,List<RouteCheck> checks,String basis) {}
     private record Cached(JsonNode catalog,Instant at,String routeKey) {}
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
@@ -123,6 +123,7 @@ public class Any2ApiClient {
     private RouteSelection selection(List<AiRoute> preferred,List<AiRoute> fallback,boolean refresh) {
         var pool=new ArrayList<>(preferred);for(var route:fallback)if(pool.stream().noneMatch(p->p.id().equals(route.id())))pool.add(route);
         var probePool=new ArrayList<>(pool);for(var route:pool)if(route.fallback()!=null)probePool.add(route.fallback());
+        var fallbackParents=new HashMap<String,String>();for(var route:pool)if(route.fallback()!=null)fallbackParents.put(route.fallback().id(),route.id());
         var checks=new ArrayList<RouteCheck>();var ready=new HashSet<String>();
         for(var route:probePool) {
             String state="READY";Instant retryAt=null;var cached=currentCatalog(route);
@@ -141,7 +142,7 @@ public class Any2ApiClient {
                 else if(!cached.at().isAfter(clock.instant().minusSeconds(300)))state="CATALOG_STALE";
                 else state=catalogReadiness(route,cached.catalog());
             }
-            checks.add(new RouteCheck(route.id(),route.provider(),route.model(),route.judge(),state,cached==null?null:cached.at(),retryAt));
+            checks.add(new RouteCheck(route.id(),route.provider(),route.model(),route.judge(),state,cached==null?null:cached.at(),retryAt,fallbackParents.get(route.id())));
             if(state.equals("READY")||state.equals("MODEL_RECOVERY_READY"))ready.add(route.id());
         }
         for(var route:pool)if(route.fallback()!=null&&ready.contains(route.fallback().id()))ready.add(route.id());
