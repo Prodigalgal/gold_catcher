@@ -34,13 +34,14 @@ final class OpenAiStream {
             }
             return envelope;
         }
-        var stream=new OpenAiStream(mapper);var data=new StringBuilder();
+        var stream=new OpenAiStream(mapper);var data=new StringBuilder();String event="";
         for(String line:text.replace("\r\n","\n").replace('\r','\n').split("\n",-1)){
-            if(line.isEmpty()){if(!data.isEmpty()){stream.frame(data.toString());data.setLength(0);}continue;}
+            if(line.isEmpty()){if(event.equals("error"))throw streamFailure(mapper,data.toString());if(!data.isEmpty()){stream.frame(data.toString());data.setLength(0);}event="";continue;}
             if(line.startsWith(":"))continue;
             int colon=line.indexOf(':');String field=colon<0?line:line.substring(0,colon);
             String value=colon<0?"":line.substring(colon+1);if(value.startsWith(" "))value=value.substring(1);
             if(field.equals("data")){if(!data.isEmpty())data.append('\n');data.append(value);}
+            else if(field.equals("event"))event=value.strip();
         }
         // EOF does not dispatch an unterminated SSE event; accepting it could turn a broken reply into a vote.
         if(!data.isEmpty()||!stream.done||stream.finish==null)throw new IllegalStateException("STREAM_INCOMPLETE");
@@ -49,6 +50,10 @@ final class OpenAiStream {
         var choice=stream.envelope.putArray("choices").addObject();choice.put("index",0);choice.put("finish_reason",stream.finish);choice.set("message",message);
         if(stream.model!=null)stream.envelope.put("model",stream.model);
         return stream.envelope;
+    }
+    private static IllegalStateException streamFailure(ObjectMapper mapper,String data){
+        String code="";try{var item=mapper.readTree(data);code=(item.has("error")?item.path("error"):item).path("code").asText().toUpperCase(Locale.ROOT);}catch(RuntimeException malformed){}
+        return new IllegalStateException("INFERENCE_STREAM_ERROR"+(code.matches("[A-Z0-9_]{1,60}")?"_"+code:""));
     }
     private void frame(String data){
         if(++frames>10000||data.length()>262144)throw new IllegalStateException("STREAM_FRAME_LIMIT");

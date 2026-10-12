@@ -79,7 +79,7 @@ class AiConfigurationTest {
         var frozen=f.settings.researchRouteSnapshot("SHORT");var publicSnapshot=f.mapper.valueToTree(Map.of("revision",frozen.revision(),"routes",frozen.routes()));
         service.save(update(1,"second-test-secret"));
         var restarted=new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote);restarted.recover();
-        assertThat(restarted.policy("SHORT")).isEqualTo(policy);assertThat(restarted.policy(1,"SHORT")).isEqualTo(policy);
+        assertThat(restarted.policy("SHORT")).isEqualTo(policy.forHorizon("SHORT"));assertThat(restarted.policy(1,"SHORT")).isEqualTo(policy.forHorizon("SHORT"));
         var restored=restarted.routesForRun(publicSnapshot,"SHORT");assertThat(f.settings.secret(restored.getFirst())).isEqualTo("first-test-secret");
         assertThat(f.settings.secret(f.settings.routes("SHORT").getFirst())).isEqualTo("second-test-secret");
         assertThat(f.mapper.writeValueAsString(restarted.view())).doesNotContain("first-test-secret","second-test-secret","encryptedApiKey");
@@ -120,7 +120,7 @@ class AiConfigurationTest {
         assertThat(f.settings.manualAiCatalog(route)).isTrue();assertThat(route.baseUrl()).isEqualTo("https://custom.example.test/v1");
         @SuppressWarnings("unchecked") var answer=(java.net.http.HttpResponse<byte[]>)mock(java.net.http.HttpResponse.class);
         when(answer.statusCode()).thenReturn(200);when(answer.body()).thenReturn(f.mapper.writeValueAsString(Map.of("choices",List.of(Map.of("finish_reason","stop","message",Map.of("content","{\"title\":\"等待\",\"output\":\"冻结证据不足\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"UNKNOWN\",\"plan\":{\"action\":\"WAIT\"}}"))))).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        when(remote.send(any(),eq(8_000_000))).thenReturn(answer);
+        when(remote.sendInference(any(),eq(8_000_000),any())).thenReturn(answer);
         var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);assertThat(client.complete(route,"内部模拟",Map.of("phase",0,"evidence",Map.of()))).isNotNull();
         verify(remote,never()).send(any(),eq(500_000));assertThat(client.states().getFirst().catalog().path("availabilityBasis").asText()).contains("MANUAL_CONFIGURATION","NOT_INFERENCE_ACCEPTANCE");
     }

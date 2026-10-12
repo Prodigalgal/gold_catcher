@@ -40,6 +40,9 @@ public class EvidenceCompression {
     }
     public record Checkpoint(int consecutiveFailures,Instant retryAt,String lastError,Instant lastSuccessfulAt) {}
     public record Job(String cacheKey,String newsId,String generation,Instant requestedAt) {}
+    public record Summary(String newsId,String state,String resultId,String excerpt,boolean ready,boolean configurationCurrent,
+        String provider,String model,List<String> usedModels,Instant completedAt,String sourceFormat,int processedChunks,int totalChunks,
+        String error,Instant nextAttempt,String attemptState) {}
     private record Candidate(NewsService.News article,NewsService.SourceText text,Result cached,Job job) {}
     private record Coverage(int candidateArticles,int eligibleBodies,int completedSummaries,int queuedArticles,
         int processingArticles,int retryingArticles,int missingBodies,int unsuitableBodies,Instant scannedAt) {}
@@ -93,12 +96,31 @@ public class EvidenceCompression {
     }
     public Job reprocess(String newsId){
         var article=store.find("news",newsId,NewsService.News.class).orElseThrow(()->new IllegalArgumentException("NEWS_NOT_FOUND"));
+        if(!settings.sourceEnabled(article.source()))throw new IllegalArgumentException("SOURCE_DISABLED");
         var text=news.textForCompression(newsId,clock.instant());if(!suitable(text))throw new IllegalArgumentException("NO_COMPRESSIBLE_SOURCE_TEXT");
         String key=key(article,text,settings.compressionRoute());var job=new Job(key,newsId,UUID.randomUUID().toString(),clock.instant());
         store.transaction(()->{store.save("compression-job",key,job);store.event(newsId,"COMPRESSION_REPROCESS_REQUESTED",job);return job;});
         signal();events.changed();return job;
     }
     public Result find(String id){return store.find("compression-result",id,Result.class).orElseThrow(()->new IllegalArgumentException("COMPRESSION_NOT_FOUND"));}
+    /** Compact, read-only summaries for the visible news page; never invokes a model. */
+    public List<Summary> summaries(List<String> ids){
+        if(ids==null||ids.isEmpty()||ids.size()>50||ids.stream().anyMatch(id->id==null||!id.matches("[A-Za-z0-9_-]{1,128}")))throw new IllegalArgumentException("INVALID_NEWS_IDS");
+        var route=settings.compressionRoute();var cutoff=clock.instant();List<Result> history=null;var output=new ArrayList<Summary>();
+        for(String id:new LinkedHashSet<>(ids)){
+            var article=store.find("news",id,NewsService.News.class).orElse(null);var text=article==null?null:news.textForCompression(id,cutoff);
+            if(!suitable(text)){output.add(new Summary(id,article==null?"NEWS_NOT_FOUND":text==null?"NO_SOURCE_TEXT":"UNSUITABLE_SOURCE",null,"",false,true,route.provider(),route.model(),List.of(),null,text==null?null:text.format(),0,0,null,null,null));continue;}
+            String cacheKey=key(article,text,route);var attempt=store.find("compression-cache",cacheKey,Result.class).orElse(null);var result=ready(cacheKey,cutoff);boolean current=true;
+            if(result==null){if(history==null)history=store.list("compression-result",Result.class,1000);result=history.stream().filter(r->r.newsId().equals(id)&&Objects.equals(r.sourceTextHash(),text.hash())&&r.state().equals("EXTRACTED")&&r.completedAt()!=null&&!r.completedAt().isAfter(cutoff)).max(Comparator.comparing(Result::completedAt)).orElse(null);current=result==null;}
+            var job=store.find("compression-job",cacheKey,Job.class).orElse(null);boolean queued=job!=null&&(attempt==null||!Objects.equals(job.generation(),attempt.generation()));
+            String state=id.equals(workingOn)?"RUNNING":queued?"QUEUED":!enabled()?"DISABLED":attempt!=null?attempt.state():result!=null?"STALE_CONFIGURATION":"PENDING";
+            var displayed=result==null?attempt:result;
+            output.add(new Summary(id,state,displayed==null?null:displayed.id(),displayed==null?"":displayed.excerpt(),result!=null&&current&&enabled(),current,
+                displayed==null?route.provider():displayed.provider(),displayed==null?route.model():displayed.model(),displayed==null?List.of():displayed.usedModels(),displayed==null?null:displayed.completedAt(),text.format(),
+                attempt==null?displayed==null?0:displayed.processedChunks():attempt.processedChunks(),attempt==null?displayed==null?0:displayed.totalChunks():attempt.totalChunks(),attempt==null?null:attempt.error(),attempt==null?null:attempt.nextAttempt(),attempt==null?null:attempt.state()));
+        }
+        return List.copyOf(output);
+    }
     public Map<String,Object> detail(String id){var result=find(id);return Map.of("result",result,"chunks",result.chunkIds().stream().map(chunk->{var row=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(store.find("compression-chunk-result",chunk,ChunkResult.class).orElseThrow());row.set("input",store.find("compression-input",chunk,JsonNode.class).orElse(null));return row;}).toList());}
     public Map<String,Object> status(){var route=settings.compressionRoute();loadRuntime(route);var recent=store.list("compression-result",Result.class,60).stream().filter(r->VERSION.equals(r.method())).limit(12).toList();
         var status=new LinkedHashMap<String,Object>(Map.of("enabled",enabled(),"provider",route.provider(),"model",route.model(),"method",VERSION,"voting",false,
@@ -133,6 +155,7 @@ public class EvidenceCompression {
         var pool=new LinkedHashMap<String,NewsService.News>();articles.forEach(a->pool.put(a.id(),a));
         for(var job:store.list("compression-job",Job.class,1000)){
             var article=store.find("news",job.newsId(),NewsService.News.class).orElse(null);if(article==null)continue;
+            if(!settings.sourceEnabled(article.source()))continue;
             var text=news.textForCompression(article.id(),cutoff);if(text!=null&&job.cacheKey().equals(key(article,text,route)))pool.putIfAbsent(article.id(),article);
         }
         articles=List.copyOf(pool.values());

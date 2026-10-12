@@ -166,7 +166,8 @@ public class TrendAnalysis {
         packet.put("releaseMeaning","sourceId关联releaseSources元数据；forecast空=无发布前预期；原文/hash/id映射归档。");
         var expected=mapper.valueToTree(view.expectations().stream().filter(e->!e.scheduledAt().isBefore(cutoff)&&e.scheduledAt().isBefore(cutoff.plusSeconds(172800))).limit(6).toList());
         int index=0;for(var node:expected){var row=(tools.jackson.databind.node.ObjectNode)node;String alias="ff:"+(++index);refs.add(alias);referenceMap.put(alias,row.path("id").asText());row.put("id",alias);}
-        packet.put("expectations",EvidenceTable.pack(mapper,expected,List.of("id","indicator","title","scheduledAt","timingPrecision","impact","unit","forecast","previous","rawForecast","rawPrevious","receivedAt","version")));
+        packet.put("expectations",EvidenceTable.pack(mapper,expected,List.of("id","indicator","title","source","scheduledAt","timingPrecision","impact","unit","forecast","previous","rawForecast","rawPrevious","rawProviderForecast","referencePeriod","receivedAt","version")));
+        packet.put("expectationMeaning","TE forecast列是调查一致预期；rawProviderForecast是TE自有预测，不能混用。仅使用发布前实际收到的版本，不回填历史预期。多来源分别保存，不把重复提供方当独立样本。");
         packet.put("expectationSource",Map.of("source","FOREX_FACTORY_PROVIDER_FORECAST","url",DriverSources.CALENDAR));
         packet.put("evidenceIds",List.copyOf(refs));store.save("research-analysis-references",runId,referenceMap);
         packet.put("precision","价格/金额/时刻原精度，派生百分比舍入8位；全精度归档。");

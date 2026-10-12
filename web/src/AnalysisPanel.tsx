@@ -381,14 +381,16 @@ export default function AnalysisPanel({
                     }}
                   >
                     <div>
-                      <strong style={{ fontSize: '13px' }}>{e.title}</strong>
+                      <strong style={{ fontSize: '13px' }}>{e.title}{e.referencePeriod && ` · ${e.referencePeriod}`}</strong>
                       <span className="gc-small" style={{ marginLeft: '10px' }}>
                         {e.impact} · {time(e.scheduledAt)}
                       </span>
+                      <small className="gc-small" style={{ display: 'block', marginTop: '6px' }}>{e.source === 'TRADING_ECONOMICS_SURVEY_CONSENSUS' ? 'Trading Economics 调查一致预期' : e.source === 'FOREX_FACTORY_PROVIDER_FORECAST' ? 'Forex Factory 提供方预期' : e.source} · 收到 {time(e.receivedAt)} · v{e.version}</small>
                     </div>
-                    <div style={{ display: 'flex', gap: '14px', fontFamily: 'var(--gc-font-mono)' }}>
-                      <span>预期 <b>{e.rawForecast || decimal(e.forecast)}</b></span>
+                    <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontFamily: 'var(--gc-font-mono)' }}>
+                      <span>{e.source === 'TRADING_ECONOMICS_SURVEY_CONSENSUS' ? '调查预期' : '提供方预期'} <b>{e.rawForecast || decimal(e.forecast)}</b></span>
                       <span>前值 <b>{e.rawPrevious || decimal(e.previous)}</b></span>
+                      {e.rawProviderForecast && <span>TE 自有预测 <b>{e.rawProviderForecast}</b></span>}
                     </div>
                   </div>
                 ))}

@@ -23,7 +23,9 @@ public final class AnalysisTypes {
         Instant lastSuccess,Instant nextPoll,String error,int records) {}
     public record Expectation(String id,String indicator,String title,Instant scheduledAt,String timingPrecision,
         String impact,String unit,String forecast,String previous,String source,String url,
-        Instant receivedAt,int version,String hash,String rawForecast,String rawPrevious) {}
+        Instant receivedAt,int version,String hash,String rawForecast,String rawPrevious,String rawProviderForecast,String rawActual,String referencePeriod) {
+        public Expectation(String id,String indicator,String title,Instant scheduledAt,String timingPrecision,String impact,String unit,String forecast,String previous,String source,String url,Instant receivedAt,int version,String hash,String rawForecast,String rawPrevious){this(id,indicator,title,scheduledAt,timingPrecision,impact,unit,forecast,previous,source,url,receivedAt,version,hash,rawForecast,rawPrevious,null,null,null);}
+    }
     public record Revision(String period,String before,String after,String delta,String unit,String excerpt) {}
     public record Metric(String indicator,String label,String period,String unit,String actual,String previous,
         String precision,String excerpt,List<Revision> revisions) {}

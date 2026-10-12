@@ -25,7 +25,7 @@ class RuntimeApiReadTest {
         when(market.snapshot("XAU_USDT")).thenReturn(mock(MarketTypes.Snapshot.class));when(ledger.view("XAU_USDT")).thenReturn(mock(SimulationLedger.View.class));
         when(research.scheduling()).thenReturn(Map.of());when(research.summaries()).thenReturn(List.of());when(news.sources()).thenReturn(List.of());
         var api=new RuntimeApi(market,news,ledger,research,ai,f.settings,new EventHub(),f.store,f.clock,mock(FundingService.class),
-            mock(SourceProxyPool.class),trend,mock(SourceReliability.class),mock(DriverSources.class),mock(SupplementalSources.class),archive,review,compression,mock(AiConfiguration.class),cache,new ApiPerformance());
+            mock(SourceProxyPool.class),trend,mock(SourceReliability.class),mock(DriverSources.class),mock(SupplementalSources.class),archive,review,compression,mock(AiConfiguration.class),cache,new ApiPerformance(),mock(com.goldcatcher.information.SourceConfiguration.class));
         for(int i=0;i<2;i++){var data=api.dashboard("XAU_USDT","research");assertThat(data).containsEntry("dashboardView","research");
             assertThat(data).doesNotContainKeys("analysis","review","compression","marketArchive");}
         verify(market,times(2)).snapshot("XAU_USDT");verify(ledger,times(2)).view("XAU_USDT");verify(research,times(2)).summaries();

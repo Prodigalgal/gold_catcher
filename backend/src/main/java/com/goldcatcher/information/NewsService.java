@@ -119,17 +119,19 @@ public class NewsService {
         org.slf4j.LoggerFactory.getLogger(NewsService.class).warn("Compression queue notification failed; scheduled scan will retry",failure);
     }}
     public static boolean mediaSource(String id){return id.startsWith("CNBC_");}
+    public static Set<String> sourceIds(){return FEEDS.keySet();}
     public int pollInterval(String id){return mediaSource(id)?30:polling.interval(id,id.endsWith("_CALENDAR")?3600:Math.max(15,settings.integer("GOLD_NEWS_POLL_SECONDS",30)));}
-    public List<News> news(){return distinctArticles(store.list("news",News.class,1000)).stream().map(this::decorate)
+    public List<News> news(){return distinctArticles(store.list("news",News.class,1000)).stream().filter(n->settings.sourceEnabled(n.source())).map(this::decorate)
         .sorted(Comparator.comparing((News news)->Boolean.TRUE.equals(news.archived()))
             .thenComparing(News::publishedAt,Comparator.nullsLast(Comparator.reverseOrder()))
             .thenComparing(News::receivedAt,Comparator.nullsLast(Comparator.reverseOrder()))).limit(300).toList();}
     public List<CalendarEvent> calendar(){return store.list("calendar",CalendarEvent.class,1000).stream()
+        .filter(event->settings.sourceEnabled(event.source()))
         .filter(event->calendarEnd(event).isAfter(clock.instant().minus(Duration.ofDays(2))))
         .sorted(Comparator.comparing(this::calendarStart)).limit(120).toList();}
     public List<SourceState> sources(){
         var articles=store.list("news",News.class,1000).stream().map(this::decorate).toList();var calendars=calendar();
-        return FEEDS.entrySet().stream().sorted(Map.Entry.comparingByKey()).map(feed->{
+        return FEEDS.entrySet().stream().filter(feed->settings.sourceEnabled(feed.getKey())).sorted(Map.Entry.comparingByKey()).map(feed->{
             var state=states.getOrDefault(feed.getKey(),new SourceState(feed.getKey(),feed.getValue(),settings.enabled("GOLD_NEWS_ENABLED")?"NOT_YET_FETCHED":"DISABLED",pollInterval(feed.getKey()),null,null,null,0));
             var owned=distinctArticles(articles.stream().filter(n->n.source().equals(feed.getKey())).toList());
             boolean calendar=feed.getKey().endsWith("_CALENDAR");
@@ -154,6 +156,7 @@ public class NewsService {
         }).toList();
     }
     public List<News> evidence(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
+        .filter(n->settings.sourceEnabled(n.source()))
         .filter(n->!n.receivedAt().isAfter(cutoff)).toList()).stream().map(n->decorate(n,cutoff))
         .filter(n->verifiedTime(n)&&!n.publishedAt().isAfter(cutoff)&&!Boolean.TRUE.equals(n.archived()))
         .filter(n->n.publishedAt().isAfter(cutoff.minus(Duration.ofDays(7))))
@@ -161,6 +164,7 @@ public class NewsService {
             .thenComparing(News::receivedAt,Comparator.reverseOrder())).toList();}
     private boolean verifiedTime(News news){return news.publishedAt()!=null&&!"FEED_TIMESTAMP".equals(news.publishedPrecision());}
     public List<News> analysisArticles(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
+        .filter(n->settings.sourceEnabled(n.source()))
         .filter(n->!n.receivedAt().isAfter(cutoff)).toList()).stream().map(n->decorate(n,cutoff))
         .filter(n->verifiedTime(n)&&!n.publishedAt().isAfter(cutoff)&&!Boolean.TRUE.equals(n.archived())
             &&n.publishedAt().isAfter(cutoff.minus(Duration.ofDays(90))))
@@ -181,12 +185,17 @@ public class NewsService {
                 return Objects.equals(left.contentHash(),right.contentHash())&&latest.version()==1?earlier:latest;
             });
         }
-        return List.copyOf(known.values());
+        // Separate URLs/feed identities with identical publisher content are one observation.
+        var unique=new LinkedHashMap<String,News>();for(var article:known.values()){
+            String key=mediaSource(article.source())&&article.contentHash()!=null&&article.contentHash().matches("[a-f0-9]{64}")?"CNBC-CONTENT:"+article.contentHash():article.id();
+            unique.merge(key,article,(left,right)->left.receivedAt().isBefore(right.receivedAt())||left.receivedAt().equals(right.receivedAt())&&left.id().compareTo(right.id())<=0?left:right);
+        }return List.copyOf(unique.values());
     }
     private static String canonicalBojUrl(String link){return link.startsWith("http://www.boj.or.jp/")?"https"+link.substring(4):link;}
     public ArticleBody bodyForEvidence(String id,Instant cutoff){return store.find("news",id,News.class).map(n->knownBody(n,cutoff)).orElse(null);}
     /** Compression may prepare future/unverified publications, but research evidence retains its time checks. */
     public List<News> compressionCandidates(Instant cutoff){return distinctArticles(store.list("news",News.class,1000).stream()
+        .filter(n->settings.sourceEnabled(n.source()))
         .filter(n->!n.receivedAt().isAfter(cutoff)).toList()).stream().map(n->decorate(n,cutoff))
         .filter(n->!Boolean.TRUE.equals(n.archived()))
         .filter(n->(n.publishedAt()==null?n.receivedAt():n.publishedAt()).isAfter(cutoff.minus(Duration.ofDays(7))))
@@ -277,6 +286,7 @@ public class NewsService {
         }
     }
     void enrich(News article) {
+        if(!settings.sourceEnabled(article.source()))return;
         var previous=bodies.get(article.id());ArticleBody body;long started=reliability.begin();boolean triggerResearch=false;
         try {
             String link=article.link();var extracted=OfficialArticle.extract(article.source(),articleBytes(article.source(),link),link);
@@ -320,6 +330,7 @@ public class NewsService {
     void collect() {
         if(!settings.enabled("GOLD_NEWS_ENABLED"))return;
         for(var feed:FEEDS.entrySet()) {
+            if(!settings.sourceEnabled(feed.getKey()))continue;
             var previous=states.get(feed.getKey());
             if(previous!=null&&!SourcePolling.due(clock.instant(),previous.lastSuccess(),previous.nextPoll(),previous.error(),previous.intervalSeconds(),pollInterval(feed.getKey())))continue;
             if(!inFlight.add(feed.getKey()))continue;

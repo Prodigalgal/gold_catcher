@@ -21,19 +21,23 @@ public class RemoteHttp {
     public final HttpClient client=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ConcurrentHashMap<InetSocketAddress,HttpClient> proxies=new ConcurrentHashMap<>();
     public HttpResponse<byte[]> send(HttpRequest request,int maximumBytes) throws Exception {
-        return send(client,request,maximumBytes);
+        return send(client,request,maximumBytes,null);
+    }
+    public HttpResponse<byte[]> sendInference(HttpRequest request,int maximumBytes,java.util.function.Consumer<HttpResponse.ResponseInfo> headers) throws Exception {
+        return send(client,request,maximumBytes,headers);
     }
     public HttpResponse<byte[]> send(HttpRequest request,int maximumBytes,InetSocketAddress proxy) throws Exception {
         var connection=proxies.computeIfAbsent(proxy,address->HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
             .proxy(ProxySelector.of(address)).build());
-        return send(connection,request,maximumBytes);
+        return send(connection,request,maximumBytes,null);
     }
     public void forgetProxy(InetSocketAddress proxy) {var previous=proxies.remove(proxy);if(previous!=null)previous.shutdownNow();}
-    private HttpResponse<byte[]> send(HttpClient connection,HttpRequest request,int maximumBytes) throws Exception {
+    private HttpResponse<byte[]> send(HttpClient connection,HttpRequest request,int maximumBytes,java.util.function.Consumer<HttpResponse.ResponseInfo> headers) throws Exception {
         boolean streaming=request.headers().firstValue("Accept").orElse("").contains("text/event-stream");
         var body=new LimitedBody(maximumBytes);
         long started=System.nanoTime(),duration=request.timeout().orElse(Duration.ofSeconds(20)).toNanos();
         var pending=connection.sendAsync(request,info->{
+            if(headers!=null)headers.accept(info);
             String encoding=info.headers().firstValue("content-encoding").orElse("");
             body.stopAtDone=streaming&&info.statusCode()==200&&(encoding.isBlank()||encoding.equalsIgnoreCase("identity"));
             return HttpResponse.BodySubscribers.mapping(body,bytes->decode(bytes,encoding,maximumBytes));
@@ -93,6 +97,7 @@ public class RemoteHttp {
         volatile long firstAt,lastAt;
         volatile boolean stopAtDone;
         private final StringBuilder linePrefix=new StringBuilder();private int lineLength;private boolean doneLine;
+        private final SseTerminal terminal=new SseTerminal();
         LimitedBody(int maximum) { this.maximum=maximum; }
         public CompletionStage<byte[]> getBody() { return completion; }
         public void onSubscribe(Flow.Subscription subscription) { this.subscription=subscription;subscription.request(1); }
@@ -103,7 +108,7 @@ public class RemoteHttp {
                     subscription.cancel();completion.completeExceptionally(new IllegalStateException("RESPONSE_TOO_LARGE"));return;
                 }
                 byte[] chunk=new byte[buffer.remaining()];buffer.get(chunk);bytes.writeBytes(chunk);
-                if(stopAtDone&&endsStream(chunk)){
+                if(stopAtDone&&(terminal.accept(chunk)||endsStream(chunk))){
                     // [DONE] is the SSE terminator; a provider need not close its TCP connection immediately.
                     completion.complete(bytes.toByteArray());subscription.cancel();return;
                 }

@@ -116,7 +116,7 @@ public class AiConfiguration {
         if(update.compression()==null)throw new IllegalArgumentException("INVALID_AI_MODEL_SELECTION");
         var shortRoutes=validateHorizon(update.shortRoutes(),ids);var longRoutes=validateHorizon(update.longRoutes(),ids);
         var compression=validateSelections(List.of(update.compression()),ids).getFirst();
-        var shortPolicy=(update.shortPolicy()==null?current.shortPolicy():update.shortPolicy()).validated();
+        var shortPolicy=(update.shortPolicy()==null?current.shortPolicy():update.shortPolicy()).validated().forHorizon("SHORT");
         var longPolicy=(update.longPolicy()==null?current.longPolicy():update.longPolicy()).validated();
         var next=new Configuration(current.revision()+1,clock.instant(),List.copyOf(providers),shortRoutes,longRoutes,update.compressionEnabled(),compression,shortPolicy,longPolicy);
         // Build before saving so malformed budgets/endpoints cannot partially mutate the configuration.
@@ -137,7 +137,7 @@ public class AiConfiguration {
             if(!models.add(ResearchService.modelIdentity(model)))throw new IllegalArgumentException("DUPLICATE_AI_MODEL");
             if(!vendors.add(s.provider()))throw new IllegalArgumentException("THREE_DISTINCT_AI_PROVIDERS_REQUIRED");
             if(s.inputEstimateLimit()<512||s.inputEstimateLimit()>200000||s.characterLimit()<1024||s.characterLimit()>200000||s.byteLimit()<1024||s.byteLimit()>800000
-                ||s.outputReserve()<128||s.outputReserve()>32000||s.messageLimit()!=2||s.timeoutSeconds()<1||s.timeoutSeconds()>300)throw new IllegalArgumentException("INVALID_AI_CONTEXT_BUDGET");
+                ||s.outputReserve()<128||s.outputReserve()>32000||s.messageLimit()!=2||s.timeoutSeconds()<1||s.timeoutSeconds()>900)throw new IllegalArgumentException("INVALID_AI_CONTEXT_BUDGET");
             Selection fallback=null;
             if(s.fallback()!=null){
                 if(s.fallback().fallback()!=null)throw new IllegalArgumentException("INVALID_AI_FALLBACK");
