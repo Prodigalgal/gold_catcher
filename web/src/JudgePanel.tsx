@@ -20,6 +20,7 @@ export default function JudgePanel({ run, showMessage }: { run: Run; showMessage
       const choice = vote?.selectedCandidateId ?? (message?.state==='SUBMITTED'?message.answer?.output?.selectedCandidateId:undefined);
       return <article className="gc-judge-vote" key={judge.id}>
         <div className="gc-panel-head"><b>{judge.id} · {judge.model.split('/').pop()}</b><span className={`gc-badge ${message?.state === 'FAILED' || message?.state === 'TIMED_OUT' ? 'gc-negative' : ''}`}>{message ? messageStates[message.state] ?? message.state : '尚未裁决'}</span></div>
+        {message?.answer?.routing?.fallbackUsed && <p className="gc-small">兜底：{message.answer.routing.usedModel} · {message.answer.routing.reason}{message.answer.model !== message.answer.routing.usedModel ? ` · 上游模型 ${message.answer.model}` : ''}</p>}
         {choice && <p className="gc-judge-choice">选择：{candidate(choice)}{choice !== 'WAIT' && <a className="gc-text-button" href={`#message-${choice}`} onClick={showMessage}>查看候选 ↗</a>}</p>}
         {message?.error && <p className="gc-live-error">{message.error}</p>}
         {message && <small>第 {message.attempt||1}/{run.retryPolicy?.maxAttempts??1} 次尝试{message.retryAt ? ' · 已安排重试' : ''}</small>}
@@ -27,6 +28,6 @@ export default function JudgePanel({ run, showMessage }: { run: Run; showMessage
       </article>;
     })}
     {panel ? <><div className="gc-factor"><span>{panelStates[panel.state] ?? panel.state}</span><b>{panel.winningVotes}/{panel.validJudges} 票</b></div><p className="gc-small">多数门槛 {panel.majorityThreshold} 票。{panel.state === 'NO_MAJORITY' ? '未达门槛，保持 WAIT。' : `最终选择：${candidate(panel.selectedCandidateId)}。`}原方案数值完整保留，少数意见可在每条裁决中查看。</p><details className="gc-live-audit"><summary>完整投票记录</summary><pre>{JSON.stringify(panel, null, 2)}</pre></details></>
-      : minimum >= 3 && <p className="gc-small">至少 {minimum} 个不同模型的有效裁决齐全后才汇总；三份裁决需至少两票选择同一方案。</p>}
+      : minimum >= 3 && <p className="gc-small">至少 {minimum} 席有效独立裁决齐全后才汇总；三份裁决需至少两票选择同一方案。各席可使用 Arena Max 随机模型兜底。</p>}
   </section>;
 }

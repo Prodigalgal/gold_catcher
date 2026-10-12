@@ -33,20 +33,24 @@ public class Any2ApiClient {
         }
     }
     public record Answer(String model,String analysis,String analysisSource,String raw,JsonNode output,
-        JsonNode usage,String usageSource,String finishReason,Budget budget,long durationMs,List<Attempt> attempts) {
+        JsonNode usage,String usageSource,String finishReason,Budget budget,long durationMs,List<Attempt> attempts,Routing routing) {
         public Answer{if(attempts==null)attempts=List.of();}
+        public Answer(String model,String analysis,String analysisSource,String raw,JsonNode output,JsonNode usage,String usageSource,String finishReason,Budget budget,long durationMs,List<Attempt> attempts){this(model,analysis,analysisSource,raw,output,usage,usageSource,finishReason,budget,durationMs,attempts,null);}
         public Answer(String model,String analysis,String analysisSource,String raw,JsonNode output,JsonNode usage,String usageSource,String finishReason,Budget budget,long durationMs){this(model,analysis,analysisSource,raw,output,usage,usageSource,finishReason,budget,durationMs,List.of());}
     }
+    public record RouteFailure(String provider,String model,String error,Answer partial) {}
+    public record Routing(String requestedProvider,String requestedModel,String usedProvider,String usedModel,boolean fallbackUsed,String reason,List<RouteFailure> failures) {}
     public record Attempt(int number,Instant startedAt,long durationMs,Integer httpStatus,String error) {}
     public record ModelState(String routeId,String provider,String model,boolean credentialConfigured,
-        JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError,Budget lastBudget,Instant lastBudgetAt,String catalogError) {}
+        JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError,Budget lastBudget,Instant lastBudgetAt,String catalogError,Routing lastRouting) {}
     public record RouteCheck(String routeId,String provider,String model,boolean judge,String state,Instant catalogRetrievedAt,Instant retryAt) {}
     public record RouteSelection(String state,List<AiRoute> routes,List<RouteCheck> checks,String basis) {}
     private record Cached(JsonNode catalog,Instant at,String routeKey) {}
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
     private final Map<String,Cached> catalogs=new ConcurrentHashMap<>();
     private static final class ProviderWork {
-        final Semaphore lease=new Semaphore(1,true);
+        final Semaphore lease;
+        ProviderWork(int concurrency){lease=new Semaphore(concurrency,true);}
         final AtomicInteger researchDemand=new AtomicInteger();
         final AtomicReference<Thread> compressor=new AtomicReference<>();
     }
@@ -59,6 +63,7 @@ public class Any2ApiClient {
     private final Map<String,ProviderWork> leases=new ConcurrentHashMap<>();
     private final Map<String,String> inference=new ConcurrentHashMap<>(),failures=new ConcurrentHashMap<>();
     private final Map<String,Budget> budgets=new ConcurrentHashMap<>();private final Map<String,Instant> budgetTimes=new ConcurrentHashMap<>();
+    private final Map<String,Routing> routeAudits=new ConcurrentHashMap<>();
     private record FailureAt(Instant at,String error) {}
     private final Map<String,String> catalogErrors=new ConcurrentHashMap<>();private final Map<String,FailureAt> failedAt=new ConcurrentHashMap<>();
     public Any2ApiClient(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,Clock clock) {
@@ -66,12 +71,12 @@ public class Any2ApiClient {
     }
     public List<ModelState> states() {return settings.allRoutes().stream().map(route->{var cached=currentCatalog(route);
         return new ModelState(route.id(),route.provider(),route.model(),!settings.secret(route).isBlank(),cached==null?null:cached.catalog(),
-            cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()),budgets.get(route.id()),budgetTimes.get(route.id()),catalogErrors.get(route.id()));}).toList();}
+            cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()),budgets.get(route.id()),budgetTimes.get(route.id()),catalogErrors.get(route.id()),routeAudits.get(route.id()));}).toList();}
     public boolean compressionAvailable(AiRoute route){
         var work=leases.get(route.provider());return work==null||work.researchDemand.get()==0&&work.lease.availablePermits()>0;
     }
     private ProviderLease acquireProvider(AiRoute route,boolean compression,Instant deadline)throws InterruptedException {
-        var work=leases.computeIfAbsent(route.provider(),key->new ProviderWork());Thread thread=Thread.currentThread();boolean acquired=false;
+        var work=leases.computeIfAbsent(route.provider(),key->new ProviderWork(key.equals("arena")?Math.max(1,Math.min(3,settings.integer("GOLD_AI_ARENA_CONCURRENCY",3))):1));Thread thread=Thread.currentThread();boolean acquired=false;
         if(!compression){
             synchronized(work){work.researchDemand.incrementAndGet();var compressor=work.compressor.get();if(compressor!=null)compressor.interrupt();}
         }
@@ -117,8 +122,9 @@ public class Any2ApiClient {
     }
     private RouteSelection selection(List<AiRoute> preferred,List<AiRoute> fallback,boolean refresh) {
         var pool=new ArrayList<>(preferred);for(var route:fallback)if(pool.stream().noneMatch(p->p.id().equals(route.id())))pool.add(route);
+        var probePool=new ArrayList<>(pool);for(var route:pool)if(route.fallback()!=null)probePool.add(route.fallback());
         var checks=new ArrayList<RouteCheck>();var ready=new HashSet<String>();
-        for(var route:pool) {
+        for(var route:probePool) {
             String state="READY";Instant retryAt=null;var cached=currentCatalog(route);
             if(!settings.aiProviderEnabled(route))state="PROVIDER_DISABLED";
             else if(route.id().equals("compressor-mimo"))state="RESERVED_FOR_COMPRESSION";
@@ -138,6 +144,7 @@ public class Any2ApiClient {
             checks.add(new RouteCheck(route.id(),route.provider(),route.model(),route.judge(),state,cached==null?null:cached.at(),retryAt));
             if(state.equals("READY")||state.equals("MODEL_RECOVERY_READY"))ready.add(route.id());
         }
+        for(var route:pool)if(route.fallback()!=null&&ready.contains(route.fallback().id()))ready.add(route.id());
         var selected=new ArrayList<AiRoute>();
         int desired=(int)preferred.stream().filter(settings::aiProviderEnabled).filter(r->!r.judge()).count();
         int desiredJudges=Math.max(AdjudicationPanel.MINIMUM_JUDGES,(int)preferred.stream().filter(settings::aiProviderEnabled).filter(AiRoute::judge).count());
@@ -156,16 +163,40 @@ public class Any2ApiClient {
             "CREDENTIALS_CATALOG_AND_FAILURE_COOLDOWN_ONLY; NOT_INFERENCE_OR_CONTEXT_ACCEPTANCE");
     }
     public Answer complete(AiRoute route,String instruction,Object packet) throws Exception {
-        return complete(route,instruction,packet,false,null);
+        return completeWithFallback(route,instruction,packet,false,null,null);
     }
     /** Research owns retries; this overload performs one deadline-bounded HTTP attempt. */
     public Answer complete(AiRoute route,String instruction,Object packet,Instant attemptDeadline) throws Exception {
-        return complete(route,instruction,packet,false,attemptDeadline);
+        return completeWithFallback(route,instruction,packet,false,attemptDeadline,null);
     }
+    public Answer completeFallback(AiRoute route,String instruction,Object packet,Instant attemptDeadline,String reason)throws Exception{return completeWithFallback(route,instruction,packet,false,attemptDeadline,reason);}
     public Answer compress(AiRoute route,String instruction,Object packet) throws Exception {
         if(!route.id().equals("compressor-mimo")||route.judge())throw new IllegalArgumentException("INVALID_COMPRESSION_ROUTE");
-        return complete(route,instruction,packet,true,null);
+        return completeWithFallback(route,instruction,packet,true,null,null);
     }
+    public static int requestSeconds(AiRoute route){return route.timeoutSeconds()+(route.fallback()==null?0:route.fallback().timeoutSeconds());}
+    private Answer completeWithFallback(AiRoute primary,String instruction,Object packet,boolean compression,Instant deadline,String forced)throws Exception{
+        if(primary.fallback()==null)return complete(primary,instruction,packet,compression,deadline);
+        Instant limit=deadline==null?clock.instant().plusSeconds(requestSeconds(primary)+3L):deadline;
+        if(deadline==null){String expiry=mapper.valueToTree(packet).path("evidence").path("decisionExpiresAt").asText();if(!expiry.isBlank()){Instant expires=Instant.parse(expiry);if(expires.isBefore(limit))limit=expires;}}
+        var failed=new ArrayList<RouteFailure>();String reason=forced;long began=System.nanoTime();
+        if(forced==null)try{return routed(complete(primary,instruction,packet,compression,limit),primary,primary,false,null,failed,began);}
+        catch(Exception failure){
+            if(failure instanceof InterruptedException||Thread.currentThread().isInterrupted()||!fallbackAllowed(safeError(failure)))throw failure;
+            reason=safeError(failure);failed.add(new RouteFailure(primary.provider(),primary.model(),reason,failure instanceof InferenceFailure partial?partial.partial():null));
+        }
+        if(!clock.instant().isBefore(limit)){Answer partial=failed.isEmpty()?null:failed.getFirst().partial();if(partial==null)partial=new Answer(primary.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_RECEIVED",null,0);throw new InferenceFailure("REQUEST_TIMEOUT",routed(partial,primary,primary,false,reason,failed,began));}
+        var backup=primary.fallback();
+        try{return routed(complete(backup,instruction,packet,compression,limit),primary,backup,true,reason,failed,began);}
+        catch(Exception failure){
+            if(failure instanceof InterruptedException||Thread.currentThread().isInterrupted())throw failure;
+            Answer partial=failure instanceof InferenceFailure incomplete?incomplete.partial():null;
+            if(partial==null)partial=new Answer(backup.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_RECEIVED",null,0);
+            throw new InferenceFailure(safeError(failure),routed(partial,primary,backup,true,reason,failed,began),failure instanceof InferenceFailure incomplete?incomplete.retryAfterMillis():0);
+        }
+    }
+    private static boolean fallbackAllowed(String error){return ResearchPolicy.retryable(error)||Set.of("MODEL_NOT_AVAILABLE","MODEL_NOT_ADVERTISED","CREDENTIAL_NOT_CONFIGURED","CONTEXT_INSUFFICIENT","AI_PROVIDER_DISABLED").contains(error)||error.matches("(?:INFERENCE|CATALOG)_HTTP_(?:400|401|403|404)(?:_[A-Z0-9_]+)?");}
+    private Answer routed(Answer answer,AiRoute primary,AiRoute used,boolean fallback,String reason,List<RouteFailure> failures,long began){var routing=new Routing(primary.provider(),primary.model(),used.provider(),used.model(),fallback,reason,List.copyOf(failures));routeAudits.put(primary.id(),routing);if(fallback)inference.put(primary.id(),answer.output()!=null?"VALID_OUTPUT_VIA_FALLBACK":"FALLBACK_FAILED");return new Answer(answer.model(),answer.analysis(),answer.analysisSource(),answer.raw(),answer.output(),answer.usage(),answer.usageSource(),answer.finishReason(),answer.budget(),(System.nanoTime()-began)/1_000_000,answer.attempts(),routing);}
     private Answer complete(AiRoute route,String instruction,Object packet,boolean compression,Instant attemptDeadline) throws Exception {
         if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         long started=System.nanoTime();
@@ -298,7 +329,7 @@ public class Any2ApiClient {
         JsonNode body=mapper.readTree(response.body());catalogs.put(route.id(),new Cached(body,clock.instant(),routeKey(route)));catalogErrors.remove(route.id());return body;
     }
     private String routeKey(AiRoute route){return route.provider()+"|"+route.model()+"|"+route.baseUrl()+"|"+settings.genericAiEndpoint(route)+"|"+settings.manualAiCatalog(route)+"|"+NewsService.hash(settings.secret(route));}
-    private Cached currentCatalog(AiRoute route){var cached=catalogs.get(route.id());return cached!=null&&cached.routeKey().equals(routeKey(route))?cached:null;}
+    private Cached currentCatalog(AiRoute route){String key=routeKey(route);var cached=catalogs.get(route.id());return cached!=null&&cached.routeKey().equals(key)?cached:catalogs.values().stream().filter(c->c.routeKey().equals(key)).max(Comparator.comparing(Cached::at)).orElse(null);}
     private String modelKey(AiRoute route){return route.provider()+"/"+ResearchService.modelIdentity(route)+"|"+route.baseUrl()+"|"+NewsService.hash(settings.secret(route));}
     public Budget verify(AiRoute route,String body,JsonNode catalog,boolean outputRequested) {
         var limits=ContextWindow.limits(route,catalog);var size=ContextWindow.size(body,2);

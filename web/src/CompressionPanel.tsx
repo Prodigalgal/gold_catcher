@@ -20,12 +20,14 @@ function CompressionAudit({ id, session }: { id: string; session: Session }) {
       <p><a href={detail.result.link} target="_blank" rel="noreferrer">来源原文 ↗</a> · {formats[detail.result.sourceFormat??'']??detail.result.sourceFormat??'正文'} {detail.result.sourceCharacters} 字符 · 分块 {detail.result.processedChunks}/{detail.result.totalChunks}{detail.result.sourceTruncated && ' · 下载正文曾被截断'}</p>
       <p className="gc-live-hash">来源文本 SHA-256 {detail.result.sourceTextHash??detail.result.bodyHash}</p>
       <p className="gc-small">{detail.result.provider} · {detail.result.model} · {stamp(detail.result.completedAt)}</p>
+      {Boolean(detail.result.usedModels?.length) && <p className="gc-small">实际模型：{detail.result.usedModels?.join('、')} · 兜底请求 {detail.result.fallbackRequests ?? 0} 次</p>}
       <button className="gc-text-button" disabled={busy} onClick={()=>{setBusy(true);void call(`compression/news/${detail.result.newsId}/reprocess`,session,{}).then(()=>{setQueued(true);setError('');}).catch(failure=>setError((failure as Error).message)).finally(()=>setBusy(false));}}>使用当前压缩配置重新生成</button>{queued&&<span role="status">已排队，完成前保留现有摘要</span>}
       {detail.chunks.map(chunk => <details key={chunk.id}>
         <summary>{chunk.input?.task === 'MERGE' ? '合并摘要' : '压缩正文'} · {names[chunk.state] ?? chunk.state} · {chunk.answer?.durationMs ?? '—'}ms</summary>
         {chunk.error && <p>{chunk.error}</p>}
         <p className="gc-live-prose">{chunk.summary}</p>
         {chunk.answer?.budget && <ContextBudget budget={chunk.answer.budget} audit/>}
+        {chunk.answer?.routing?.fallbackUsed && <p className="gc-small">{chunk.answer.routing.requestedModel} → {chunk.answer.routing.usedModel} · {chunk.answer.routing.reason}</p>}
         <details><summary>本次输入</summary><pre>{chunk.input?.text ?? chunk.input?.summaries?.join('\n\n')}</pre></details>
         <details><summary>模型原始输出</summary><pre>{chunk.answer?.raw}</pre></details>
         <small>usage 来源 {chunk.answer?.usageSource ?? '未知'} · finish {chunk.answer?.finishReason ?? '未知'}</small>

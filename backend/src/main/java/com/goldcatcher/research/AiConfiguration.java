@@ -21,7 +21,9 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class AiConfiguration {
     public record Selection(String provider,String model,int inputEstimateLimit,int characterLimit,int byteLimit,
-                            int messageLimit,int outputReserve,int timeoutSeconds) {}
+                            int messageLimit,int outputReserve,int timeoutSeconds,Selection fallback) {
+        public Selection(String provider,String model,int inputEstimateLimit,int characterLimit,int byteLimit,int messageLimit,int outputReserve,int timeoutSeconds){this(provider,model,inputEstimateLimit,characterLimit,byteLimit,messageLimit,outputReserve,timeoutSeconds,null);}
+    }
     public record Horizon(List<Selection> researchers,List<Selection> judges) {}
     public record ProviderInput(String id,String label,String baseUrl,String protocol,String catalogMode,String apiKey,Boolean clearApiKey) {
         public ProviderInput(String id,String label,String baseUrl,String protocol,String catalogMode,String apiKey){this(id,label,baseUrl,protocol,catalogMode,apiKey,false);}
@@ -30,8 +32,9 @@ public class AiConfiguration {
         public Update(long expectedRevision,List<ProviderInput> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression){this(expectedRevision,providers,shortRoutes,longRoutes,compressionEnabled,compression,null,null);}
     }
     public record Provider(String id,String label,String baseUrl,String protocol,String catalogMode,String encryptedApiKey) {}
-    public record Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy) {
-        public Configuration{if(shortPolicy==null)shortPolicy=ResearchPolicy.defaults("SHORT");if(longPolicy==null)longPolicy=ResearchPolicy.defaults("LONG");}
+    public record Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy,Integer schemaVersion) {
+        public Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy){this(revision,updatedAt,providers,shortRoutes,longRoutes,compressionEnabled,compression,shortPolicy,longPolicy,1);}
+        public Configuration{if(shortPolicy==null)shortPolicy=ResearchPolicy.defaults("SHORT");if(longPolicy==null)longPolicy=ResearchPolicy.defaults("LONG");if(schemaVersion==null)schemaVersion=0;}
     }
     public record ModelChoice(String id,String name,Boolean available,Long contextTokens,Long inputTokens,Long outputTokens) {}
     public record ModelCatalog(String provider,String state,Instant retrievedAt,List<ModelChoice> models,String error) {}
@@ -50,12 +53,24 @@ public class AiConfiguration {
                 providers.putIfAbsent(route.provider(),new Provider(route.provider(),route.provider(),route.baseUrl(),"ANY2API","DISCOVERED",null));
                 bootstrapKeys.putIfAbsent(route.provider(),settings.secret(route));
             }
-        var defaults=new Configuration(0,null,List.copyOf(providers.values()),horizon(settings.bootstrapRoutes("SHORT")),horizon(settings.bootstrapRoutes("LONG")),settings.enabled("GOLD_COMPRESSION_ENABLED"),selection(settings.compressionRoute()),ResearchPolicy.from(settings,"SHORT"),ResearchPolicy.from(settings,"LONG"));
+        bootstrapKeys.put("arena",settings.text("ANY2API_ARENA_API_KEY",""));
+        providers.putIfAbsent("arena",arenaProvider());
+        var defaults=new Configuration(0,null,List.copyOf(providers.values()),arenaFallbacks(horizon(settings.bootstrapRoutes("SHORT"))),arenaFallbacks(horizon(settings.bootstrapRoutes("LONG"))),settings.enabled("GOLD_COMPRESSION_ENABLED"),arenaFallback(selection(settings.compressionRoute())),ResearchPolicy.from(settings,"SHORT"),ResearchPolicy.from(settings,"LONG"));
         current=store.find("ai-configuration","current",Configuration.class).orElse(defaults);
+        if(current.schemaVersion()==0){
+            var old=current;var upgradedProviders=new ArrayList<>(old.providers());
+            if(upgradedProviders.stream().noneMatch(p->p.id().equals("arena"))){var arena=arenaProvider();upgradedProviders.add(new Provider(arena.id(),arena.label(),arena.baseUrl(),arena.protocol(),arena.catalogMode(),encryptionConfigured()?encrypt(bootstrapKeys.getOrDefault("arena","")):null));}
+            current=new Configuration(old.revision()+1,clock.instant(),List.copyOf(upgradedProviders),arenaFallbacks(old.shortRoutes()),arenaFallbacks(old.longRoutes()),old.compressionEnabled(),arenaFallback(old.compression()),old.shortPolicy(),old.longPolicy());
+            var upgraded=current;store.transaction(()->{store.save("ai-configuration-history",Long.toString(old.revision()),old);store.save("ai-configuration-history",Long.toString(upgraded.revision()),upgraded);store.save("ai-configuration","current",upgraded);return true;});
+        }
+        if(current.revision()==0)publish(current);
         if(current.revision()>0){publish(current);store.save("ai-configuration","current",current);store.save("ai-configuration-history",Long.toString(current.revision()),current);}
     }
+    private Provider arenaProvider(){return new Provider("arena","Arena Max（随机模型）",settings.text("GOLD_AI_ARENA_BASE_URL",settings.text("GOLD_ANY2API_BASE_URL","https://any2api-direct.mnnu.eu.org").replaceAll("/+$","")+"/arena/v1"),"ANY2API","DISCOVERED",null);}
+    private Horizon arenaFallbacks(Horizon h){return new Horizon(h.researchers().stream().map(this::arenaFallback).toList(),h.judges().stream().map(this::arenaFallback).toList());}
+    private Selection arenaFallback(Selection s){return s.fallback()!=null?s:new Selection(s.provider(),s.model(),s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),new Selection("arena","arena/Max",s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds()));}
     private Horizon horizon(List<AiRoute> routes){return new Horizon(routes.stream().filter(r->!r.judge()).map(this::selection).toList(),routes.stream().filter(AiRoute::judge).map(this::selection).toList());}
-    private Selection selection(AiRoute route){return new Selection(route.provider(),route.model(),route.inputEstimateLimit(),route.characterLimit(),route.byteLimit(),route.messageLimit(),route.outputReserve(),route.timeoutSeconds());}
+    private Selection selection(AiRoute route){return new Selection(route.provider(),route.model(),route.inputEstimateLimit(),route.characterLimit(),route.byteLimit(),route.messageLimit(),route.outputReserve(),route.timeoutSeconds(),route.fallback()==null?null:selection(route.fallback()));}
     public Map<String,Object> view(){return publicView(current);}
     private Map<String,Object> publicView(Configuration config){
         var result=new LinkedHashMap<String,Object>(Map.of("revision",config.revision(),"updatedAt",config.updatedAt()==null?"":config.updatedAt(),"shortRoutes",config.shortRoutes(),"longRoutes",config.longRoutes(),"compressionEnabled",config.compressionEnabled(),"compression",config.compression(),
@@ -71,15 +86,17 @@ public class AiConfiguration {
     /** Restore the encrypted revision used by a run, without publishing it as the current UI configuration. */
     public List<AiRoute> routesForRun(tools.jackson.databind.JsonNode frozen,String horizon){
         long revision=frozen.path("revision").asLong(-1);
-        if(revision==0&&current.revision()==0)return settings.bootstrapRoutes(horizon);
+        if(revision==0&&current.revision()==0)return buildRoutes(current).get(horizon);
         var configuration=current.revision()==revision?current:store.find("ai-configuration-history",Long.toString(revision),Configuration.class)
             .orElseThrow(()->new IllegalStateException("FROZEN_AI_CONFIGURATION_UNAVAILABLE"));
         var routes=buildRoutes(configuration).get(horizon);
         for(var archived:frozen.path("routes"))if(routes.stream().noneMatch(route->route.id().equals(archived.path("id").asText())&&route.model().equals(archived.path("model").asText())
-            &&route.judge()==archived.path("judge").asBoolean()&&route.timeoutSeconds()==archived.path("timeoutSeconds").asInt()))
+            &&route.judge()==archived.path("judge").asBoolean()&&route.timeoutSeconds()==archived.path("timeoutSeconds").asInt()
+            &&fallbackMatches(route,archived.path("fallback"))))
             throw new IllegalStateException("FROZEN_AI_CONFIGURATION_MISMATCH");
         return routes;
     }
+    private boolean fallbackMatches(AiRoute route,tools.jackson.databind.JsonNode frozen){return route.fallback()==null?frozen.isMissingNode()||frozen.isNull():frozen.path("provider").asText().equals(route.fallback().provider())&&frozen.path("model").asText().equals(route.fallback().model())&&frozen.path("timeoutSeconds").asInt()==route.fallback().timeoutSeconds();}
     public synchronized Map<String,Object> save(Update update){
         if(update==null||update.expectedRevision()!=current.revision())throw new IllegalArgumentException("AI_CONFIG_REVISION_CONFLICT");
         if(!encryptionConfigured())throw new IllegalArgumentException("AI_CONFIG_ENCRYPTION_KEY_MISSING");
@@ -121,13 +138,19 @@ public class AiConfiguration {
             if(!vendors.add(s.provider()))throw new IllegalArgumentException("THREE_DISTINCT_AI_PROVIDERS_REQUIRED");
             if(s.inputEstimateLimit()<512||s.inputEstimateLimit()>200000||s.characterLimit()<1024||s.characterLimit()>200000||s.byteLimit()<1024||s.byteLimit()>800000
                 ||s.outputReserve()<128||s.outputReserve()>32000||s.messageLimit()!=2||s.timeoutSeconds()<1||s.timeoutSeconds()>300)throw new IllegalArgumentException("INVALID_AI_CONTEXT_BUDGET");
-            result.add(new Selection(s.provider(),model,s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds()));
+            Selection fallback=null;
+            if(s.fallback()!=null){
+                if(s.fallback().fallback()!=null)throw new IllegalArgumentException("INVALID_AI_FALLBACK");
+                fallback=validateSelections(List.of(s.fallback()),providers).getFirst();
+                if(s.provider().equals(fallback.provider())&&model.equals(fallback.model()))throw new IllegalArgumentException("INVALID_AI_FALLBACK");
+            }
+            result.add(new Selection(s.provider(),model,s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),fallback));
         }
         return List.copyOf(result);
     }
     private void publish(Configuration config){settings.applyResearchRoutes(config.revision(),buildRoutes(config),buildCompression(config),config.compressionEnabled());}
     private AiRoute buildCompression(Configuration config){var s=config.compression();var p=config.providers().stream().filter(provider->provider.id().equals(s.provider())).findFirst().orElseThrow();
-        var route=new AiRoute("compressor-mimo",p.id(),s.model(),p.baseUrl(),"UI_CONFIGURED",s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),false);
+        var route=new AiRoute("compressor-mimo",p.id(),s.model(),p.baseUrl(),"UI_CONFIGURED",s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),false,buildFallback(config,s,"compressor-mimo-fallback",false));
         settings.registerConfiguredRoute(route,credential(p),p.protocol(),p.catalogMode());return route;}
     private Map<String,List<AiRoute>> buildRoutes(Configuration config){
         var routes=new LinkedHashMap<String,List<AiRoute>>();
@@ -136,12 +159,18 @@ public class AiConfiguration {
             for(boolean judge:List.of(false,true))for(var s:judge?profile.judges():profile.researchers()){
                 var p=config.providers().stream().filter(provider->provider.id().equals(s.provider())).findFirst().orElseThrow(()->new IllegalArgumentException("AI_PROVIDER_NOT_CONFIGURED"));
                 var route=new AiRoute("cfg-"+config.revision()+"-"+horizon.toLowerCase(Locale.ROOT)+"-"+(judge?"judge":"research")+"-"+group.size(),p.id(),s.model(),p.baseUrl(),"UI_CONFIGURED",
-                    s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),judge);
+                    s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),judge,buildFallback(config,s,"cfg-"+config.revision()+"-"+horizon.toLowerCase(Locale.ROOT)+"-fallback-"+group.size(),judge));
                 settings.registerConfiguredRoute(route,credential(p),p.protocol(),p.catalogMode());group.add(route);
             }
             routes.put(horizon,List.copyOf(group));
         }
         return Map.copyOf(routes);
+    }
+    private AiRoute buildFallback(Configuration config,Selection selection,String id,boolean judge){
+        var s=selection.fallback();if(s==null)return null;
+        var p=config.providers().stream().filter(provider->provider.id().equals(s.provider())).findFirst().orElseThrow(()->new IllegalArgumentException("AI_PROVIDER_NOT_CONFIGURED"));
+        var route=new AiRoute(id,p.id(),s.model(),p.baseUrl(),"UI_CONFIGURED",s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),judge);
+        settings.registerConfiguredRoute(route,credential(p),p.protocol(),p.catalogMode());return route;
     }
     private String credential(Provider provider){return provider.encryptedApiKey()==null?bootstrapKeys.getOrDefault(provider.id(),""):decrypt(provider.encryptedApiKey());}
     private boolean encryptionConfigured(){try{return Base64.getDecoder().decode(settings.text("GOLD_AI_CONFIG_ENCRYPTION_KEY","")).length==32;}catch(IllegalArgumentException invalid){return false;}}
