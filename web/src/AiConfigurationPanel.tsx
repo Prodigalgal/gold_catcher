@@ -22,6 +22,7 @@ const errors: Record<string, string> = {
   THREE_DISTINCT_AI_PROVIDERS_REQUIRED: '同一阶段需要三个不同提供商。',
   INVALID_OR_DISABLED_AI_PROVIDER: '提供商标识重复、格式无效或已禁用。',
   INVALID_AI_MODEL_SELECTION: '请填写模型并选择已配置的提供商。',
+  INVALID_AI_FALLBACK: '兜底模型只能配置一层，且需要与主模型不同。',
   INVALID_AI_CONTEXT_BUDGET: '上下文预算或超时不在允许范围内。',
   INVALID_AI_ENDPOINT: 'API 端点需要完整 HTTP(S) 地址，不能包含密钥、查询参数或片段。',
   INVALID_AI_CREDENTIAL: 'API Key 格式无效。',
@@ -70,12 +71,14 @@ function ModelSlot({
   catalogs,
   name,
   update,
+  allowFallback = true,
 }: {
   selection: AiSelection;
   providers: AiProvider[];
   catalogs: AiConfiguration['catalogs'];
   name: string;
   update: (s: AiSelection) => void;
+  allowFallback?: boolean;
 }) {
   const catalog = catalogs.find((item) => item.provider === selection.provider);
   const native = selection.model.startsWith(selection.provider + '/')
@@ -184,6 +187,14 @@ function ModelSlot({
           </p>
         )}
       </details>
+      {allowFallback && <details className="gc-ai-slot-fallback" style={{ marginTop: '10px' }}>
+        <summary style={{ cursor: 'pointer', fontSize: '12px' }}>失败兜底 · {selection.fallback?.model || '未启用'}</summary>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '10px 0' }}>
+          <input aria-label={`${name}启用兜底`} type="checkbox" style={{ width: 'auto' }} checked={Boolean(selection.fallback)} onChange={event => update({ ...selection, fallback: event.target.checked ? { ...selection, provider: 'arena', model: 'arena/Max', fallback: null } : null })} />启用兜底模型
+        </label>
+        {selection.fallback && <ModelSlot selection={selection.fallback} providers={providers} catalogs={catalogs} name={`${name}兜底`} allowFallback={false} update={fallback => update({ ...selection, fallback })} />}
+        <p className="gc-small">主模型不可用、超时或输出校验失败时切换。Arena Max 使用随机模型路由；每席独立请求，仍受阶段与整轮期限约束。</p>
+      </details>}
     </div>
   );
 }

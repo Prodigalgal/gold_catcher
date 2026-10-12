@@ -8,6 +8,22 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class AiConfigurationTest {
+    @Test void upgradeAddsArenaForEverySeatOnceAndPreservesTheOldFrozenRevision(){
+        f.environment.setProperty("ANY2API_ARENA_API_KEY","arena-bootstrap-secret");service.save(update(0,"prior-secret"));
+        var old=(tools.jackson.databind.node.ObjectNode)f.mapper.valueToTree(f.store.find("ai-configuration","current",AiConfiguration.Configuration.class).orElseThrow());old.remove("schemaVersion");
+        for(String horizon:List.of("shortRoutes","longRoutes"))for(String role:List.of("researchers","judges"))for(var slot:old.path(horizon).path(role))((tools.jackson.databind.node.ObjectNode)slot).remove("fallback");
+        ((tools.jackson.databind.node.ObjectNode)old.path("compression")).remove("fallback");
+        var frozen=f.mapper.valueToTree(Map.of("revision",1,"routes",f.settings.routes("SHORT").stream().map(ResearchService::snapshotRoute).toList()));
+        for(var route:frozen.path("routes"))((tools.jackson.databind.node.ObjectNode)route).remove("fallback");
+        f.store.save("ai-configuration","current",old);
+        var restarted=new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote);restarted.recover();
+        assertThat(restarted.view()).containsEntry("revision",2L);
+        assertThat(f.settings.allRoutes().stream().filter(r->r.fallback()!=null).toList()).hasSize(13);
+        for(var route:f.settings.routes("SHORT"))assertThat(route.fallback().model()).isEqualTo("arena/Max");
+        assertThat(restarted.routesForRun(frozen,"SHORT")).allSatisfy(route->{assertThat(route.fallback()).isNull();assertThat(f.settings.secret(route)).isNotBlank();});
+        new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote).recover();assertThat(f.settings.researchRouteSnapshot("SHORT").revision()).isEqualTo(2);
+        assertThat(f.mapper.writeValueAsString(restarted.view())).doesNotContain("arena-bootstrap-secret","prior-secret");
+    }
     final TestSupport f=new TestSupport();final EventHub events=mock(EventHub.class);final RemoteHttp remote=mock(RemoteHttp.class);
     AiConfiguration service;
     AiConfigurationTest()throws Exception{

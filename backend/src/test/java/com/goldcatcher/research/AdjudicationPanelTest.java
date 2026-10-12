@@ -7,6 +7,17 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 
 class AdjudicationPanelTest {
+    @Test void independentJudgesUsingArenaRandomFallbackStillNeedThreeDistinctSeats(){
+        var votes=new ArrayList<ResearchService.Message>();for(String id:List.of("J1","J2","J3")){
+            var vote=vote(id,"WAIT");var a=vote.answer();var actor=actors.stream().filter(item->item.id().equals(id)).findFirst().orElseThrow();
+            var answer=new Any2ApiClient.Answer("arena/Max",a.analysis(),a.analysisSource(),a.raw(),a.output(),a.usage(),a.usageSource(),a.finishReason(),a.budget(),a.durationMs(),a.attempts(),new Any2ApiClient.Routing(actor.provider(),actor.model(),"arena","arena/Max",true,"MODEL_NOT_AVAILABLE",List.of()));
+            votes.add(new ResearchService.Message(vote.id(),id,vote.role(),3,"SUBMITTED",vote.startedAt(),vote.completedAt(),null,List.of(),answer));
+        }
+        var result=AdjudicationPanel.aggregate(f.mapper,List.of(proposal("a","100")),votes,actors);
+        assertThat(result.audit().path("validJudges").asInt()).isEqualTo(3);assertThat(result.audit().path("fallbackJudges").asInt()).isEqualTo(3);assertThat(result.audit().path("distinctReportedJudgeModels").asInt()).isEqualTo(1);
+        assertThat(result.verdict().path("plan").path("action").asText()).isEqualTo("WAIT");
+        assertThatThrownBy(()->AdjudicationPanel.aggregate(f.mapper,List.of(),List.of(votes.getFirst(),votes.getFirst(),votes.getLast()),actors)).hasMessage("DUPLICATE_JUDGE_MODEL");
+    }
     final TestSupport f=new TestSupport();
     final List<ResearchService.Actor> actors=List.of(actor("A","mimo","pro"),actor("B","deepseek","default"),actor("C","grok","grok-3"),
         actor("J1","mimo","pro"),actor("J2","deepseek","default"),actor("J3","grok","grok-3"));

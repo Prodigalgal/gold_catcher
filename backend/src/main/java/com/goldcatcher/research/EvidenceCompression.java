@@ -34,7 +34,10 @@ public class EvidenceCompression {
     public record Result(String id,String cacheKey,String newsId,String title,String source,String link,String bodyHash,
         String provider,String model,String method,String state,Instant startedAt,Instant completedAt,Instant nextAttempt,
         int sourceCharacters,int processedChunks,int totalChunks,boolean sourceTruncated,String excerpt,
-        List<Segment> selectedSpans,List<String> chunkIds,String error,String sourceTextHash,String sourceFormat,String generation) {}
+        List<Segment> selectedSpans,List<String> chunkIds,String error,String sourceTextHash,String sourceFormat,String generation,List<String> usedModels,Long fallbackRequests) {
+        public Result{usedModels=usedModels==null?List.of():List.copyOf(usedModels);if(fallbackRequests==null)fallbackRequests=0L;}
+        public Result(String id,String cacheKey,String newsId,String title,String source,String link,String bodyHash,String provider,String model,String method,String state,Instant startedAt,Instant completedAt,Instant nextAttempt,int sourceCharacters,int processedChunks,int totalChunks,boolean sourceTruncated,String excerpt,List<Segment> selectedSpans,List<String> chunkIds,String error,String sourceTextHash,String sourceFormat,String generation){this(id,cacheKey,newsId,title,source,link,bodyHash,provider,model,method,state,startedAt,completedAt,nextAttempt,sourceCharacters,processedChunks,totalChunks,sourceTruncated,excerpt,selectedSpans,chunkIds,error,sourceTextHash,sourceFormat,generation,List.of(),0L);}
+    }
     public record Checkpoint(int consecutiveFailures,Instant retryAt,String lastError,Instant lastSuccessfulAt) {}
     public record Job(String cacheKey,String newsId,String generation,Instant requestedAt) {}
     private record Candidate(NewsService.News article,NewsService.SourceText text,Result cached,Job job) {}
@@ -172,7 +175,7 @@ public class EvidenceCompression {
     private Result process(NewsService.News article,NewsService.SourceText text,RuntimeSettings.AiRoute route,Job job){
         String cacheKey=key(article,text,route),generation=job==null?"initial":job.generation();
         String chunkKey=cacheKey+"|"+generation;var chunks=chunks(text.text(),chunkKey,route);
-        var summaries=new ArrayList<String>();var chunkIds=new ArrayList<String>();int processed=0,attempted=0;String error=null;Instant started=clock.instant();
+        var summaries=new ArrayList<String>();var chunkIds=new ArrayList<String>();var answers=new ArrayList<Any2ApiClient.Answer>();int processed=0,attempted=0;String error=null;Instant started=clock.instant();
         int maximum=Math.max(1,Math.min(8,settings.integer("GOLD_COMPRESSION_CHUNKS_PER_PASS",2)));long passDeadline=nanos.getAsLong()+TimeUnit.SECONDS.toNanos(Math.max(100,requestSeconds(route)+25));
         for(var chunk:chunks){
             var saved=store.find("compression-chunk",chunk.id(),ChunkResult.class).orElse(null);
@@ -181,7 +184,7 @@ public class EvidenceCompression {
                 attempted++;saved=request(chunk.id(),route,Map.of("protocol",ResearchProtocol.COMPRESSION_VERSION,"task","SUMMARIZE","title",article.title(),"chunkIndex",chunk.index(),"totalChunks",chunks.size(),
                     "sourceFormat",text.format()==null?"TEXT":text.format(),"evidence",Map.of("decisionExpiresAt",expires(route,passDeadline)),"text",chunk.text()));
             }
-            chunkIds.add(saved.id());if(!saved.state().equals("VERIFIED")){error=saved.error();break;}processed++;summaries.add(saved.summary());
+            chunkIds.add(saved.id());if(saved.answer()!=null)answers.add(saved.answer());if(!saved.state().equals("VERIFIED")){error=saved.error();break;}processed++;summaries.add(saved.summary());
         }
         String excerpt=summaries.isEmpty()?"":summaries.getFirst();boolean merged=summaries.size()<2;
         if(processed==chunks.size()&&summaries.size()>1){
@@ -196,7 +199,7 @@ public class EvidenceCompression {
                         saved=request(mergeKey,route,Map.of("protocol",ResearchProtocol.COMPRESSION_VERSION,"task","MERGE","title",article.title(),"summaries",group,
                             "evidence",Map.of("decisionExpiresAt",expires(route,passDeadline))));
                     }
-                    chunkIds.add(saved.id());if(!saved.state().equals("VERIFIED")){error=saved.error();break merge;}next.add(saved.summary());
+                    chunkIds.add(saved.id());if(saved.answer()!=null)answers.add(saved.answer());if(!saved.state().equals("VERIFIED")){error=saved.error();break merge;}next.add(saved.summary());
                 }
                 level=next;if(level.size()==1){excerpt=level.getFirst();merged=true;}
             }
@@ -206,7 +209,7 @@ public class EvidenceCompression {
         if(excerpt.isBlank()&&!deferred)state="FAILED";Instant completed=clock.instant();
         String id=NewsService.hash(cacheKey+"|"+generation+"|"+processed+"|"+excerpt+"|"+state+"|"+completed);
         var result=new Result(id,cacheKey,article.id(),article.title(),article.source(),article.link(),text.bodyHash(),route.provider(),route.model(),VERSION,state,started,completed,
-            completed.plusSeconds(deferred?10:state.equals("FAILED")||error!=null?300:30),text.text().codePointCount(0,text.text().length()),processed,chunks.size(),text.truncated(),excerpt,List.of(),List.copyOf(chunkIds),error,text.hash(),text.format(),generation);
+            completed.plusSeconds(deferred?10:state.equals("FAILED")||error!=null?300:30),text.text().codePointCount(0,text.text().length()),processed,chunks.size(),text.truncated(),excerpt,List.of(),List.copyOf(chunkIds),error,text.hash(),text.format(),generation,answers.stream().map(Any2ApiClient.Answer::model).distinct().toList(),answers.stream().filter(a->a.routing()!=null&&a.routing().fallbackUsed()).count());
         store.transaction(()->{store.save("compression-result",id,result);store.save("compression-cache",cacheKey,result);
             if(result.state().equals("EXTRACTED"))store.save("compression-ready",cacheKey,result);return result;});events.changed();return result;
     }
@@ -214,7 +217,7 @@ public class EvidenceCompression {
         return !Thread.currentThread().isInterrupted()&&ai.compressionAvailable(route)
             &&deadline-nanos.getAsLong()>=TimeUnit.SECONDS.toNanos(requestSeconds(route));
     }
-    private static int requestSeconds(RuntimeSettings.AiRoute route){return Math.max(1,Math.min(300,route.timeoutSeconds()));}
+    private static int requestSeconds(RuntimeSettings.AiRoute route){return Math.max(1,Any2ApiClient.requestSeconds(route));}
     private static boolean deferred(String error){return "REQUEST_CANCELED".equals(error)||"PROVIDER_REQUEST_STILL_RUNNING".equals(error);}
     private Instant expires(RuntimeSettings.AiRoute route,long passDeadline){
         long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(passDeadline-nanos.getAsLong()));

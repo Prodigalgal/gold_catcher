@@ -71,6 +71,8 @@ const states: Record<string, string> = {
   CURRENT: '最近采集成功',
   FETCH_FAILED: '采集失败',
   VALID_OUTPUT: '返回格式校验通过',
+  VALID_OUTPUT_VIA_FALLBACK: '兜底输出校验通过',
+  FALLBACK_FAILED: '兜底请求失败',
   NOT_CALLED: '尚未推理',
   VALUED: '已按盘口估值',
   STALE_OR_WAITING_QUOTE: '等待有效报价',
@@ -417,8 +419,10 @@ function AnswerContent({
     <>
       <div className="gc-live-message-heading">
         <h3>{output?.title ?? '原始返回已归档'}</h3>
-        <span>{actor?.model}</span>
+        <span>{answer.routing?.fallbackUsed ? `${answer.routing.usedModel} · 兜底` : actor?.model}</span>
       </div>
+      {answer.routing?.fallbackUsed && <p className="gc-small">{answer.routing.requestedModel} → {answer.routing.usedModel} · {answer.routing.reason}{answer.model !== answer.routing.usedModel ? ` · 上游模型 ${answer.model}` : ''}</p>}
+      {Boolean(answer.routing?.failures.length) && <details className="gc-live-audit"><summary>主模型失败记录</summary>{answer.routing?.failures.map((failure,index) => <div key={index}><p>{failure.model} · {failure.error}</p>{failure.partial?.raw && <pre>{failure.partial.raw}</pre>}</div>)}</details>}
       {answer.analysis && (
         <details
           className="gc-live-analysis"

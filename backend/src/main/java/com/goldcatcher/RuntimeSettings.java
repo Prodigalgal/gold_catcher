@@ -66,6 +66,7 @@ public class RuntimeSettings {
         var defaults=researchRoutes.horizons().isEmpty()?routes():List.<AiRoute>of();
         for(var group:List.of(defaults,routes("SHORT"),routes("LONG"),fallbackRoutes(),List.of(compressionRoute())))for(var route:group){var previous=routes.putIfAbsent(route.id(),route);
             if(previous!=null&&(!previous.provider().equals(route.provider())||!previous.model().equals(route.model())))throw new IllegalArgumentException("CONFLICTING_ROUTE_ID");}
+        for(var route:List.copyOf(routes.values()))if(route.fallback()!=null)routes.putIfAbsent(route.fallback().id(),route.fallback());
         return List.copyOf(routes.values());}
     private List<AiRoute> parseRoutes(String json){
         return parseRoutes(json,false);
@@ -87,8 +88,13 @@ public class RuntimeSettings {
     }
     public record AiRoute(String id, String provider, String model, String baseUrl, String apiKeyEnv,
         int inputEstimateLimit, int characterLimit, int byteLimit, int messageLimit,
-        int outputReserve, int timeoutSeconds, boolean judge) {
+        int outputReserve, int timeoutSeconds, boolean judge, AiRoute fallback) {
+        public AiRoute(String id,String provider,String model,String baseUrl,String apiKeyEnv,int inputEstimateLimit,int characterLimit,int byteLimit,int messageLimit,int outputReserve,int timeoutSeconds,boolean judge){
+            this(id,provider,model,baseUrl,apiKeyEnv,inputEstimateLimit,characterLimit,byteLimit,messageLimit,outputReserve,timeoutSeconds,judge,null);
+        }
         public AiRoute {
+            if(fallback!=null&&(fallback.fallback()!=null||fallback.judge()!=judge||fallback.provider().equals(provider)&&fallback.model().equals(model)))
+                throw new IllegalArgumentException("INVALID_AI_FALLBACK");
             if (id == null || id.isBlank() || provider == null || provider.isBlank() || model == null || model.isBlank() || baseUrl == null || apiKeyEnv == null || apiKeyEnv.isBlank()
                 || inputEstimateLimit < 512 || characterLimit < 1024 || byteLimit < 1024 || messageLimit < 2
                 || outputReserve < 128 || timeoutSeconds < 1 || timeoutSeconds > 300)

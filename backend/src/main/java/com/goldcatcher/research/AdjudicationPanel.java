@@ -50,7 +50,10 @@ public final class AdjudicationPanel {
             String key=selected.equals("WAIT")?"WAIT":signature(mapper,byId.get(selected).answer().output().path("plan"));
             String canonical=key.equals("WAIT")?"WAIT":candidates.get(key).id();
             tallies.merge(key,1,Integer::sum);
-            var vote=votes.addObject();vote.put("actorId",judge.actorId());vote.put("model",actorModels.get(judge.actorId()));
+            var vote=votes.addObject();vote.put("actorId",judge.actorId());vote.put("requestedModel",actorModels.get(judge.actorId()));
+            vote.put("model",judge.answer().routing()==null?actorModels.get(judge.actorId()):judge.answer().model());
+            vote.put("fallbackUsed",judge.answer().routing()!=null&&judge.answer().routing().fallbackUsed());
+            if(judge.answer().routing()!=null)vote.put("routedModel",judge.answer().routing().usedModel());
             vote.put("participatedInResearch",actors.stream().filter(actor->!actor.id().startsWith("J"))
                 .anyMatch(actor->ResearchService.modelIdentity(actor.model()).equals(ResearchService.modelIdentity(actorModels.get(judge.actorId())))));
             vote.put("messageId",judge.id());vote.put("selectedCandidateId",selected);vote.put("canonicalCandidateId",canonical);
@@ -62,10 +65,10 @@ public final class AdjudicationPanel {
         String chosenId=winner==null||winner.equals("WAIT")?"WAIT":candidates.get(winner).id();
         var verdict=mapper.createObjectNode();verdict.put("title",chosenId.equals("WAIT")?"多模型裁决：等待":"多模型裁决：采纳候选方案");
         String explanation=winner==null?"裁决未形成多数，保持等待。":winner.equals("WAIT")?"多数裁决选择等待。":"多数裁决选择同一候选方案，执行原方案数值。";
-        verdict.put("analysisSummary",explanation);verdict.put("output",judges.size()+" 个不同模型独立裁决；多数门槛 "+majority+" 票。"+explanation+" 各方理由与少数意见保留在裁决记录。");
+        verdict.put("analysisSummary",explanation);verdict.put("output",judges.size()+" 席独立裁决；多数门槛 "+majority+" 票。"+explanation+" 实际模型路由、兜底与各方理由保留在裁决记录。");
         verdict.put("shortDirection",direction(orderedJudges,"shortDirection",majority));
         verdict.put("longDirection",direction(orderedJudges,"longDirection",majority));
-        verdict.put("selectedCandidateId",chosenId);verdict.put("changes","Java 按独立模型票数汇总；价格、数量、杠杆及退出条件不做平均或拼接。");
+        verdict.put("selectedCandidateId",chosenId);verdict.put("changes","Java 按独立席位票数汇总；价格、数量、杠杆及退出条件不做平均或拼接。");
         var citations=verdict.putArray("quotedMessages");orderedJudges.forEach(judge->citations.add(judge.id()));
         var evidenceIds=new TreeSet<String>();orderedJudges.forEach(judge->judge.answer().output().path("evidenceRefs").forEach(id->evidenceIds.add(id.asText())));
         var evidence=verdict.putArray("evidenceRefs");evidenceIds.stream().limit(14).forEach(evidence::add);
@@ -73,6 +76,9 @@ public final class AdjudicationPanel {
         if(chosenId.equals("WAIT"))verdict.putObject("plan").put("action","WAIT").put("riskAssessment",explanation).put("invalidate","取得新的冻结证据后重新研究。");
         else verdict.set("plan",candidates.get(winner).answer().output().path("plan").deepCopy());
         var audit=mapper.createObjectNode();audit.put("method","BLIND_INDEPENDENT_CANDIDATE_VOTE");audit.put("state",state);
+        audit.put("fallbackJudges",judges.stream().filter(j->j.answer().routing()!=null&&j.answer().routing().fallbackUsed()).count());
+        audit.put("distinctReportedJudgeModels",judges.stream().map(j->j.answer().routing()==null?actorModels.get(j.actorId()):j.answer().model()).distinct().count());
+        audit.put("modelIdentityBasis","CONFIGURED_PRIMARY_MODELS_AND_REPORTED_RESPONSE_LABELS; ARENA_MAX_RANDOM_BACKENDS_MAY_NOT_BE_REPORTED");
         audit.put("minimumJudges",MINIMUM_JUDGES);audit.put("validJudges",judges.size());audit.put("majorityThreshold",majority);
         audit.put("winningVotes",winner==null?0:tallies.get(winner));audit.put("selectedCandidateId",chosenId);audit.set("votes",votes);
         var groups=audit.putArray("candidateGroups");
