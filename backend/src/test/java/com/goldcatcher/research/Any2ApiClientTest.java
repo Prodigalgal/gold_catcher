@@ -5,6 +5,34 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
+    @Test void fastMinmaxRequestRecognizesTheLiveToggleMappingCatalog()throws Exception{
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);f.environment.setProperty("TEST","test-credential");
+        var route=new AiRoute("minmax-fast","minmax","minmax/MiniMax-M3.1-Flash-Preview","https://localhost/minmax/v1","TEST",10000,16000,30000,2,1000,120,false);
+        var catalog=response(200,"{\"available\":true,\"capabilities\":{\"parameter_adaptation\":{\"reasoning\":{\"mode\":\"toggle_mapping\"}},\"provider_options\":{\"enable_team\":\"boolean\"}}}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
+        String output="protocol=GOLD_RESEARCH_V1\ntitle=等待\noutput=观察\nshortDirection=UNKNOWN\nlongDirection=UNKNOWN\nplan.action=WAIT\n";
+        when(remote.sendInference(any(),eq(8_000_000),any())).thenAnswer(call->{
+            var request=(java.net.http.HttpRequest)call.getArgument(0);var bytes=new java.io.ByteArrayOutputStream();
+            request.bodyPublisher().orElseThrow().subscribe(new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>(){
+                public void onSubscribe(java.util.concurrent.Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(java.nio.ByteBuffer b){var chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}public void onError(Throwable t){throw new AssertionError(t);}public void onComplete(){}});
+            var body=f.mapper.readTree(bytes.toByteArray());assertThat(body.path("reasoning_effort").asText()).isEqualTo("none");
+            assertThat(body.path("provider_options").path("minmax").path("enable_team").asBoolean(true)).isFalse();
+            return response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));
+        });
+        var answer=new Any2ApiClient(f.settings,remote,f.mapper,f.clock).complete(route,"观察",java.util.Map.of("protocol",ResearchProtocol.VERSION,"lane","fast_lane","phase",0),f.clock.instant().plusSeconds(120));
+        assertThat(answer.output().path("plan").path("action").asText()).isEqualTo("WAIT");
+    }
+    @Test void completedHttp200BusyTextIsAFailedRetryableAttempt()throws Exception{
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var route=new AiRoute("busy","custom","custom/model","https://localhost/v1","UI",10000,16000,30000,2,1000,120,false);
+        f.settings.registerConfiguredRoute(route,"test-credential","OPENAI_COMPATIBLE","MANUAL");String busy="服务器繁忙，请稍后再试";
+        var busyResponse=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",busy))))));when(remote.sendInference(any(),eq(8_000_000),any())).thenReturn(busyResponse);
+        assertThatThrownBy(()->new Any2ApiClient(f.settings,remote,f.mapper,f.clock).complete(route,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(120)))
+            .isInstanceOfSatisfying(Any2ApiClient.InferenceFailure.class,error->{
+                assertThat(error.getMessage()).isEqualTo("UPSTREAM_BUSY_TEXT");assertThat(error.partial().raw()).isEqualTo(busy);
+                assertThat(error.partial().attempts().getFirst().httpStatus()).isEqualTo(200);
+                assertThat(error.partial().attempts().getFirst().outcome()).isEqualTo("FAILED");
+                assertThat(ResearchPolicy.retryable(error.getMessage())).isTrue();assertThat(ResearchPolicy.repairable(error.getMessage())).isFalse();
+            });
+    }
     @Test void fastRequestDisablesDeepThinkingAndCannotSpendTimeOnArenaFallback()throws Exception{
         var f=new TestSupport();var remote=mock(RemoteHttp.class);f.environment.setProperty("TEST","test-credential");
         var backup=new AiRoute("backup","arena","arena/Max","https://localhost/arena/v1","TEST",10000,16000,30000,2,1000,600,false);

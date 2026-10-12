@@ -54,7 +54,7 @@ public class DriverSources {
         result.add(check("TREASURY_REAL","美国财政部实际收益率",treasuryUrl(true,clock.instant().atZone(ZoneId.of("America/New_York")).getYear()),3600));
         result.add(check("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS")));
         result.add(check("TE_EXPECTATIONS","Trading Economics 调查预期与自有预测",TradingEconomicsCalendar.URL,pollInterval("TE_EXPECTATIONS")));
-        for(String symbol:CnbcRates.SYMBOLS)result.add(check("CNBC_"+symbol,CnbcRates.label(symbol),CnbcRates.url(symbol),60));return List.copyOf(result);}
+        for(String symbol:CnbcRates.SYMBOLS)result.add(check("CNBC_"+symbol,CnbcRates.label(symbol),CnbcRates.url(symbol),60));return result.stream().filter(row->settings.sourceEnabled(row.id())).toList();}
     private SourceCheck check(String id,String label,String url,int interval){var c=checks.getOrDefault(id,new SourceCheck(id,label,url,"NOT_YET_FETCHED",interval,null,null,null,0));
         return enabled()?c:new SourceCheck(id,label,url,"DISABLED",interval,c.lastSuccess(),c.nextPoll(),c.error(),c.records());}
     @Scheduled(fixedDelay=1000,initialDelay=4200) void collect(){
@@ -69,6 +69,7 @@ public class DriverSources {
     }
     @FunctionalInterface private interface Fetch{int run() throws Exception;}
     private void schedule(String id,String label,String url,int interval,Fetch action){
+        if(!settings.sourceEnabled(id))return;
         var previous=checks.get(id);if(previous!=null&&!SourcePolling.due(clock.instant(),previous.lastSuccess(),previous.nextPoll(),previous.error(),previous.intervalSeconds(),interval)||!working.add(id))return;
         Thread.ofVirtual().name("gold-driver-"+id).start(()->{long started=reliability.begin();try{
             int records=action.run();saveCheck(new SourceCheck(id,label,url,"CURRENT",interval,clock.instant(),clock.instant().plusSeconds(interval),null,records));
@@ -186,12 +187,14 @@ public class DriverSources {
     }
     public List<Expectation> expectations(Instant cutoff){
         var selected=new LinkedHashMap<String,Expectation>();store.list("gold-expectation-version",Expectation.class,2000).stream()
+            .filter(e->!e.source().equals("TRADING_ECONOMICS_SURVEY_CONSENSUS")||settings.sourceEnabled("TE_EXPECTATIONS"))
             .filter(e->!e.receivedAt().isAfter(cutoff)&&e.scheduledAt().isAfter(cutoff.minusSeconds(172800))&&e.scheduledAt().isBefore(cutoff.plusSeconds(604800)))
             .sorted(Comparator.comparing(Expectation::receivedAt).thenComparingInt(Expectation::version).reversed()).forEach(e->selected.putIfAbsent(e.id(),e));
         return selected.values().stream().sorted(Comparator.comparing(Expectation::scheduledAt)).toList();
     }
     public Expectation preRelease(String indicator,String unit,Instant publishedAt){
         var rows=store.list("gold-expectation-version",Expectation.class,2000).stream().filter(e->e.indicator().equals(indicator)&&e.unit().equals(unit)&&e.forecast()!=null
+            &&(!e.source().equals("TRADING_ECONOMICS_SURVEY_CONSENSUS")||settings.sourceEnabled("TE_EXPECTATIONS"))
             &&e.receivedAt().isBefore(publishedAt)&&Math.abs(Duration.between(e.scheduledAt(),publishedAt).toSeconds())<=300).toList();
         var survey=rows.stream().filter(e->e.source().equals("TRADING_ECONOMICS_SURVEY_CONSENSUS")).toList();var selected=survey.isEmpty()?rows:survey;
         if(selected.stream().map(Expectation::id).distinct().count()!=1)return null;
