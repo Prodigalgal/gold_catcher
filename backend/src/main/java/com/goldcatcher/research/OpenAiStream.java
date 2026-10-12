@@ -15,6 +15,8 @@ final class OpenAiStream {
     private String finish,model;
     private boolean done;
     private int frames;
+    private long outputBytes;
+    private static final long MAX_OUTPUT_BYTES=1_000_000;
     private OpenAiStream(ObjectMapper mapper){this.mapper=mapper;envelope=mapper.createObjectNode();}
 
     static JsonNode decode(ObjectMapper mapper,byte[] bytes){
@@ -24,7 +26,14 @@ final class OpenAiStream {
         catch(CharacterCodingException bad){throw new IllegalStateException("INVALID_STREAM_UTF8");}
         String trimmed=text.stripLeading();
         // Some compatible providers ignore stream:true and return one complete JSON envelope.
-        if(trimmed.startsWith("{"))return mapper.readTree(text);
+        if(trimmed.startsWith("{")){
+            var envelope=mapper.readTree(text);var guard=new OpenAiStream(mapper);
+            for(var choice:envelope.path("choices")){
+                var message=choice.path("message");guard.account(message.path("content").asText());guard.account(message.path("reasoning_content").asText());
+                for(var call:message.path("tool_calls")){guard.account(call.path("function").path("name").asText());guard.account(call.path("function").path("arguments").asText());}
+            }
+            return envelope;
+        }
         var stream=new OpenAiStream(mapper);var data=new StringBuilder();
         for(String line:text.replace("\r\n","\n").replace('\r','\n').split("\n",-1)){
             if(line.isEmpty()){if(!data.isEmpty()){stream.frame(data.toString());data.setLength(0);}continue;}
@@ -76,7 +85,8 @@ final class OpenAiStream {
                 var function=(ObjectNode)target.path("function");
                 for(String key:List.of("name","arguments"))if(part.path("function").hasNonNull(key)){
                     if(!part.path("function").path(key).isTextual())throw new IllegalStateException("INVALID_STREAM_TOOL_CALL");
-                    function.put(key,function.path(key).asText()+part.path("function").path(key).asText());
+                    String fragment=part.path("function").path(key).asText();account(fragment);
+                    function.put(key,function.path(key).asText()+fragment);
                 }
             }
         }
@@ -85,7 +95,8 @@ final class OpenAiStream {
             if(next.isBlank()||finish!=null&&!finish.equals(next))throw new IllegalStateException("INVALID_STREAM_SEQUENCE");finish=next;
         }
     }
-    private static void append(StringBuilder target,JsonNode delta,String key){
-        if(delta.hasNonNull(key)){if(!delta.path(key).isTextual())throw new IllegalStateException("INVALID_STREAM_DELTA");target.append(delta.path(key).asText());}
+    private void account(String fragment){outputBytes+=fragment.getBytes(StandardCharsets.UTF_8).length;if(outputBytes>MAX_OUTPUT_BYTES)throw new IllegalStateException("STREAM_OUTPUT_LIMIT");}
+    private void append(StringBuilder target,JsonNode delta,String key){
+        if(delta.hasNonNull(key)){if(!delta.path(key).isTextual())throw new IllegalStateException("INVALID_STREAM_DELTA");String fragment=delta.path(key).asText();account(fragment);target.append(fragment);}
     }
 }
