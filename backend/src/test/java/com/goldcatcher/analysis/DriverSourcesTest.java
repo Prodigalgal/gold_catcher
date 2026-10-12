@@ -10,6 +10,20 @@ import java.time.*;
 import org.junit.jupiter.api.Test;
 
 class DriverSourcesTest {
+    @Test void disabledPublicConsensusIsExcludedWhileHistoryAndForexFactoryRemainAvailable(){
+        var f=new TestSupport();var selection=new com.goldcatcher.information.SourceConfiguration(f.settings,f.store,f.clock,new EventHub());
+        var sources=new DriverSources(f.settings,f.store,mock(RemoteHttp.class),f.mapper,mock(GateCfdFeed.class),new EventHub(),f.clock);
+        Instant release=f.clock.instant().plusSeconds(60);
+        var ff=new Expectation("ff","CPI_MOM","CPI m/m",release,"PROVIDER_DECLARED","High","PERCENT_MOM_SA","0.2","0.1","FOREX_FACTORY_PROVIDER","https://nfs.faireconomy.media/ff_calendar_thisweek.json",f.clock.instant(),1,"ff-hash","0.2%","0.1%");
+        var te=new Expectation("te","CPI_MOM","Inflation Rate MoM",release,"PROVIDER_DECLARED","High","PERCENT_MOM_SA","0.3","0.1","TRADING_ECONOMICS_SURVEY_CONSENSUS",TradingEconomicsCalendar.URL,f.clock.instant(),1,"te-hash","0.3%","0.1%");
+        f.store.save("gold-expectation-version","ff",ff);f.store.save("gold-expectation-version","te",te);
+        assertThat(sources.sources()).extracting(SourceCheck::id).doesNotContain("TE_EXPECTATIONS");
+        assertThat(sources.expectations(f.clock.instant())).containsExactly(ff);assertThat(sources.preRelease("CPI_MOM","PERCENT_MOM_SA",release)).isEqualTo(ff);
+        assertThat(f.store.find("gold-expectation-version","te",Expectation.class)).contains(te);
+        selection.save(new com.goldcatcher.information.SourceConfiguration.Draft(1,java.util.List.of()));
+        assertThat(sources.sources()).extracting(SourceCheck::id).contains("TE_EXPECTATIONS");
+        assertThat(sources.expectations(f.clock.instant())).containsExactlyInAnyOrder(ff,te);assertThat(sources.preRelease("CPI_MOM","PERCENT_MOM_SA",release)).isEqualTo(te);
+    }
     @Test void rateLimitedHistoryWaitsForRetryAfterWhileFreshQuotesContinue() throws Exception {
         var f=new TestSupport();var gate=mock(GateCfdFeed.class);
         @SuppressWarnings("unchecked") java.net.http.HttpResponse<byte[]> limited=mock(java.net.http.HttpResponse.class);

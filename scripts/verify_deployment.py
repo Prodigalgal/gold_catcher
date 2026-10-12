@@ -185,7 +185,7 @@ for product in ('XAU_USDT', 'GATE:XAUUSD'):
         csv_text = response.read(1_000_000).decode('utf-8-sig')
     assert csv_text.startswith('id,symbol,quantityUnit,') and 'costIncomplete,evidenceLevel' in csv_text
 source_selection = snapshot('/api/sources/configuration')
-expected_sources = {item['id'] for item in source_selection['channels'] if item['enabled']}
+expected_sources = {item['id'] for item in source_selection['channels'] if item['enabled'] and item['family'] == 'NEWS'}
 assert expected_sources.isdisjoint(source_selection['configuration']['disabledSourceIds'])
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -215,6 +215,7 @@ for item in boj_xlsx[:12]:
     if body.get('format') != 'XLSX_SOURCE_CELLS' or body.get('error') or not body.get('text'):
         raise SystemExit('BoJ source-cell XLSX body acceptance failed')
 driver_sources = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'TREASURY_NOMINAL', 'TREASURY_REAL', 'FF_EXPECTATIONS', 'TE_EXPECTATIONS', 'CNBC_US2Y', 'CNBC_US10Y', 'CNBC_US10YTIPS'}
+driver_sources -= set(source_selection['configuration']['disabledSourceIds'])
 driver_ids = {'GATE_USIDX', 'GATE_EURUSD', 'GATE_USDJPY', 'US_NOMINAL_2Y', 'US_NOMINAL_10Y', 'US_REAL_10Y', 'US_INTRADAY_NOMINAL_2Y', 'US_INTRADAY_NOMINAL_10Y', 'US_INTRADAY_REAL_10Y'}
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
@@ -299,4 +300,4 @@ client.logout()
 page = read("https://gold.mnnu.eu.org/", {})
 if f'content="{commit}"' not in page:
     raise SystemExit("web source commit mismatch")
-print("Argo digests, PoW session, Gate feeds, separate CFD ledger, source selection and compression role, sequenced depth/archive, exports, configured news sources, ten driver/calendar channels, eight supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified. Live research completion is a separate acceptance.")
+print("Argo digests, PoW session, Gate feeds, separate CFD ledger, source selection and compression role, sequenced depth/archive, exports, configured news and driver/calendar sources, eight supplemental channels, dated metrics, sample units, coverage inventory, four horizons and API/web release verified. Live research completion is a separate acceptance.")

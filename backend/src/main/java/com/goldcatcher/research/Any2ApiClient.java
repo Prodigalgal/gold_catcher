@@ -243,7 +243,7 @@ public class Any2ApiClient {
             if(route.provider().equals("minmax")&&capabilities.path("provider_options").has("enable_team"))sourceOptions.put("enable_team",false);
             if(capabilities.path("provider_options").has("web_search_status")&&capabilities.path("parameter_adaptation").path("search").path("mode").asText().equals("mapped"))sourceOptions.put("web_search_status","disabled");
             if((compression||lane.equals("fast_lane"))&&capabilities.path("provider_options").has("thinking"))sourceOptions.put("thinking",false);
-            if(lane.equals("fast_lane")&&route.provider().equals("minmax")&&capabilities.path("parameter_adaptation").path("reasoning").path("mode").asText().equals("mapped"))request.put("reasoning_effort","none");
+            if(lane.equals("fast_lane")&&route.provider().equals("minmax")&&Set.of("mapped","toggle_mapping").contains(capabilities.path("parameter_adaptation").path("reasoning").path("mode").asText()))request.put("reasoning_effort","none");
             if(!sourceOptions.isEmpty())request.put("provider_options",Map.of(route.provider(),sourceOptions));
             if(structuredTool&&!unified) {
                 int format=instruction.indexOf("格式："),wait=instruction.indexOf("WAIT 时");
@@ -305,6 +305,7 @@ public class Any2ApiClient {
             String usageSource=envelope.path("usage_source").asText(envelope.path("usage").path("usage_source").asText("UNKNOWN"));
             captured=new Answer(envelope.path("model").asText(route.model()),reasoning,reasoning.isBlank()?"NOT_PROVIDED":"PROVIDER_FIELD",raw,null,envelope.path("usage"),usageSource,
                 finish,budget,(System.nanoTime()-started)/1_000_000);
+            if(upstreamBusy(raw))throw new IllegalStateException("UPSTREAM_BUSY_TEXT");
             if(structuredTool&&!submitted)throw new IllegalStateException("REQUIRED_SUBMISSION_MISSING");
             if(!submitted&&!finish.equals("stop"))throw new IllegalStateException("OUTPUT_NOT_COMPLETE_"+finish.toUpperCase(Locale.ROOT));
             Integer phase=packetJson.has("phase")?packetJson.path("phase").asInt():null;
@@ -381,6 +382,8 @@ public class Any2ApiClient {
             ContextWindow.utilization(size,limits),prepared.original().bytes(),prepared.original().characters(),prepared.changes(),originalHash,sentHash,
             prepared.packet()==null?"NOT_APPLICABLE":mapper.readTree(body).path("messages").path(1).path("content").asText().startsWith("---")?"YAML_FLOW_LOSSLESS":"JSON");
     }
+    private static boolean upstreamBusy(String raw){if(raw==null||raw.length()>120)return false;String plain=raw.strip().replaceAll("[\\p{Punct}，。！\\s]","").toLowerCase(Locale.ROOT);
+        return Set.of("服务器繁忙请稍后再试","服务器繁忙请稍后重试","服务繁忙请稍后再试","serverbusypleasetryagainlater","theserverisbusypleasetryagainlater").contains(plain);}
     JsonNode parseOutput(String raw) {
         String content=ResearchProtocol.unfence(raw);
         JsonNode output=mapper.readTree(content);

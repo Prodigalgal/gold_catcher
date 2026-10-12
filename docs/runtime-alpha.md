@@ -4,6 +4,10 @@
 
 ## Gate 行情与 Java 计算
 
+当前0.6.1运行规则：短线每15分钟、长线每小时，独立fast/deep槽池；短线轮次强制120秒截止，长线使用独立较长预算。短线MiniMax识别Any2API目录的`toggle_mapping`并发送`reasoning_effort=none`；HTTP200中的纯忙碌提示归类`UPSTREAM_BUSY_TEXT`，保留原始响应和两个请求ID，按剩余预算重试，不能计入有效裁决。
+
+精选目录默认启用33/38个通道。EIA三个适配、BOJ目录和TE公开预期默认停用；TE在生产主节点直连及既有代理均返回202拦截页，保留可选适配和历史档案，覆盖页面继续显示预期缺口。信息集合每条消息展示压缩摘要、模型、状态、时间及原文入口；查看缓存不会触发模型调用。
+
 XAU_USDT 使用官方 futures.book_ticker 与 futures.tickers。REST contracts、risk_limit_tiers、candlesticks 与 funding_rate 每60秒读取。原生数量为合约张数；Java 将数量、盘口尺寸和成交量乘以 quanto_multiplier，统一到基础 XAU 数量。价格乘基础数量才是 USDT 名义金额与盈亏。规则步长使用整张合约；杠杆采用显式标注的整数选择假设。
 
 XAUUSD CFD 使用官方 /tradfi/symbols、/{symbol}/tickers、/{symbol}/klines。报价每秒查询，K 线每60秒；同一 K 线通道请求间隔至少300ms，报价失败指数退避。接口 timestamp 是服务器响应时间，没有最后一次 tick 时间、标记价格或盘口数量，不能伪造深度。后台使用 Gate v4 HMAC-SHA512，只调用允许的 detail 和 commissions 两个 GET；响应选择合约及费用字段，密钥和签名不进入文档、日志或前端。
