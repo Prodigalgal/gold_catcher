@@ -42,7 +42,7 @@ const budgetFields = [
   ['byteLimit', 'UTF-8 字节上限', 1024, 800000],
   ['inputEstimateLimit', '输入估算上限', 512, 200000],
   ['outputReserve', '输出预留', 128, 32000],
-  ['timeoutSeconds', '请求总超时（秒，流式）', 1, 300],
+  ['timeoutSeconds', '请求总超时（秒，流式）', 1, 900],
 ] as const;
 
 const retryFields = [
@@ -59,10 +59,10 @@ const defaultPolicy = (longTerm: boolean): ResearchPolicy => ({
   maxAttempts: 3,
   retryBaseSeconds: 2,
   retryMaxSeconds: 30,
-  stageSeconds: longTerm ? 900 : 600,
-  judgeSeconds: longTerm ? 900 : 600,
-  workflowSeconds: longTerm ? 3600 : 2400,
-  decisionSeconds: longTerm ? 900 : 240,
+  stageSeconds: longTerm ? 900 : 30,
+  judgeSeconds: longTerm ? 900 : 30,
+  workflowSeconds: longTerm ? 3600 : 120,
+  decisionSeconds: longTerm ? 3600 : 240,
 });
 
 function ModelSlot({
@@ -350,7 +350,7 @@ export default function AiConfigurationPanel({
             void save();
           }}
         >
-          <p className="gc-small">研究、裁决和压缩均使用流式接收。请求总超时包括思考与输出；建议长思考模型配置为 300 秒。重试与整轮预算分别计算，交易证据有效期仍独立限制。</p>
+          <p className="gc-small">短线与长线独立执行。短线整轮最多 120 秒，每阶段最多 30 秒，关闭支持的深度思考并跳过慢兜底；超时或缺票时放弃信号。长线请求可配置到 900 秒，仍受阶段、整轮预算和证据有效期限制。</p>
           {/* Sub-tab Switcher for 4 Config Areas */}
           <div className="gc-segment" role="tablist" style={{ marginBottom: '16px' }}>
             <button

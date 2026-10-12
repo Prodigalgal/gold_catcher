@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { call } from './api';
-import type { CalendarEvent, Dashboard, Direction, News, NewsDetail, Source } from './api';
+import type { CalendarEvent, Dashboard, Direction, News, NewsCompression, NewsDetail, Source } from './api';
 import Pagination from './Pagination';
 import AnalysisPanel from './AnalysisPanel';
 import SourceReliabilityPanel from './SourceReliabilityPanel';
+import './NewsCompression.css';
 
 const names: Record<string, string> = {
   CNBC_TOP: 'CNBC 财经头条',
@@ -72,6 +73,16 @@ const directions: Record<Direction, string> = {
 };
 
 const text = (state?: string | null) => (state ? states[state] ?? state : '尚未核验');
+const compressionStates: Record<string,string> = { EXTRACTED: '摘要已生成', RUNNING: '正在压缩', QUEUED: '等待压缩', PENDING: '等待压缩', PARTIAL: '部分文本已压缩', FAILED: '压缩失败，等待重试', DEFERRED: '等待模型空闲', DISABLED: '压缩已停用', STALE_CONFIGURATION: '已有摘要，当前模型待处理', NO_SOURCE_TEXT: '等待可用来源文本', UNSUITABLE_SOURCE: '此格式暂不压缩', NEWS_NOT_FOUND: '消息已不可用' };
+function SummaryPreview({ item }: { item?: NewsCompression }) {
+  return <div className="gc-news-summary">
+    <div className="gc-news-summary-label"><b>压缩摘要</b><span>{item ? compressionStates[item.state] ?? item.state : '读取摘要中…'}</span></div>
+    {item?.excerpt && <p className="gc-live-prose">{item.excerpt}</p>}
+    {item && <small>{item.provider} · {item.model}{item.completedAt && ` · ${time(item.completedAt)}`}{!item.configurationCurrent && ' · 较早压缩配置'}</small>}
+    {item?.error && <small className="gc-live-error">{item.error}{item.ready && ' · 保留上次完整摘要'}</small>}
+    {item?.state === 'PARTIAL' && <small>分块 {item.processedChunks}/{item.totalChunks}，完整摘要完成后供下游使用</small>}
+  </div>;
+}
 const time = (value?: string | null) =>
   value
     ? new Date(value).toLocaleString('zh-CN', {
@@ -254,10 +265,14 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
   const [selected, setSelected] = useState<News | null>(null);
   const [detail, setDetail] = useState<NewsDetail | null>(null);
   const [detailError, setDetailError] = useState('');
+  const [summaries, setSummaries] = useState<Record<string,NewsCompression>>({});
+  const [summaryError, setSummaryError] = useState('');
+  const [contentTab, setContentTab] = useState<'summary' | 'original'>('summary');
 
   useEffect(() => {
     setDetail(null);
     setDetailError('');
+    setContentTab('summary');
     if (!selected) return;
     const controller = new AbortController();
     call<NewsDetail>(`news/${encodeURIComponent(selected.id)}`, {}, undefined, controller.signal)
@@ -311,6 +326,19 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
     (newsPage - 1) * newsPageSize,
     newsPage * newsPageSize
   );
+  const summaryIds = Array.from(new Set([...pagedNews.map(article => article.id), ...(selected ? [selected.id] : [])])).join(',');
+  useEffect(() => {
+    if (!summaryIds || mainTab !== 'news') return;
+    const controller = new AbortController();
+    let fetching = false;
+    const load = async () => { if (fetching || controller.signal.aborted) return; fetching = true;
+      try { const rows=await call<NewsCompression[]>(`compression/news?ids=${encodeURIComponent(summaryIds)}`, {}, undefined, controller.signal); if (!controller.signal.aborted) { setSummaries(Object.fromEntries(rows.map(row => [row.newsId,row]))); setSummaryError(''); } }
+      catch (error) { if (!controller.signal.aborted) setSummaryError(error instanceof Error ? error.message : '摘要读取失败'); }
+      finally { fetching = false; }
+    };
+    void load(); const timer=window.setInterval(()=>void load(),5000);
+    return () => { window.clearInterval(timer); controller.abort(); };
+  }, [summaryIds, mainTab]);
 
   const pagedCalendar = data.calendar.slice(
     (calPage - 1) * calPageSize,
@@ -476,6 +504,7 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
           </div>
 
           {/* News List */}
+          {summaryError && <p className="gc-live-error" role="alert">压缩摘要读取失败：{summaryError}</p>}
           <div className="gc-live-news-list">
             {pagedNews.map((article) => {
               const judgment = impact(article);
@@ -506,6 +535,7 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
                     {judgment?.reason ??
                       (article.excerpt || '标题已取得，正文正在核验。')}
                   </p>
+                  <SummaryPreview item={summaries[article.id]} />
                   <div className="gc-news-quality-tags">
                     <span>{text(article.contentState)}</span>
                     <span>{text(article.freshness)}</span>
@@ -696,7 +726,11 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
               )}
             </div>
 
-            {detailError ? (
+            <div className="gc-segment" style={{ margin: '16px 0' }}>
+              <button type="button" aria-pressed={contentTab === 'summary'} onClick={() => setContentTab('summary')}>压缩后结果</button>
+              <button type="button" aria-pressed={contentTab === 'original'} onClick={() => setContentTab('original')}>来源原文</button>
+            </div>
+            {contentTab === 'summary' ? <SummaryPreview item={summaries[current.id]} /> : detailError ? (
               <p className="gc-live-error">{detailError}</p>
             ) : !detail ? (
               <p className="gc-live-prose">正在读取保存的正文…</p>

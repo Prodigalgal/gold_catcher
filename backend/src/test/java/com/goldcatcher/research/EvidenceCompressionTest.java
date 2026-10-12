@@ -21,6 +21,16 @@ class EvidenceCompressionTest {
     }
     NewsService.ArticleBody body(String text){return new NewsService.ArticleBody("a","FED_PRESS",article.link(),text,"AVAILABLE",NewsService.hash(text),f.clock.instant().minusSeconds(2),f.clock.instant(),f.clock.instant().plusSeconds(100),1,null,false,"feed",null,"HTML");}
     @AfterEach void stop(){compression.stop();}
+    @Test void newsSummariesAreReadOnlyAndCannotShowAnOlderBodyAsCurrent() throws Exception {
+        answer("{\"summary\":\"利率为4.00%，此数据不构成预测。\"}");var result=compression.process(article,body);
+        var view=compression.summaries(List.of("a","a","missing"));assertThat(view).hasSize(2);
+        assertThat(view.getFirst().ready()).isTrue();assertThat(view.getFirst().excerpt()).isEqualTo(result.excerpt());assertThat(view.getFirst().resultId()).isEqualTo(result.id());
+        assertThat(view.getLast().state()).isEqualTo("NEWS_NOT_FOUND");verify(ai,times(1)).compress(any(),anyString(),any());
+        body=body("The rate is now 5.00 percent.");var revised=compression.summaries(List.of("a")).getFirst();
+        assertThat(revised.ready()).isFalse();assertThat(revised.excerpt()).isEmpty();assertThat(revised.state()).isEqualTo("PENDING");
+        assertThatThrownBy(()->compression.summaries(Collections.nCopies(51,"a"))).hasMessage("INVALID_NEWS_IDS");
+        assertThatThrownBy(()->compression.summaries(List.of("../../invalid"))).hasMessage("INVALID_NEWS_IDS");
+    }
     void answer(String output) throws Exception {when(ai.compressionAvailable(any())).thenReturn(true);doAnswer(call->{var parsed=f.mapper.readTree(output);return new Any2ApiClient.Answer("mimo/mimo-v2.6-pro","","NOT_PROVIDED",parsed.toString(),parsed,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);}).when(ai).compress(any(),anyString(),any());}
     @Test void directSummaryOnlyReplacesExcerptWithoutAddingReferencesAndHonorsFrozenVersion() throws Exception {
         answer("{\"summary\":\"利率为4.00%，此数据不构成预测；历史值可能修订。\"}");Instant before=f.clock.instant().minusMillis(1);var result=compression.process(article,body);

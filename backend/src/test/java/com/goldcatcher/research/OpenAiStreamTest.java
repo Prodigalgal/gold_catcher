@@ -7,6 +7,13 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class OpenAiStreamTest {
+    @Test void namedErrorEventsCannotBeAcceptedAsSuccessfulOutput(){
+        assertThatThrownBy(()->decode("event: error\ndata: {\"code\":\"MODEL_TIMEOUT\",\"message\":\"failed\"}\n\n"))
+            .hasMessage("INFERENCE_STREAM_ERROR_MODEL_TIMEOUT");
+        assertThatThrownBy(()->decode("event: error\ndata: failed\n\n")).hasMessage("INFERENCE_STREAM_ERROR");
+        assertThatThrownBy(()->decode(frame(Map.of("content","valid-looking"),"stop")+"event: error\ndata: {}\n\ndata: [DONE]\n\n"))
+            .hasMessage("INFERENCE_STREAM_ERROR");
+    }
     private final TestSupport f=new TestSupport();
     private String frame(Object delta,String finish){var choice=new LinkedHashMap<String,Object>();choice.put("index",0);choice.put("delta",delta);choice.put("finish_reason",finish);
         return "data: "+f.mapper.writeValueAsString(Map.of("model","test","choices",List.of(choice)))+"\n\n";}

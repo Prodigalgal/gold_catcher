@@ -14,6 +14,7 @@ import AiConfigurationPanel from './AiConfigurationPanel';
 import ReviewPanel from './ReviewPanel';
 import MarketChart from './MarketChart';
 import { SchedulerPanel, MarketJournal } from './RuntimeControls';
+import SourceControls from './SourceControls';
 import ApiPerformancePanel from './ApiPerformancePanel';
 
 const pages = [
@@ -471,10 +472,11 @@ function AnswerContent({
           工程审计 · 耗时 {answer.durationMs}ms · 上下文预算 ↗
         </summary>
         <div style={{ marginTop: '8px' }}>
-          <ContextBudget budget={answer.budget} audit />
+          {answer.budget && <ContextBudget budget={answer.budget} audit />}
           <p className="gc-small">
-            输出限制：{answer.budget.outputEnforcement} · usage 来源：{answer.usageSource} · 结束状态：{answer.finishReason}
+            输出限制：{answer.budget?.outputEnforcement ?? '未发送或未取得预算'} · usage 来源：{answer.usageSource} · 结束状态：{answer.finishReason}
           </p>
+          {!!answer.attempts?.length && <div className="gc-live-table-wrap"><table className="gc-live-table"><thead><tr><th>请求结果</th><th>客户端流水号 / 上游 Request ID</th></tr></thead><tbody>{answer.attempts.map((attempt, index) => <tr key={`${attempt.clientTraceId ?? attempt.number}-${index}`}><td>HTTP {attempt.httpStatus ?? '未握手'} · {attempt.outcome === 'VALIDATED_OUTPUT' ? '输出校验通过' : attempt.error ?? attempt.outcome ?? '历史记录'}<br/>{attempt.durationMs}ms</td><td style={{ overflowWrap: 'anywhere' }}>{attempt.clientTraceId ?? '历史未记录'}<br/>{attempt.requestId ?? '上游 ID 未取得'}</td></tr>)}</tbody></table></div>}
           <pre>{answer.raw}</pre>
         </div>
       </details>
@@ -498,11 +500,12 @@ function Research({
   const [phase, setPhase] = useState(-1);
   const [error, setError] = useState('');
 
-  const selectedRevision = selectedId && selectedId === data.research?.id
-    ? JSON.stringify([data.research.status, data.research.stage, data.research.messages.map(message => [message.id, message.state, message.completedAt, message.attempt])])
+  const selectedLive = Object.values(data.researchByHorizon ?? {}).find(item => item?.id === selectedId) ?? (data.research?.id === selectedId ? data.research : null);
+  const selectedRevision = selectedId && selectedLive
+    ? JSON.stringify([selectedLive.status, selectedLive.stage, selectedLive.messages.map(message => [message.id, message.state, message.completedAt, message.attempt])])
     : '';
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedId || selectedId.startsWith('lane:')) {
       setArchived(null);
       return;
     }
@@ -515,7 +518,7 @@ function Research({
     return () => controller.abort();
   }, [selectedId, selectedRevision, session]);
 
-  const run = selectedId ? archived : data.research;
+  const run = selectedId.startsWith('lane:') ? data.researchByHorizon?.[selectedId.slice(5) as 'SHORT' | 'LONG'] ?? null : selectedId ? archived : data.research;
   const messages = run?.messages.filter((message) => phase < 0 || message.stage === phase) ?? [];
   const judgeCount = run?.actors.filter((actor) => actor.id.startsWith('J')).length ?? 0;
   const researchCount = (run?.actors.length ?? 0) - judgeCount;
@@ -533,7 +536,9 @@ function Research({
           }}
           style={{ minWidth: '220px' }}
         >
-          <option value="">最新进行中的研究</option>
+            <option value="">最新研究记录</option>
+          <option value="lane:SHORT">最新短线 · fast_lane</option>
+          <option value="lane:LONG">最新长线 · deep_lane</option>
           {data.researchHistory.map((item) => (
             <option value={item.id} key={item.id}>
               {time(item.startedAt)} · {label(item.status)} · {item.horizon}
@@ -642,7 +647,7 @@ function Research({
                       <b>{message.role}</b>
                       <span>{phases[message.stage]}</span>
                       <time>{time(message.completedAt ?? message.startedAt)}</time>
-                      <Badge tone={message.state === 'FAILED' ? 'gc-negative' : 'gc-positive'}>
+                      <Badge tone={['FAILED', 'TIMED_OUT'].includes(message.state) || message.error ? 'gc-negative' : message.state === 'SUBMITTED' ? 'gc-positive' : ''}>
                         {label(message.state)}
                       </Badge>
                     </div>
@@ -848,6 +853,7 @@ function Operations({
         <div style={{ display: 'grid', gap: '20px' }}>
           <AiConfigurationPanel session={session} changed={changed} />
           <CompressionPanel data={data.compression} session={session} />
+          <SourceControls session={session} changed={changed} />
         </div>
       )}
 

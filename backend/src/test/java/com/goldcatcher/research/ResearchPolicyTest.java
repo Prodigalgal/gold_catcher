@@ -26,7 +26,7 @@ class ResearchPolicyTest {
         assertThat(Any2ApiClient.retryAfterMillis("invalid",now)).isZero();
     }
     @Test void validationKeepsExecutionAndTradingWindowsSeparateAndRejectsUnboundedRetries(){
-        assertThat(ResearchPolicy.defaults("SHORT").validated().workflowSeconds()).isGreaterThan(ResearchPolicy.defaults("SHORT").decisionSeconds());
+        assertThat(ResearchPolicy.defaults("SHORT").validated().workflowSeconds()).isLessThan(ResearchPolicy.defaults("SHORT").decisionSeconds());
         assertThatThrownBy(()->new ResearchPolicy(100,2,30,360,360,1440,240).validated()).hasMessage("INVALID_RESEARCH_RETRY_POLICY");
     }
 }

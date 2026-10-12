@@ -40,7 +40,11 @@ public class Any2ApiClient {
     }
     public record RouteFailure(String provider,String model,String error,Answer partial) {}
     public record Routing(String requestedProvider,String requestedModel,String usedProvider,String usedModel,boolean fallbackUsed,String reason,List<RouteFailure> failures) {}
-    public record Attempt(int number,Instant startedAt,long durationMs,Integer httpStatus,String error) {}
+    public record Attempt(int number,Instant startedAt,long durationMs,Integer httpStatus,String error,String clientTraceId,String requestId,String outcome) {
+        public Attempt{if(outcome==null)outcome="LEGACY_NOT_RECORDED";}
+        public Attempt(int number,Instant startedAt,long durationMs,Integer httpStatus,String error){this(number,startedAt,durationMs,httpStatus,error,null,null,"LEGACY_NOT_RECORDED");}
+        Attempt result(String outcome,String error){return new Attempt(number,startedAt,durationMs,httpStatus,error,clientTraceId,requestId,outcome);}
+    }
     public record ModelState(String routeId,String provider,String model,boolean credentialConfigured,
         JsonNode catalog,Instant catalogRetrievedAt,String lastInference,String inferenceError,Budget lastBudget,Instant lastBudgetAt,String catalogError,Routing lastRouting) {}
     public record RouteCheck(String routeId,String provider,String model,boolean judge,String state,Instant catalogRetrievedAt,Instant retryAt,String fallbackFor) {}
@@ -73,15 +77,16 @@ public class Any2ApiClient {
         return new ModelState(route.id(),route.provider(),route.model(),!settings.secret(route).isBlank(),cached==null?null:cached.catalog(),
             cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()),budgets.get(route.id()),budgetTimes.get(route.id()),catalogErrors.get(route.id()),routeAudits.get(route.id()));}).toList();}
     public boolean compressionAvailable(AiRoute route){
-        var work=leases.get(route.provider());return work==null||work.researchDemand.get()==0&&work.lease.availablePermits()>0;
+        var work=leases.get("deep_lane:"+route.provider());return work==null||work.researchDemand.get()==0&&work.lease.availablePermits()>0;
     }
-    private ProviderLease acquireProvider(AiRoute route,boolean compression,Instant deadline)throws InterruptedException {
-        var work=leases.computeIfAbsent(route.provider(),key->new ProviderWork(key.equals("arena")?Math.max(1,Math.min(3,settings.integer("GOLD_AI_ARENA_CONCURRENCY",3))):1));Thread thread=Thread.currentThread();boolean acquired=false;
+    private ProviderLease acquireProvider(AiRoute route,boolean compression,Instant deadline,String lane)throws InterruptedException {
+        var work=leases.computeIfAbsent(lane+":"+route.provider(),key->new ProviderWork(route.provider().equals("arena")?Math.max(1,Math.min(3,settings.integer("GOLD_AI_ARENA_CONCURRENCY",3))):lane.equals("fast_lane")?2:1));Thread thread=Thread.currentThread();boolean acquired=false;
         if(!compression){
             synchronized(work){work.researchDemand.incrementAndGet();var compressor=work.compressor.get();if(compressor!=null)compressor.interrupt();}
         }
         try{
-            long wait=deadline==null?3000:Math.min(10000,Math.max(1,Duration.between(clock.instant(),deadline).toMillis()));
+            long available=deadline==null?route.timeoutSeconds()*1000L:Math.max(1,Duration.between(clock.instant(),deadline).toMillis());
+            long wait=lane.equals("fast_lane")?Math.min(10000,available):Math.min(route.timeoutSeconds()*1000L,available);
             acquired=compression?work.researchDemand.get()==0&&work.lease.tryAcquire():work.lease.tryAcquire(wait,java.util.concurrent.TimeUnit.MILLISECONDS);
             if(!acquired)throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
             if(compression)synchronized(work){
@@ -176,7 +181,18 @@ public class Any2ApiClient {
         return completeWithFallback(route,instruction,packet,true,null,null);
     }
     public static int requestSeconds(AiRoute route){return route.timeoutSeconds()+(route.fallback()==null?0:route.fallback().timeoutSeconds());}
+    private boolean fastLane(Object packet){var json=mapper.valueToTree(packet);return json.path("lane").asText().equals("fast_lane")||json.path("evidence").path("horizon").asText().equals("SHORT");}
     private Answer completeWithFallback(AiRoute primary,String instruction,Object packet,boolean compression,Instant deadline,String forced)throws Exception{
+        if(!compression&&fastLane(packet)){
+            String model=primary.model().toLowerCase(Locale.ROOT);
+            if(primary.provider().equals("arena")||model.contains("deepsearch")||model.contains("heavy"))throw new IllegalStateException("FAST_MODEL_NOT_ELIGIBLE");
+            // Arena Max can be a slow random model. Fast rounds discard failed signals instead.
+            Instant fastDeadline=clock.instant().plusSeconds(ResearchLanes.FAST_REQUEST_SECONDS);
+            if(deadline!=null&&deadline.isBefore(fastDeadline))fastDeadline=deadline;
+            long began=System.nanoTime();
+            try{return routed(complete(primary,instruction,packet,false,fastDeadline),primary,primary,false,"FAST_LANE_NO_SLOW_FALLBACK",List.of(),began);}
+            catch(InferenceFailure failure){throw new InferenceFailure(failure.getMessage(),routed(failure.partial(),primary,primary,false,"FAST_LANE_NO_SLOW_FALLBACK",List.of(),began),failure.retryAfterMillis());}
+        }
         if(primary.fallback()==null)return complete(primary,instruction,packet,compression,deadline);
         Instant limit=deadline==null?clock.instant().plusSeconds(requestSeconds(primary)+3L):deadline;
         if(deadline==null){String expiry=mapper.valueToTree(packet).path("evidence").path("decisionExpiresAt").asText();if(!expiry.isBlank()){Instant expires=Instant.parse(expiry);if(expires.isBefore(limit))limit=expires;}}
@@ -201,7 +217,8 @@ public class Any2ApiClient {
     private Answer complete(AiRoute route,String instruction,Object packet,boolean compression,Instant attemptDeadline) throws Exception {
         if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         long started=System.nanoTime();
-        var lease=acquireProvider(route,compression,attemptDeadline);
+        String lane=!compression&&fastLane(packet)?"fast_lane":"deep_lane";
+        var lease=acquireProvider(route,compression,attemptDeadline,lane);
         Answer captured=null;
         long retryAfter=0;
         List<Attempt> attempts=new ArrayList<>();
@@ -225,7 +242,8 @@ public class Any2ApiClient {
             // One external research seat must not silently launch a second team inside MiniMax.
             if(route.provider().equals("minmax")&&capabilities.path("provider_options").has("enable_team"))sourceOptions.put("enable_team",false);
             if(capabilities.path("provider_options").has("web_search_status")&&capabilities.path("parameter_adaptation").path("search").path("mode").asText().equals("mapped"))sourceOptions.put("web_search_status","disabled");
-            if(compression&&capabilities.path("provider_options").has("thinking"))sourceOptions.put("thinking",false);
+            if((compression||lane.equals("fast_lane"))&&capabilities.path("provider_options").has("thinking"))sourceOptions.put("thinking",false);
+            if(lane.equals("fast_lane")&&route.provider().equals("minmax")&&capabilities.path("parameter_adaptation").path("reasoning").path("mode").asText().equals("mapped"))request.put("reasoning_effort","none");
             if(!sourceOptions.isEmpty())request.put("provider_options",Map.of(route.provider(),sourceOptions));
             if(structuredTool&&!unified) {
                 int format=instruction.indexOf("格式："),wait=instruction.indexOf("WAIT 时");
@@ -255,15 +273,20 @@ public class Any2ApiClient {
             for(int attempt=1;attempt<=attemptLimit;attempt++) {
                 long remaining=Duration.between(clock.instant(),deadline).toMillis();if(remaining<=0)throw new IllegalStateException("REQUEST_TIMEOUT");
                 var began=clock.instant();long measured=System.nanoTime();
-                try{response=http.send(HttpRequest.newBuilder(URI.create(route.endpoint("chat/completions")))
-                    .timeout(Duration.ofMillis(Math.min(route.timeoutSeconds()*1000L,remaining))).header("Authorization","Bearer "+settings.secret(route))
+                String rootTrace=packetJson.path("execution").path("clientTraceId").asText();
+                if(!rootTrace.matches("[A-Za-z0-9._:-]{1,80}"))rootTrace="gold-"+UUID.randomUUID();
+                String clientTraceId=rootTrace+"."+route.provider()+".http-"+attempt;var responseInfo=new AtomicReference<java.net.http.HttpResponse.ResponseInfo>();
+                try{response=http.sendInference(HttpRequest.newBuilder(URI.create(route.endpoint("chat/completions")))
+                    .timeout(Duration.ofMillis(Math.min(Math.min(route.timeoutSeconds(),lane.equals("fast_lane")?120:900)*1000L,remaining))).header("Authorization","Bearer "+settings.secret(route))
+                    .header("X-Client-Trace-Id",clientTraceId)
                     .header("Content-Type","application/json").header("Accept","text/event-stream").header("Accept-Encoding","identity")
-                    .POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),8_000_000);
-                    attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,response.statusCode(),response.statusCode()==200?null:"INFERENCE_HTTP_"+response.statusCode()));
+                    .POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),8_000_000,responseInfo::set);
+                    var headers=responseInfo.get()==null?response.headers():responseInfo.get().headers();
+                    attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,response.statusCode(),response.statusCode()==200?null:"INFERENCE_HTTP_"+response.statusCode(),clientTraceId,requestId(headers),response.statusCode()==200?"RECEIVED":"FAILED"));
                     retryAfter=response.statusCode()==200?0:retryAfterMillis(response.headers().firstValue("Retry-After").orElse(""),clock.instant());
                     if(attempt==attemptLimit||!List.of(408,425,429,500,502,503,504).contains(response.statusCode())||Duration.between(clock.instant(),deadline).toSeconds()<5)break;
                     long delay=Math.max(1000,retryAfter);if(delay>=Duration.between(clock.instant(),deadline).toMillis())break;Thread.sleep(delay);
-                }catch(Exception transport){attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,null,safeError(transport)));
+                }catch(Exception transport){var info=responseInfo.get();attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,info==null?null:info.statusCode(),safeError(transport),clientTraceId,info==null?null:requestId(info.headers()),"FAILED"));
                     if(attempt==attemptLimit||!ResearchPolicy.retryable(safeError(transport))||Duration.between(clock.instant(),deadline).toMillis()<=1000)throw transport;
                     Thread.sleep(1000);}
             }
@@ -289,19 +312,24 @@ public class Any2ApiClient {
             if(!compression&&!adjudication&&!output.path("plan").isObject())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT");
             if(compression)validateCompression(output);else validate(output);
             if(adjudication&&(!output.path("selectedCandidateId").isTextual()||output.path("selectedCandidateId").asText().isBlank()))throw new IllegalStateException("MISSING_JUDGE_VOTE");
+            if(!attempts.isEmpty())attempts.set(attempts.size()-1,attempts.getLast().result("VALIDATED_OUTPUT",null));
             String analysis=reasoning.isBlank()?output.path("analysisSummary").asText():reasoning;
             String source=reasoning.isBlank()?(analysis.isBlank()?"NOT_PROVIDED":"EXPLICIT_OUTPUT_SUMMARY"):"PROVIDER_FIELD";
             inference.put(route.id(),"VALID_OUTPUT");failures.remove(route.id());
-            if(!compression)failedAt.remove(modelKey(route));
+            if(!compression)failedAt.remove(modelKey(route,lane));
             return new Answer(envelope.path("model").asText(route.model()),analysis,source,raw,output,envelope.path("usage"),usageSource,
                 finish,budget,(System.nanoTime()-started)/1_000_000,List.copyOf(attempts));
         }catch(Exception failure) {
+            if(!attempts.isEmpty()&&attempts.getLast().outcome().equals("RECEIVED"))attempts.set(attempts.size()-1,attempts.getLast().result("FAILED",safeError(failure)));
             inference.put(route.id(),"FAILED");failures.put(route.id(),safeError(failure));
-            if(!compression&&!(failure instanceof InterruptedException)&&!safeError(failure).equals("CONTEXT_INSUFFICIENT"))failedAt.put(modelKey(route),new FailureAt(clock.instant(),safeError(failure)));
+            if(!compression&&!(failure instanceof InterruptedException)&&!safeError(failure).equals("CONTEXT_INSUFFICIENT"))failedAt.put(modelKey(route,lane),new FailureAt(clock.instant(),safeError(failure)));
             if(captured!=null)throw new InferenceFailure(safeError(failure),new Answer(captured.model(),captured.analysis(),captured.analysisSource(),captured.raw(),captured.output(),
                 captured.usage(),captured.usageSource(),captured.finishReason(),captured.budget(),(System.nanoTime()-started)/1_000_000,List.copyOf(attempts)),retryAfter);throw failure;
         }finally{lease.close();}
     }
+    private static String requestId(java.net.http.HttpHeaders headers){if(headers==null)return null;
+        String id=headers.firstValue("X-Request-Id").orElse(headers.firstValue("X-Any2API-Request-Id").orElse(""));
+        return id.matches("[A-Za-z0-9._:-]{1,128}")?id:null;}
     private void validateCompression(JsonNode output) {
         EvidenceCompression.validate(output);
     }
@@ -333,7 +361,8 @@ public class Any2ApiClient {
     }
     private String routeKey(AiRoute route){return route.provider()+"|"+route.model()+"|"+route.baseUrl()+"|"+settings.genericAiEndpoint(route)+"|"+settings.manualAiCatalog(route)+"|"+NewsService.hash(settings.secret(route));}
     private Cached currentCatalog(AiRoute route){String key=routeKey(route);var cached=catalogs.get(route.id());return cached!=null&&cached.routeKey().equals(key)?cached:catalogs.values().stream().filter(c->c.routeKey().equals(key)).max(Comparator.comparing(Cached::at)).orElse(null);}
-    private String modelKey(AiRoute route){return route.provider()+"/"+ResearchService.modelIdentity(route)+"|"+route.baseUrl()+"|"+NewsService.hash(settings.secret(route));}
+    private String modelKey(AiRoute route){boolean shortOnly=settings.routes("SHORT").stream().anyMatch(r->r.id().equals(route.id()))&&settings.routes("LONG").stream().noneMatch(r->r.id().equals(route.id()));return modelKey(route,shortOnly?"fast_lane":"deep_lane");}
+    private String modelKey(AiRoute route,String lane){return lane+"|"+route.provider()+"/"+ResearchService.modelIdentity(route)+"|"+route.baseUrl()+"|"+NewsService.hash(settings.secret(route));}
     public Budget verify(AiRoute route,String body,JsonNode catalog,boolean outputRequested) {
         var limits=ContextWindow.limits(route,catalog);var size=ContextWindow.size(body,2);
         var prepared=new ContextWindow.Prepared(body,null,size,size,List.of());

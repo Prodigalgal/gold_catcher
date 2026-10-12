@@ -9,6 +9,9 @@ import tools.jackson.databind.ObjectMapper;
 
 @Component
 public class RuntimeSettings {
+    private volatile java.util.Set<String> disabledSources=java.util.Set.of();
+    public boolean sourceEnabled(String id){return !disabledSources.contains(id);}
+    public void applySourceSelection(java.util.Collection<String> disabled){disabledSources=java.util.Set.copyOf(disabled);}
     private final Environment environment;
     private final ObjectMapper mapper;
     public record ResearchRoutes(long revision,java.util.Map<String,List<AiRoute>> horizons,AiRoute compressionRoute,Boolean compressionEnabled) {}
@@ -97,7 +100,7 @@ public class RuntimeSettings {
                 throw new IllegalArgumentException("INVALID_AI_FALLBACK");
             if (id == null || id.isBlank() || provider == null || provider.isBlank() || model == null || model.isBlank() || baseUrl == null || apiKeyEnv == null || apiKeyEnv.isBlank()
                 || inputEstimateLimit < 512 || characterLimit < 1024 || byteLimit < 1024 || messageLimit < 2
-                || outputReserve < 128 || timeoutSeconds < 1 || timeoutSeconds > 300)
+                || outputReserve < 128 || timeoutSeconds < 1 || timeoutSeconds > 900)
                 throw new IllegalArgumentException("Invalid AI route or independent context budget");
             var uri = java.net.URI.create(baseUrl);
             if (!List.of("http", "https").contains(uri.getScheme()) || uri.getUserInfo() != null

@@ -45,7 +45,7 @@ public class DriverSources {
     @Autowired public DriverSources(RuntimeSettings settings,DocumentStore store,RemoteHttp http,ObjectMapper mapper,GateCfdFeed gate,EventHub events,Clock clock,SourceReliability reliability,ReleasePolling polling){
         this.settings=settings;this.store=store;this.http=http;this.mapper=mapper;this.gate=gate;this.events=events;this.clock=clock;this.reliability=reliability;this.polling=polling;
     }
-    public int pollInterval(String id){return id.startsWith("GATE_")?5:id.startsWith("CNBC_")?60:id.equals("FF_EXPECTATIONS")?polling.interval(id,1800):3600;}
+    public int pollInterval(String id){return id.startsWith("GATE_")?5:id.startsWith("CNBC_")?60:List.of("FF_EXPECTATIONS","TE_EXPECTATIONS").contains(id)?polling.interval("FF_EXPECTATIONS",1800):3600;}
     private boolean enabled(){return (settings.enabled("GOLD_NEWS_ENABLED")||settings.enabled("GOLD_MARKET_ENABLED"))&&Boolean.parseBoolean(settings.text("GOLD_DRIVERS_ENABLED","true"));}
     @PostConstruct void recover(){store.list("gold-driver",Driver.class,20).forEach(d->drivers.put(d.id(),d));store.list("driver-source",SourceCheck.class,20).forEach(c->checks.put(c.id(),new SourceCheck(c.id(),c.label(),c.url(),c.state(),pollInterval(c.id()),c.lastSuccess(),c.error()!=null&&c.nextPoll()!=null&&c.nextPoll().isAfter(clock.instant())?c.nextPoll():clock.instant(),c.error(),c.records())));}
     public List<Driver> drivers(Instant cutoff){return drivers.values().stream().filter(d->!d.receivedAt().isAfter(cutoff)).map(d->CnbcRates.at(d,cutoff)).sorted(Comparator.comparing(Driver::id)).toList();}
@@ -53,6 +53,7 @@ public class DriverSources {
         result.add(check("TREASURY_NOMINAL","美国财政部名义收益率",treasuryUrl(false,clock.instant().atZone(ZoneId.of("America/New_York")).getYear()),3600));
         result.add(check("TREASURY_REAL","美国财政部实际收益率",treasuryUrl(true,clock.instant().atZone(ZoneId.of("America/New_York")).getYear()),3600));
         result.add(check("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS")));
+        result.add(check("TE_EXPECTATIONS","Trading Economics 调查预期与自有预测",TradingEconomicsCalendar.URL,pollInterval("TE_EXPECTATIONS")));
         for(String symbol:CnbcRates.SYMBOLS)result.add(check("CNBC_"+symbol,CnbcRates.label(symbol),CnbcRates.url(symbol),60));return List.copyOf(result);}
     private SourceCheck check(String id,String label,String url,int interval){var c=checks.getOrDefault(id,new SourceCheck(id,label,url,"NOT_YET_FETCHED",interval,null,null,null,0));
         return enabled()?c:new SourceCheck(id,label,url,"DISABLED",interval,c.lastSuccess(),c.nextPoll(),c.error(),c.records());}
@@ -63,6 +64,7 @@ public class DriverSources {
         schedule("TREASURY_NOMINAL","美国财政部名义收益率",treasuryUrl(false,year),3600,()->collectTreasury(false));
         schedule("TREASURY_REAL","美国财政部实际收益率",treasuryUrl(true,year),3600,()->collectTreasury(true));
         schedule("FF_EXPECTATIONS","Forex Factory 发布安排与提供方预期",CALENDAR,pollInterval("FF_EXPECTATIONS"),this::collectExpectations);
+        schedule("TE_EXPECTATIONS","Trading Economics 调查预期与自有预测",TradingEconomicsCalendar.URL,pollInterval("TE_EXPECTATIONS"),()->ingestTradingEconomics(fetch(TradingEconomicsCalendar.URL,3_000_000)));
         for(String symbol:CnbcRates.SYMBOLS)schedule("CNBC_"+symbol,CnbcRates.label(symbol),CnbcRates.url(symbol),60,()->collectCnbc(symbol));
     }
     @FunctionalInterface private interface Fetch{int run() throws Exception;}
@@ -162,18 +164,22 @@ public class DriverSources {
     }
     private static String xml(Element entry,String name){var nodes=entry.getElementsByTagNameNS("*",name);return nodes.getLength()==0?"":nodes.item(0).getTextContent().strip();}
     private int collectExpectations() throws Exception {return ingestExpectations(mapper.readTree(fetch(CALENDAR,600_000)));}
-    int ingestExpectations(JsonNode rows){
+    int ingestExpectations(JsonNode rows){return ingestExpectations(rows,"FF_EXPECTATIONS","FOREX_FACTORY_PROVIDER_FORECAST",CALENDAR);}
+    int ingestTradingEconomics(byte[] page){return ingestExpectations(TradingEconomicsCalendar.parse(page,mapper),"TE_EXPECTATIONS","TRADING_ECONOMICS_SURVEY_CONSENSUS",TradingEconomicsCalendar.URL);}
+    private int ingestExpectations(JsonNode rows,String channel,String source,String url){
         if(!rows.isArray())throw new IllegalStateException("CALENDAR_EXPORT_INVALID");int count=0;
         for(var row:rows){if(!row.path("country").asText().equals("USD"))continue;String title=row.path("title").asText();if(title.isBlank()||title.length()>240)continue;
-            String mapped=EconomicExtractor.indicator(title),indicator=mapped==null?"UNMAPPED:"+NewsService.hash(title).substring(0,16):mapped;
+            String mapped=channel.equals("TE_EXPECTATIONS")?TradingEconomicsCalendar.indicator(title):EconomicExtractor.indicator(title),indicator=mapped==null?"UNMAPPED:"+NewsService.hash(title).substring(0,16):mapped;
             Instant scheduled;try{scheduled=OffsetDateTime.parse(row.path("date").asText()).toInstant();}catch(RuntimeException unknown){continue;}
             String rawForecast=row.path("forecast").asText(),rawPrevious=row.path("previous").asText();if(rawForecast.length()>80||rawPrevious.length()>80)continue;
             String unit=mapped==null?"UNMAPPED":EconomicExtractor.unit(indicator),forecast=mapped==null?null:EconomicExtractor.forecast(rawForecast,unit),previous=mapped==null?null:EconomicExtractor.forecast(rawPrevious,unit);
-            String id=NewsService.hash(title+":"+scheduled),hash=NewsService.hash(title+"|"+scheduled+"|"+rawForecast+"|"+rawPrevious+"|"+row.path("impact").asText());
+            String extra=channel.equals("TE_EXPECTATIONS")?"|"+row.path("rawProviderForecast").asText()+"|"+row.path("rawActual").asText()+"|"+row.path("referencePeriod").asText():"";
+            String id=NewsService.hash(channel.equals("TE_EXPECTATIONS")?channel+":"+row.path("providerEventId").asText():title+":"+scheduled),hash=NewsService.hash(title+"|"+scheduled+"|"+rawForecast+"|"+rawPrevious+"|"+row.path("impact").asText()+extra);
             var old=store.find("gold-expectation",id,Expectation.class);if(old.isPresent()&&old.get().hash().equals(hash)){count++;continue;}
-            var expectation=new Expectation(id,indicator,title,scheduled,"PROVIDER_TIME_APPROXIMATE",row.path("impact").asText(),unit,forecast,previous,"FOREX_FACTORY_PROVIDER_FORECAST",CALENDAR,clock.instant(),old.map(e->e.version()+1).orElse(1),hash,rawForecast,rawPrevious);
+            var expectation=new Expectation(id,indicator,title,scheduled,"PROVIDER_TIME_APPROXIMATE",row.path("impact").asText(),unit,forecast,previous,source,url,clock.instant(),old.map(e->e.version()+1).orElse(1),hash,rawForecast,rawPrevious,
+                channel.equals("TE_EXPECTATIONS")?row.path("rawProviderForecast").asText():null,channel.equals("TE_EXPECTATIONS")?row.path("rawActual").asText():null,channel.equals("TE_EXPECTATIONS")?row.path("referencePeriod").asText():null);
             store.transaction(()->{store.save("gold-expectation",id,expectation);store.save("gold-expectation-version",id+":"+expectation.version(),expectation);return expectation;});count++;
-            reliability.arrived("FF_EXPECTATIONS",id+":"+hash,null,expectation.receivedAt(),"SCHEDULE_AND_FORECAST_NOT_PUBLICATION");
+            reliability.arrived(channel,id+":"+hash,null,expectation.receivedAt(),"SCHEDULE_AND_FORECAST_NOT_PUBLICATION");
         }
         // Unsupported USD events remain visible, but are excluded from numerical surprise joins.
         return count;
@@ -187,8 +193,9 @@ public class DriverSources {
     public Expectation preRelease(String indicator,String unit,Instant publishedAt){
         var rows=store.list("gold-expectation-version",Expectation.class,2000).stream().filter(e->e.indicator().equals(indicator)&&e.unit().equals(unit)&&e.forecast()!=null
             &&e.receivedAt().isBefore(publishedAt)&&Math.abs(Duration.between(e.scheduledAt(),publishedAt).toSeconds())<=300).toList();
-        if(rows.stream().map(Expectation::id).distinct().count()!=1)return null;
-        return rows.stream().max(Comparator.comparing(Expectation::receivedAt)).orElse(null);
+        var survey=rows.stream().filter(e->e.source().equals("TRADING_ECONOMICS_SURVEY_CONSENSUS")).toList();var selected=survey.isEmpty()?rows:survey;
+        if(selected.stream().map(Expectation::id).distinct().count()!=1)return null;
+        return selected.stream().max(Comparator.comparing(Expectation::receivedAt)).orElse(null);
     }
     private byte[] fetch(String url,int maximum) throws Exception {var response=http.send(BrowserSourceRequest.navigation(URI.create(url),Duration.ofSeconds(12)).GET().build(),maximum);
         if(response.statusCode()!=200)throw SourcePolling.failure("DRIVER_HTTP_",response,clock.instant());return response.body();}

@@ -9,6 +9,25 @@ import java.util.zip.*;
 import org.junit.jupiter.api.Test;
 
 class RemoteHttpTest {
+    @Test void readsHeaderIdsAndReturnsTerminalErrorsWithoutWaitingForSocketClosure()throws Exception{
+        var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+        var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();server.setExecutor(executor);
+        for(String kind:java.util.List.of("named","json"))server.createContext("/"+kind,exchange->{try(exchange){
+            exchange.getResponseHeaders().add("Content-Type","text/event-stream");exchange.getResponseHeaders().add("X-Request-Id","gateway-"+kind);
+            exchange.sendResponseHeaders(200,0);String event=kind.equals("named")?"event: error\ndata: {\"code\":\"FAILED\"}\n\n":"data: {\"error\":{\"code\":\"FAILED\"}}\n\n";
+            for(byte value:event.getBytes(StandardCharsets.UTF_8)){exchange.getResponseBody().write(value);exchange.getResponseBody().flush();}
+            try{Thread.sleep(3000);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}
+        }});
+        server.start();var http=new RemoteHttp();
+        try{for(String kind:java.util.List.of("named","json")){
+            var id=new java.util.concurrent.atomic.AtomicReference<String>();long started=System.nanoTime();
+            var reply=http.sendInference(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+server.getAddress().getPort()+"/"+kind))
+                .header("Accept","text/event-stream").timeout(java.time.Duration.ofSeconds(2)).build(),10000,info->id.set(info.headers().firstValue("X-Request-Id").orElseThrow()));
+            assertThat(id.get()).isEqualTo("gateway-"+kind);assertThat(reply.statusCode()).isEqualTo(200);
+            assertThat(new String(reply.body(),StandardCharsets.UTF_8)).contains("FAILED");
+            assertThat(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)).isLessThan(1500);
+        }}finally{server.stop(0);executor.shutdownNow();http.client.shutdownNow();}
+    }
     @Test void streamHeartbeatDoesNotRemoveTheTotalDeadlineAndTimeoutsAreDistinguishable()throws Exception{
         for(String mode:java.util.List.of("first","idle","total")){
             var body=new RemoteHttp.LimitedBody(1000);long now=System.nanoTime();

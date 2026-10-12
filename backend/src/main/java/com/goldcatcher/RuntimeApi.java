@@ -36,8 +36,9 @@ public class RuntimeApi {
     private final ReviewService reviews;private final EvidenceCompression compression;
     private final AiConfiguration aiConfiguration;
     private final UiReadCache readCache;private final ApiPerformance performance;
+    private final com.goldcatcher.information.SourceConfiguration sourceConfiguration;
     public RuntimeApi(MarketFeed market,NewsService news,SimulationLedger ledger,ResearchService research,Any2ApiClient ai,
-        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis,SourceReliability reliability,DriverSources drivers,SupplementalSources supplemental,MarketArchive archive,ReviewService reviews,EvidenceCompression compression,AiConfiguration aiConfiguration,UiReadCache readCache,ApiPerformance performance) {
+        RuntimeSettings settings,EventHub events,DocumentStore store,Clock clock,FundingService funding,SourceProxyPool proxy,TrendAnalysis analysis,SourceReliability reliability,DriverSources drivers,SupplementalSources supplemental,MarketArchive archive,ReviewService reviews,EvidenceCompression compression,AiConfiguration aiConfiguration,UiReadCache readCache,ApiPerformance performance,com.goldcatcher.information.SourceConfiguration sourceConfiguration) {
         this.market=market;this.news=news;this.ledger=ledger;this.research=research;this.ai=ai;this.settings=settings;this.events=events;this.store=store;this.clock=clock;
         this.funding=funding;this.proxy=proxy;this.analysis=analysis;
         this.reliability=reliability;this.drivers=drivers;this.supplemental=supplemental;
@@ -45,6 +46,7 @@ public class RuntimeApi {
         this.reviews=reviews;this.compression=compression;
         this.aiConfiguration=aiConfiguration;
         this.readCache=readCache;this.performance=performance;
+        this.sourceConfiguration=sourceConfiguration;
     }
     @GetMapping("/session") public Map<String,String> session(Principal principal,CsrfToken token) {
         return Map.of("username",principal.getName(),"csrfHeader",token.getHeaderName(),"csrfToken",token.getToken());
@@ -76,6 +78,8 @@ public class RuntimeApi {
             Map.entry("byteLimit",route.byteLimit()),Map.entry("messageLimit",route.messageLimit()),Map.entry("outputReserve",route.outputReserve()),Map.entry("timeoutSeconds",route.timeoutSeconds()),Map.entry("judge",route.judge()),
             Map.entry("headroomPercent",10),Map.entry("safetyTokens",512),Map.entry("submissionMode",settings.preferJsonText(route)?"JSON_TEXT":"CATALOG_AUTO"))).toList():List.of());
         data.put("research",readCache.get("latest-research",symbol+store.revision("research"),1000,()->research.latest(symbol)));
+        if(full||view.equals("research")){var horizons=new LinkedHashMap<String,tools.jackson.databind.JsonNode>();
+            for(String horizon:List.of("SHORT","LONG")){var run=readCache.get("latest-research-horizon",symbol+horizon+store.revision("research"),1000,()->research.latest(symbol,horizon));if(run!=null&&!run.isNull())horizons.put(horizon,run);}data.put("researchByHorizon",horizons);}
         if(full||operations)data.put("compression",readCache.get("compression-status",store.revision("compression-result"),1000,compression::status));
         data.put("researchHistory",full||view.equals("research")?research.summaries().stream().filter(run->run.symbol().equals(symbol)).map(run->Map.of("id",run.id(),"horizon",run.horizon(),"status",run.status(),"startedAt",run.startedAt(),"stage",run.stage())).toList():List.of());
         data.put("scheduling",research.scheduling());
@@ -84,7 +88,13 @@ public class RuntimeApi {
     }
     @GetMapping("/news/{id}") public tools.jackson.databind.JsonNode article(@PathVariable String id){return readCache.get("news-detail",id+store.revision("news-body")+store.revision("news"),2000,()->news.detail(id));}
     @GetMapping("/compression/{id}") public tools.jackson.databind.JsonNode compression(@PathVariable String id){return readCache.get("compression-detail",id,300000,()->compression.detail(id));}
+    @GetMapping("/compression/news") public tools.jackson.databind.JsonNode newsCompression(@RequestParam List<String> ids){
+        String key=String.join(",",ids)+compression.configurationKey()+store.revision("news")+store.revision("news-body")+store.revision("compression-result")+store.revision("compression-job");
+        return readCache.get("news-compression",key,2000,()->compression.summaries(ids));
+    }
     @GetMapping("/performance") public Map<String,Object> performance(){return Map.of("cache",readCache.status(),"http",performance.view());}
+    @GetMapping("/sources/configuration") public Map<String,Object> sourceConfiguration(){return sourceConfiguration.view();}
+    @PostMapping("/sources/configuration") public Map<String,Object> sourceConfiguration(@RequestBody com.goldcatcher.information.SourceConfiguration.Draft draft){return sourceConfiguration.save(draft);}
     @PostMapping("/compression/news/{id}/reprocess") public EvidenceCompression.Job reprocess(@PathVariable String id){return compression.reprocess(id);}
     public record ResearchRequest(String symbol,String horizon) {}
     @PostMapping("/research") public ResponseEntity<ResearchService.Run> start(@RequestBody ResearchRequest request) {
