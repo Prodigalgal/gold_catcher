@@ -13,11 +13,45 @@ import java.util.concurrent.*;
 import org.junit.jupiter.api.*;
 import tools.jackson.databind.JsonNode;
 class ResearchServiceTest {
+    @Test void slowDeepAdmissionDoesNotBlockAutomaticShortResearch()throws Exception{
+        preparedScheduler();var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        when(ai.selectRoutes(anyList(),anyList(),anyString())).thenAnswer(call->{if(call.getArgument(2).equals("LONG")){entered.countDown();release.await(5,TimeUnit.SECONDS);}return call.getArgument(0);});
+        when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
+        research.automatic();try{assertThat(entered.await(2,TimeUnit.SECONDS)).isTrue();
+            long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);while(research.history().stream().noneMatch(r->r.horizon.equals("SHORT"))&&System.nanoTime()<until)Thread.sleep(10);
+            var fast=research.history().stream().filter(r->r.horizon.equals("SHORT")).findFirst().orElseThrow();assertThat(await(fast.id).status).isEqualTo("COMPLETED");
+            assertThat(((Number)research.scheduling().get("pendingStarts")).intValue()).isEqualTo(1);
+        }finally{release.countDown();}
+    }
+    @Test void internalReplayCoversThreeJudgeDecisionLimitFillFeesProfitAndRecovery()throws Exception{
+        research.stop();f.environment.setProperty("GOLD_TAKER_FEE_RATE","0.001");
+        var original=market.snapshot("XAU_USDT");
+        var replayRules=new Instrument("XAU_USDT","Trading","USDT",d(".01"),d(".001"),d(".001"),d("1000"),d("1000"),d("1"),d("1"),d("100"),d(".01"),List.of(new RiskTier(d("1000000"),d("100"),d(".005"),d("0"))),f.clock.instant());
+        when(market.snapshot("XAU_USDT")).thenReturn(new Snapshot("XAU_USDT","LIVE",original.quote(),replayRules,Map.of(),List.of(),f.clock.instant(),null));when(market.instrument()).thenReturn(replayRules);when(market.latestQuote()).thenReturn(original.quote());
+        ledger=new SimulationLedger(f.store,market,f.settings,new EventHub(),f.clock);org.springframework.test.util.ReflectionTestUtils.invokeMethod(ledger,"initialize");
+        research=new ResearchService(f.settings,f.store,market,new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock),ledger,ai,f.mapper,new EventHub(),f.clock);
+        when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));
+            var output=f.mapper.createObjectNode().put("title","内部回放").put("output","只验证固定历史情景").put("shortDirection","BULLISH").put("longDirection","UNKNOWN");
+            output.putArray("quotedMessages");output.putArray("evidenceRefs");output.putArray("impacts");
+            if(packet.path("phase").asInt()==3)output.put("selectedCandidateId",packet.path("peers").path(0).path("id").asText());
+            else output.putObject("plan").put("action","CREATE").put("side","BUY").put("type","LIMIT").put("quantity","1").put("leverage","10").put("entryPrice","100").put("stopLoss","99").put("takeProfit","103")
+                .put("expiresAt",f.clock.instant().plusSeconds(120).toString()).put("holdUntil",f.clock.instant().plusSeconds(600).toString()).put("riskAssessment","回放固定风险情景").put("invalidate","仅对本次固定回放有效");
+            return new Any2ApiClient.Answer(route.model(),"","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
+        });
+        var completed=await(research.start("XAU_USDT","SHORT").id);assertThat(completed.status).as("failure=%s",completed.error).isEqualTo("COMPLETED");assertThat(completed.adjudication.path("validJudges").asInt()).isEqualTo(3);assertThat(completed.orderId).isNotNull();
+        f.clock.advance(300);var entry=new Quote("XAU_USDT","REPLAY",2,f.clock.instant(),f.clock.instant(),d("99.99"),d("100"),d("2"),d("2"),d("100"),d("100"),f.clock.instant(),d("0"),original.quote().nextFundingTime(),true);ledger.acceptQuote(entry);
+        f.clock.advance(200);var exit=new Quote("XAU_USDT","REPLAY",3,f.clock.instant(),f.clock.instant(),d("103"),d("103.01"),d("2"),d("2"),d("103"),d("103"),f.clock.instant(),d("0"),original.quote().nextFundingTime(),true);ledger.acceptQuote(exit);
+        var account=ledger.view("XAU_USDT",exit);var order=account.orders().getFirst();
+        assertThat(order.filled).isEqualByComparingTo("1");assertThat(order.openQuantity).isZero();assertThat(order.entryFees).isEqualByComparingTo("0.1");assertThat(order.exitFees).isEqualByComparingTo("0.103");assertThat(order.netRealized).isEqualByComparingTo("2.797");
+        var recovered=new SimulationLedger(f.store,market,f.settings,new EventHub(),f.clock);org.springframework.test.util.ReflectionTestUtils.invokeMethod(recovered,"initialize");assertThat(recovered.view("XAU_USDT",exit).balance()).isEqualTo(account.balance());
+        assertThat(recovered.propose(completed.id,"XAU_USDT",completed.verdict.path("plan")).id).isEqualTo(completed.orderId);
+    }
     @Test void shortRoundPastHardDeadlineCannotContinueOrCreateAnOrder()throws Exception{
         var advanced=new java.util.concurrent.atomic.AtomicBoolean();when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->{
-            if(advanced.compareAndSet(false,true))f.clock.advance(121000);return waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2)));
+            if(advanced.compareAndSet(false,true))f.clock.advance(361000);return waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2)));
         });
-        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("EXECUTION_TIMED_OUT");assertThat(saved.error).isEqualTo("FAST_LANE_DEADLINE");
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("EXECUTION_TIMED_OUT");assertThat(saved.error).isEqualTo("WORKFLOW_DEADLINE");
         assertThat(saved.messages).allMatch(message->message.stage()==0);verify(ledger,never()).propose(anyString(),anyString(),any());
     }
     @Test void shortRoundCanCompleteWhileSameProductDeepRoundRemainsBlocked()throws Exception{
@@ -37,9 +71,14 @@ class ResearchServiceTest {
             assertThat(completed.adjudication.path("validJudges").asInt()).isEqualTo(3);
             assertThat(research.find(deep.id).status).isEqualTo("RUNNING");
             assertThatThrownBy(()->research.start("XAU_USDT","LONG")).hasMessage("RESEARCH_ALREADY_RUNNING");
-            assertThat(Duration.between(completed.startedAt,completed.workflowExpiresAt).toSeconds()).isEqualTo(120);
+            assertThat(Duration.between(completed.startedAt,completed.workflowExpiresAt).toSeconds()).isEqualTo(360);
         }finally{releaseDeep.countDown();}
         assertThat(await(deep.id).status).isEqualTo("COMPLETED");
+    }
+    private void automaticAndAdmit()throws Exception{
+        research.automatic();long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+        while(((Number)research.scheduling().get("pendingStarts")).intValue()>0&&System.nanoTime()<until)Thread.sleep(10);
+        assertThat(((Number)research.scheduling().get("pendingStarts")).intValue()).isZero();
     }
     TestSupport f;Any2ApiClient ai;ResearchService research;SimulationLedger ledger;MarketFeed market;
     @BeforeEach void setup() {
@@ -48,7 +87,7 @@ class ResearchServiceTest {
             String provider=Map.of("j","p","k","q","l","r").getOrDefault(id,id);
             routes.add(new RuntimeSettings.AiRoute(id,provider,provider+"/"+provider+"-model","https://localhost/"+provider+"/v1","TEST_KEY",10000,14000,30000,2,1000,2,List.of("j","k","l").contains(id)));}
         f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(routes));f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","1");f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","1");
-        when(ai.selectRoutes(anyList(),anyList())).thenAnswer(call->call.getArgument(0));
+        when(ai.selectRoutes(anyList(),anyList(),anyString())).thenAnswer(call->call.getArgument(0));
         when(ai.routeReadiness(anyString())).thenAnswer(call->Map.of("horizon",call.getArgument(0),"state","READY"));
         var quote=new Quote("XAU_USDT","TEST",1,f.clock.instant(),f.clock.instant(),d("100"),d("101"),d("1"),d("1"),d("100"),d("100"),f.clock.instant(),d("0"),f.clock.instant().plusSeconds(3600),true);
         var rules=new Instrument("XAU_USDT","Trading","USDT",d(".01"),d(".001"),d(".001"),d("1000"),d("1000"),d("1"),d("1"),d("100"),d(".01"),List.of(),f.clock.instant());
@@ -155,7 +194,7 @@ class ResearchServiceTest {
     @Test void disabledSchedulerReportsItsStateWithoutStartingOrConsumingModels() throws Exception {
         assertThat(research.scheduling()).containsEntry("automatic",false).containsEntry("state","DISABLED")
             .containsEntry("disabledProviders",List.of("qwen"));
-        research.automatic();verify(ai,never()).selectRoutes(anyList(),anyList());
+        automaticAndAdmit();verify(ai,never()).selectRoutes(anyList(),anyList(),anyString());
         verify(ai,never()).complete(any(),anyString(),any());verifyNoInteractions(ledger);
         assertThat(research.history()).isEmpty();
     }
@@ -242,10 +281,10 @@ class ResearchServiceTest {
     }
     @Test void failedAutomaticStartDoesNotConsumeTheThirtyMinuteLongSchedule()throws Exception{
         var config=new ResearchService.ScheduleConfig();config.automatic=true;config.symbols=List.of("XAU_USDT");research.configure(config);
-        when(ai.selectRoutes(anyList(),anyList())).thenThrow(new IllegalArgumentException("NO_AVAILABLE_JUDGE_QUORUM"));
-        research.automatic();assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();
-        verify(ai,times(2)).selectRoutes(anyList(),anyList());research.automatic();verify(ai,times(2)).selectRoutes(anyList(),anyList());
-        f.clock.advance(31000);research.automatic();verify(ai,times(4)).selectRoutes(anyList(),anyList());
+        when(ai.selectRoutes(anyList(),anyList(),anyString())).thenThrow(new IllegalArgumentException("NO_AVAILABLE_JUDGE_QUORUM"));
+        automaticAndAdmit();assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();
+        verify(ai,times(2)).selectRoutes(anyList(),anyList(),anyString());automaticAndAdmit();verify(ai,times(2)).selectRoutes(anyList(),anyList(),anyString());
+        f.clock.advance(31000);automaticAndAdmit();verify(ai,times(4)).selectRoutes(anyList(),anyList(),anyString());
         assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();verify(ledger,never()).propose(anyString(),anyString(),any());
     }
     private EvidenceCompression preparedScheduler(){
@@ -261,24 +300,21 @@ class ResearchServiceTest {
         when(market.snapshot("XAU_USDT")).thenReturn(new Snapshot("XAU_USDT","LIVE",quote,old.rules(),Map.of(),List.of(),f.clock.instant(),null));
         when(ledger.view("XAU_USDT",quote)).thenReturn(new SimulationLedger.View("XAU_USDT","USDT","VALUED","1000","1000","1000","0","0","0",f.clock.instant(),List.of(),"UNKNOWN","TEST"));
     }
-    @Test void automaticPreparationFinishesEarlyWithoutConsumingIntervalsAndFreezesFreshMarket()throws Exception{
-        var compression=preparedScheduler();research.automatic();assertThat(research.scheduling()).containsEntry("state","PREPARING_EVIDENCE");
-        assertThat(research.history()).isEmpty();assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).isEmpty();verify(ai,never()).selectRoutes(anyList(),anyList());
-        verify(compression,times(2)).collect();verify(ledger,never()).propose(anyString(),anyString(),any());
-        f.clock.advance(2000);refreshMarket();when(compression.needsPreparation(anyInt())).thenReturn(false);
-        when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
-        research.automatic();var completed=await(research.history().getFirst().id);
-        assertThat(completed.evidenceCutoff).isEqualTo(f.clock.instant());assertThat(completed.evidence.path("quote").path("bid").asText()).isEqualTo("102");
-        assertThat((Map<?,?>)research.scheduling().get("lastByProductHorizon")).hasSize(2);assertThat(research.scheduling().get("preparingUntil")).isNull();
+    @Test void automaticResearchDoesNotWaitForTheCompressionQueue()throws Exception{
+        var compression=preparedScheduler();f.clock.advance(2000);refreshMarket();
+        when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
+        automaticAndAdmit();var completed=await(research.history().getFirst().id);
+        assertThat(completed.status).isEqualTo("COMPLETED");assertThat(completed.evidenceCutoff).isEqualTo(f.clock.instant());
+        assertThat(completed.evidence.path("quote").path("bid").asText()).isEqualTo("102");
+        assertThat(research.scheduling().get("preparingUntil")).isNull();verify(compression,atLeastOnce()).enqueue();verify(compression,never()).collect();
     }
-    @Test void preparationDeadlineSurvivesRestartAndCannotPostponeResearchIndefinitely()throws Exception{
-        var compression=preparedScheduler();research.automatic();var until=research.scheduling().get("preparingUntil");research.stop();
+    @Test void legacyPreparationCannotBlockAutomaticResearchAfterRestart()throws Exception{
+        var compression=preparedScheduler();research.stop();
+        f.store.save("research-scheduling","preparations",Map.of("XAU_USDT/SHORT/old",Map.of("key","XAU_USDT/SHORT/old","until",f.clock.instant().plusSeconds(600))));
         research=new ResearchService(f.settings,f.store,market,new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock),ledger,ai,f.mapper,new EventHub(),f.clock,null,compression);
-        research.recover();assertThat(research.scheduling()).containsEntry("preparingUntil",until);
-        f.clock.advance(76000);refreshMarket();when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
-        research.automatic();var completed=await(research.history().getFirst().id);
-        assertThat(completed.evidenceCutoff).isEqualTo(f.clock.instant());assertThat(completed.status).isEqualTo("COMPLETED");
-        assertThat(research.scheduling().get("preparingUntil")).isNull();verify(compression,times(2)).collect();
+        research.recover();when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->waiting(call.getArgument(0),f.mapper.valueToTree(call.getArgument(2))));
+        automaticAndAdmit();assertThat(await(research.history().getFirst().id).status).isEqualTo("COMPLETED");
+        assertThat(research.scheduling().get("preparingUntil")).isNull();verify(compression,never()).collect();
     }
     @Test void failedJudgeStopsAfterConfiguredAttemptsWithoutRepeatingOtherJudges()throws Exception{
         f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","6");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");f.environment.setProperty("GOLD_RESEARCH_RETRY_MAX_SECONDS","1");

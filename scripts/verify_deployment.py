@@ -141,8 +141,9 @@ for key in ('shortPolicy', 'longPolicy'):
 assert schedule.get('state') in {'DISABLED', 'RUNNING', 'MONITORING', 'PREPARING_EVIDENCE'}
 if compression.get('provider') != configuration['compression']['provider'] or compression.get('voting') is not False:
     raise SystemExit('Source preprocessing role mismatch')
-if compression.get('state') not in {'DISABLED', 'CREDENTIAL_MISSING', 'RUNNING', 'UPSTREAM_BACKOFF', 'PAUSED_PROVIDER_RESEARCH', 'SCANNING', 'QUEUED', 'ARTICLE_RETRY_WAIT', 'NO_ELIGIBLE_BODY', 'UP_TO_DATE'}:
+if compression.get('state') not in {'DISABLED', 'CREDENTIAL_MISSING', 'RUNNING', 'UPSTREAM_BACKOFF', 'COMPRESSION_POOL_BUSY', 'SCANNING', 'QUEUED', 'ARTICLE_RETRY_WAIT', 'NO_ELIGIBLE_BODY', 'UP_TO_DATE'}:
     raise SystemExit('Source preprocessing scheduling state missing')
+assert compression.get('executionLane') == 'compression_lane' and compression.get('independent') is True
 queue = compression.get('queue') or {}
 assert compression.get('method') == 'source-summary-v5'
 for product in (perpetual, cfd):

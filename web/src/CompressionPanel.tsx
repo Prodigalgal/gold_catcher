@@ -4,7 +4,7 @@ import type { Answer, CompressionResult, CompressionStatus, Preprocessing, Sessi
 import ContextBudget from './ContextBudget';
 
 const names: Record<string,string> = { EXTRACTED: '摘要已生成', PARTIAL: '部分文本已压缩', DEFERRED: '等待提供商空闲后继续', FAILED: '本次压缩失败', COMPRESSION_PENDING: '等待压缩，本轮未使用', COMPRESSION_DISABLED: '压缩停用，本轮未使用', DETERMINISTIC_FALLBACK: '历史版本使用原文摘录', VERIFIED: '摘要格式通过' };
-const states: Record<string,string> = { DISABLED: '已停用', CREDENTIAL_MISSING: '待配置凭据', RUNNING: '提炼摘要中', UPSTREAM_BACKOFF: '等待上游恢复', PAUSED_PROVIDER_RESEARCH: '提供商正在研究，压缩稍后继续', SCANNING: '检查来源文本中', QUEUED: '来源文本已排队', ARTICLE_RETRY_WAIT: '等待文本重试', NO_ELIGIBLE_BODY: '暂无可压缩文本', UP_TO_DATE: '当前来源摘要已完成' };
+const states: Record<string,string> = { DISABLED: '已停用', CREDENTIAL_MISSING: '待配置凭据', RUNNING: '提炼摘要中', UPSTREAM_BACKOFF: '等待上游恢复', PAUSED_PROVIDER_RESEARCH: '历史状态：研究占用压缩', COMPRESSION_POOL_BUSY: '压缩通道正在执行其他摘要', SCANNING: '检查来源文本中', QUEUED: '来源文本已排队', ARTICLE_RETRY_WAIT: '等待文本重试', NO_ELIGIBLE_BODY: '暂无可压缩文本', UP_TO_DATE: '当前来源摘要已完成' };
 const formats: Record<string,string> = { HEADLINE_ONLY: '仅标题', FEED_SUMMARY: 'RSS 摘要', HTML: '网页正文', PDF: 'PDF 正文' };
 const stamp = (value?: string | null) => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
 function CompressionAudit({ id, session }: { id: string; session: Session }) {

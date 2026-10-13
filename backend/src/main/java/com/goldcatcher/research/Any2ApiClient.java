@@ -53,16 +53,11 @@ public class Any2ApiClient {
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
     private final Map<String,Cached> catalogs=new ConcurrentHashMap<>();
     private static final class ProviderWork {
-        final Semaphore lease;
-        ProviderWork(int concurrency){lease=new Semaphore(concurrency,true);}
-        final AtomicInteger researchDemand=new AtomicInteger();
-        final AtomicReference<Thread> compressor=new AtomicReference<>();
+        final Semaphore lease;final int capacity;final AtomicInteger waiting=new AtomicInteger();
+        ProviderWork(int concurrency){capacity=concurrency;lease=new Semaphore(concurrency,true);}
     }
-    private record ProviderLease(ProviderWork work,boolean compression,Thread thread) implements AutoCloseable {
-        @Override public void close(){
-            if(compression)synchronized(work){work.compressor.compareAndSet(thread,null);}
-            work.lease.release();if(!compression)work.researchDemand.decrementAndGet();
-        }
+    private record ProviderLease(ProviderWork work) implements AutoCloseable {
+        @Override public void close(){work.lease.release();}
     }
     private final Map<String,ProviderWork> leases=new ConcurrentHashMap<>();
     private final Map<String,String> inference=new ConcurrentHashMap<>(),failures=new ConcurrentHashMap<>();
@@ -77,28 +72,23 @@ public class Any2ApiClient {
         return new ModelState(route.id(),route.provider(),route.model(),!settings.secret(route).isBlank(),cached==null?null:cached.catalog(),
             cached==null?null:cached.at(),inference.getOrDefault(route.id(),"NOT_CALLED"),failures.get(route.id()),budgets.get(route.id()),budgetTimes.get(route.id()),catalogErrors.get(route.id()),routeAudits.get(route.id()));}).toList();}
     public boolean compressionAvailable(AiRoute route){
-        var work=leases.get("deep_lane:"+route.provider());return work==null||work.researchDemand.get()==0&&work.lease.availablePermits()>0;
+        var work=leases.get("compression_lane:"+route.provider());return work==null||work.lease.availablePermits()>0;
     }
+    public List<Map<String,Object>> executionPools(){return leases.entrySet().stream().sorted(Map.Entry.comparingByKey()).map(entry->{
+        var split=entry.getKey().split(":",2);var work=entry.getValue();return Map.<String,Object>of("lane",split[0],"provider",split[1],"capacity",work.capacity,
+            "running",work.capacity-work.lease.availablePermits(),"waiting",work.waiting.get(),"isolation","INDEPENDENT_CLIENT_POOL");}).toList();}
     private ProviderLease acquireProvider(AiRoute route,boolean compression,Instant deadline,String lane)throws InterruptedException {
-        var work=leases.computeIfAbsent(lane+":"+route.provider(),key->new ProviderWork(route.provider().equals("arena")?Math.max(1,Math.min(3,settings.integer("GOLD_AI_ARENA_CONCURRENCY",3))):lane.equals("fast_lane")?2:1));Thread thread=Thread.currentThread();boolean acquired=false;
-        if(!compression){
-            synchronized(work){work.researchDemand.incrementAndGet();var compressor=work.compressor.get();if(compressor!=null)compressor.interrupt();}
-        }
+        var work=leases.computeIfAbsent(lane+":"+route.provider(),key->new ProviderWork(route.provider().equals("arena")?Math.max(1,Math.min(3,settings.integer("GOLD_AI_ARENA_CONCURRENCY",3))):lane.equals("fast_lane")?2:1));boolean acquired=false;
+        work.waiting.incrementAndGet();
         try{
             long available=deadline==null?route.timeoutSeconds()*1000L:Math.max(1,Duration.between(clock.instant(),deadline).toMillis());
             long wait=lane.equals("fast_lane")?Math.min(10000,available):Math.min(route.timeoutSeconds()*1000L,available);
-            acquired=compression?work.researchDemand.get()==0&&work.lease.tryAcquire():work.lease.tryAcquire(wait,java.util.concurrent.TimeUnit.MILLISECONDS);
+            acquired=compression?work.lease.tryAcquire():work.lease.tryAcquire(wait,java.util.concurrent.TimeUnit.MILLISECONDS);
             if(!acquired)throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
-            if(compression)synchronized(work){
-                // A research request may arrive between the availability check and registration.
-                if(work.researchDemand.get()>0)throw new IllegalStateException("PROVIDER_REQUEST_STILL_RUNNING");
-                work.compressor.set(thread);
-            }
-            return new ProviderLease(work,compression,thread);
+            return new ProviderLease(work);
         }catch(InterruptedException|RuntimeException failure){
-            if(compression)synchronized(work){work.compressor.compareAndSet(thread,null);}
-            if(acquired)work.lease.release();if(!compression)work.researchDemand.decrementAndGet();throw failure;
-        }
+            if(acquired)work.lease.release();throw failure;
+        }finally{work.waiting.decrementAndGet();}
     }
     private String catalogReadiness(AiRoute route,JsonNode catalog){
         if(catalog.path("available").asBoolean(false))return "READY";
@@ -113,19 +103,22 @@ public class Any2ApiClient {
         for(var route:settings.allRoutes())if(!settings.secret(route).isBlank())try{catalog(route);}catch(Exception failure){catalogErrors.put(route.id(),safeError(failure));}
     }
     public List<AiRoute> selectRoutes(List<AiRoute> preferred,List<AiRoute> fallback) {
-        var selection=selection(preferred,fallback,true);
+        return selectRoutes(preferred,fallback,"LONG");
+    }
+    public List<AiRoute> selectRoutes(List<AiRoute> preferred,List<AiRoute> fallback,String horizon) {
+        var selection=selection(preferred,fallback,true,ResearchLanes.name(horizon));
         if(!selection.state().equals("READY"))throw new IllegalArgumentException(selection.state());
         return selection.routes();
     }
     /** Read-only readiness: no catalog refresh, inference, semaphore acquisition or failure-state mutation. */
     public Map<String,Object> routeReadiness(String horizon) {
-        var preferred=settings.routes(horizon);var selection=selection(preferred,settings.fallbackRoutes(),false);
+        var preferred=settings.routes(horizon);var selection=selection(preferred,settings.fallbackRoutes(),false,ResearchLanes.name(horizon));
         String error=ResearchService.configuredRouteError(preferred);
         return Map.of("horizon",horizon,"state",error==null?selection.state():error,"basis",selection.basis(),"checks",selection.checks(),
             "judgeMinimum",AdjudicationPanel.MINIMUM_JUDGES,"researcherMinimum",ResearchService.RESEARCH_MODEL_COUNT,
             "selected",selection.routes().stream().map(route->Map.of("routeId",route.id(),"provider",route.provider(),"model",route.model(),"judge",route.judge())).toList());
     }
-    private RouteSelection selection(List<AiRoute> preferred,List<AiRoute> fallback,boolean refresh) {
+    private RouteSelection selection(List<AiRoute> preferred,List<AiRoute> fallback,boolean refresh,String lane) {
         var pool=new ArrayList<>(preferred);for(var route:fallback)if(pool.stream().noneMatch(p->p.id().equals(route.id())))pool.add(route);
         var probePool=new ArrayList<>(pool);for(var route:pool)if(route.fallback()!=null)probePool.add(route.fallback());
         var fallbackParents=new HashMap<String,String>();for(var route:pool)if(route.fallback()!=null)fallbackParents.put(route.fallback().id(),route.id());
@@ -136,7 +129,7 @@ public class Any2ApiClient {
             else if(route.id().equals("compressor-mimo"))state="RESERVED_FOR_COMPRESSION";
             else if(settings.secret(route).isBlank())state="CREDENTIAL_MISSING";
             else {
-                var failed=failedAt.get(modelKey(route));
+                var failed=failedAt.get(modelKey(route,lane));
                 int cooldown=failed!=null&&ResearchPolicy.retryable(failed.error())?settings.integer("GOLD_AI_TRANSIENT_COOLDOWN_SECONDS",15):settings.integer("GOLD_AI_FAILURE_COOLDOWN_SECONDS",600);
                 if(failed!=null&&failed.at().plusSeconds(cooldown).isAfter(clock.instant())) {
                     state="FAILURE_COOLDOWN";retryAt=failed.at().plusSeconds(cooldown);
@@ -217,7 +210,7 @@ public class Any2ApiClient {
     private Answer complete(AiRoute route,String instruction,Object packet,boolean compression,Instant attemptDeadline) throws Exception {
         if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         long started=System.nanoTime();
-        String lane=!compression&&fastLane(packet)?"fast_lane":"deep_lane";
+        String lane=compression?"compression_lane":fastLane(packet)?"fast_lane":"deep_lane";
         var lease=acquireProvider(route,compression,attemptDeadline,lane);
         Answer captured=null;
         long retryAfter=0;

@@ -170,7 +170,7 @@ class EvidenceCompressionTest {
             f.clock.instant().minusSeconds(5),f.clock.instant().minusSeconds(1),"MEDIA_REPORT",1,"media-feed");
         when(news.selectedEvidence(any(),anyInt())).thenReturn(List.of(article));when(news.compressionCandidates(any())).thenReturn(List.of(media,article));when(ai.compressionAvailable(any())).thenReturn(false);
         compression.collect();var paused=f.mapper.valueToTree(compression.status());
-        assertThat(paused.path("state").asText()).isEqualTo("PAUSED_PROVIDER_RESEARCH");
+        assertThat(paused.path("state").asText()).isEqualTo("COMPRESSION_POOL_BUSY");
         assertThat(paused.path("queue").path("candidateArticles").asInt()).isEqualTo(2);
         assertThat(paused.path("queue").path("eligibleBodies").asInt()).isEqualTo(1);
         assertThat(paused.path("queue").path("missingBodies").asInt()).isEqualTo(1);

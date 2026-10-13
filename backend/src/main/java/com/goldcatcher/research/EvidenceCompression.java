@@ -65,6 +65,8 @@ public class EvidenceCompression {
         try{notifications.execute(()->{try{collect();}catch(RuntimeException failure){lastError=Any2ApiClient.safeError(failure);}finally{scanQueued.set(false);}});}
         catch(RejectedExecutionException stopping){scanQueued.set(false);}
     }
+    /** Signal the independent queue; callers never wait for compression. */
+    public void enqueue(){signal();}
     private String runtimeKey(RuntimeSettings.AiRoute route){return NewsService.hash(VERSION+"|"+INSTRUCTION+"|"+route.provider()+"|"+route.model()+"|"+route.baseUrl()+"|"+settings.genericAiEndpoint(route));}
     private synchronized void loadRuntime(RuntimeSettings.AiRoute route){String key=runtimeKey(route);if(key.equals(checkpointId))return;
         var saved=store.find("compression-runtime",key,Checkpoint.class).orElse(new Checkpoint(0,Instant.EPOCH,null,null));
@@ -127,9 +129,9 @@ public class EvidenceCompression {
             "running",workingOn!=null,"workingOn",workingOn==null?"":workingOn,"error",lastError==null?"":lastError,"recent",recent.stream().map(r->{var row=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(r);row.remove(List.of("selectedSpans","chunkIds","cacheKey"));return row;}).toList(),
             "coverage","收到正文、RSS摘要或标题后立即排队压缩。下游只接收完成的摘要，未完成文本列为覆盖缺口；价格、指标、账户、日历和经济数据数值由Java提供。"));
         status.put("retryAt",retryAt.isAfter(clock.instant())?retryAt.toString():"");status.put("consecutiveFailures",consecutiveFailures);
-        status.put("lastSuccessfulAt",lastSuccessfulAt);status.put("queue",coverage);
+        status.put("lastSuccessfulAt",lastSuccessfulAt);status.put("queue",coverage);status.put("executionLane","compression_lane");status.put("independent",true);
         status.put("state",!enabled()?"DISABLED":settings.secret(route).isBlank()?"CREDENTIAL_MISSING":workingOn!=null?"RUNNING":
-            retryAt.isAfter(clock.instant())?"UPSTREAM_BACKOFF":!ai.compressionAvailable(route)?"PAUSED_PROVIDER_RESEARCH":
+            retryAt.isAfter(clock.instant())?"UPSTREAM_BACKOFF":!ai.compressionAvailable(route)?"COMPRESSION_POOL_BUSY":
             coverage.scannedAt()==null?"SCANNING":coverage.queuedArticles()>0?"QUEUED":coverage.retryingArticles()>0?"ARTICLE_RETRY_WAIT":
             coverage.eligibleBodies()==0?"NO_ELIGIBLE_BODY":"UP_TO_DATE");return status;}
     /** Never waits for AI or admits summaries completed after the research cutoff. */
@@ -190,7 +192,7 @@ public class EvidenceCompression {
             consecutiveFailures=Math.min(5,consecutiveFailures+1);
             retryAt=clock.instant().plusSeconds(Math.min(900,60L<<(consecutiveFailures-1)));
         }else{consecutiveFailures=0;retryAt=Instant.EPOCH;}
-        store.save("compression-runtime",checkpointId,new Checkpoint(consecutiveFailures,retryAt,error,lastSuccessfulAt));
+        store.journal(()->{store.save("compression-runtime",checkpointId,new Checkpoint(consecutiveFailures,retryAt,error,lastSuccessfulAt));return null;});
     }
     Result process(NewsService.News article,NewsService.ArticleBody body){
         return process(article,NewsService.SourceText.fromBody(body),settings.compressionRoute(),null);
@@ -233,7 +235,7 @@ public class EvidenceCompression {
         String id=NewsService.hash(cacheKey+"|"+generation+"|"+processed+"|"+excerpt+"|"+state+"|"+completed);
         var result=new Result(id,cacheKey,article.id(),article.title(),article.source(),article.link(),text.bodyHash(),route.provider(),route.model(),VERSION,state,started,completed,
             completed.plusSeconds(deferred?10:state.equals("FAILED")||error!=null?300:30),text.text().codePointCount(0,text.text().length()),processed,chunks.size(),text.truncated(),excerpt,List.of(),List.copyOf(chunkIds),error,text.hash(),text.format(),generation,answers.stream().map(Any2ApiClient.Answer::model).distinct().toList(),answers.stream().filter(a->a.routing()!=null&&a.routing().fallbackUsed()).count());
-        store.transaction(()->{store.save("compression-result",id,result);store.save("compression-cache",cacheKey,result);
+        store.journal(()->{store.save("compression-result",id,result);store.save("compression-cache",cacheKey,result);
             if(result.state().equals("EXTRACTED"))store.save("compression-ready",cacheKey,result);return result;});events.changed();return result;
     }
     private boolean canRequest(RuntimeSettings.AiRoute route,long deadline){
@@ -256,7 +258,7 @@ public class EvidenceCompression {
             result=new ChunkResult(requestId,"FAILED",clock.instant(),List.of(),answer,error,"");}
         // The provider lease is released; a yield interrupt must not prevent JDBC from archiving this result.
         Thread.interrupted();
-        store.save("compression-chunk-result",requestId,result);store.save("compression-chunk",cacheKey,result);return result;
+        var archived=result;return store.journal(()->{store.save("compression-chunk-result",requestId,archived);store.save("compression-chunk",cacheKey,archived);return archived;});
     }
     static String validate(JsonNode output){
         if(output==null||!output.isObject()||output.properties().size()!=1||!output.path("summary").isTextual())throw new IllegalStateException("INVALID_COMPRESSION_OUTPUT");
