@@ -46,7 +46,7 @@ class RuntimeSnapshotBudgetTest {
   var savedExtra=dashboard.path("analysis").path("supplemental");f.store.save("public-depth",symbol,f.mapper.treeToValue(savedExtra.path("depth"),SupplementalSources.Depth.class));f.store.save("public-trades",symbol,f.mapper.treeToValue(savedExtra.path("trades"),SupplementalSources.Trades.class));
   var analysis=new TrendAnalysis(sources,news,market,f.store,f.mapper,f.clock,events,supplemental);
   List<ContextWindow.Prepared> prepared=Collections.synchronizedList(new ArrayList<>()),repaired=Collections.synchronizedList(new ArrayList<>());
-  when(ai.selectRoutes(anyList(),anyList())).thenAnswer(call->call.getArgument(0));
+  when(ai.selectRoutes(anyList(),anyList(),anyString())).thenAnswer(call->call.getArgument(0));
   when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
    var route=(RuntimeSettings.AiRoute)call.getArgument(0);String instruction=call.getArgument(1);var packet=f.mapper.valueToTree(call.getArgument(2));
    Map<String,Object> request=new LinkedHashMap<>();request.put("model",route.model());

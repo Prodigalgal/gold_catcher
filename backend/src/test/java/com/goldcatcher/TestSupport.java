@@ -25,6 +25,7 @@ public final class TestSupport {
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V1__durable_runtime.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V2__market_archive.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V3__account_samples.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V4__market_archive_statistics.sql")).execute(ds);
         store=new DocumentStore(new JdbcTemplate(ds),mapper,new TransactionTemplate(new DataSourceTransactionManager(ds)),clock);
     }
 }

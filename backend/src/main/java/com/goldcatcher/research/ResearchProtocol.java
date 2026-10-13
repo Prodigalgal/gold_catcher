@@ -21,7 +21,9 @@ final class ResearchProtocol {
         if(nativeTool)return common+"只调用 submit_research，用函数 arguments 按声明字段提交，不输出其他正文。";
         return common+"\n每行一个 key=value，值单行不加引号，不写JSON/Markdown。首行protocol=GOLD_RESEARCH_V1。必填title/output/shortDirection/longDirection，可选analysisSummary/changes；quotedMessages/evidenceRefs用英文逗号隔开id，无项留空。\n"+
             (judging?"必填selectedCandidateId=WAIT或原始peers.id；禁止plan字段。\n":waitOnly?"必填plan.action=WAIT，可选plan.riskAssessment/plan.invalidate，禁止订单或价格字段。\n":"必填plan.action=WAIT或allowedActions动作，WAIT说明写plan.riskAssessment。其他plan字段按需："+String.join(",",PLAN_FIELDS.subList(1,PLAN_FIELDS.size()))+"；加plan.前缀。数值十进制无单位，不适用省略/null，0保留。\n")+
-            "新闻判断：impact.1.newsId/horizon/direction/reason/counter各一行，组号1至4，horizon=SHORT/LONG，newsId抄news.id，无判断省略。quotedMessages≤6，evidenceRefs≤14，不猜补数值/id。";
+            "新闻判断：impact.1.newsId/horizon/direction/reason/counter各一行，组号1至4，horizon=SHORT/LONG，newsId抄news.id，无判断省略。quotedMessages≤6，evidenceRefs≤14，不猜补数值/id。\n"+
+            "结构示例（按证据填写自己的结论；无机会可等待）：\nprotocol=GOLD_RESEARCH_V1\ntitle=形势观察\noutput=说明依据、反证与缺口\nshortDirection=UNKNOWN\nlongDirection=UNKNOWN\nquotedMessages=\nevidenceRefs=\n"+
+            (judging?"selectedCandidateId=WAIT\n":"plan.action=WAIT\nplan.riskAssessment=当前缺乏可靠的执行依据\n");
     }
     static String compressionInstruction(){return "只返回两行，不用JSON或Markdown，每个value单行：\nprotocol=GOLD_COMPRESSION_V1\nsummary=中文精华摘要\n";}
     static Map<String,Object> schema(boolean adjudication){
@@ -41,7 +43,7 @@ final class ResearchProtocol {
         }
         return Map.of("type","object","properties",properties,"required",List.copyOf(properties.keySet()),"additionalProperties",false);
     }
-    static boolean text(String raw){return unfence(raw).matches("(?s)^protocol\\s*=.*");}
+    static boolean text(String raw){return unfence(raw).matches("(?s)^(?:protocol|title|analysisSummary|output|shortDirection|longDirection)\\s*=.*");}
     static String unfence(String raw){
         String content=raw.strip();if(content.startsWith("```")){int newline=content.indexOf('\n'),end=content.lastIndexOf("```");
             if(newline<0||end<=newline||!content.substring(end+3).isBlank())throw invalid();content=content.substring(newline+1,end).strip();}
@@ -55,8 +57,11 @@ final class ResearchProtocol {
         for(String line:unfence(raw).split("\\R")){if(line.isBlank())continue;int split=line.indexOf('=');if(split<1)throw invalid("LINE");
             String key=line.substring(0,split).strip(),value=line.substring(split+1).strip();
             if(key.startsWith("impacts."))key="impact."+key.substring(8);
+            if(key.matches("(?:newsImpact|news|impact)\\.[1-4]\\.(?:newsId|horizon|direction|reason|counter)"))key=key.replaceFirst("^[^.]+","impact");
+            if(key.matches("[1-4]\\.(?:newsId|horizon|direction|reason|counter)"))key="impact."+key;
             String previous=fields.putIfAbsent(key,value);if(previous!=null&&!previous.equals(value))throw invalid("CONFLICT_"+fieldCode(key));}
-        if(!Objects.equals(fields.remove("protocol"),compression?COMPRESSION_VERSION:VERSION))throw invalid();
+        String marker=fields.remove("protocol");
+        if(marker!=null&&!Objects.equals(marker,compression?COMPRESSION_VERSION:VERSION)||compression&&marker==null)throw invalid();
         var result=mapper.createObjectNode();
         if(compression){if(fields.size()!=1||!fields.containsKey("summary"))throw invalid();return result.put("summary",fields.get("summary"));}
         String echoed=fields.remove("phase");if(echoed!=null&&(phase==null||!echoed.equals(phase.toString())))throw invalid("PHASE");

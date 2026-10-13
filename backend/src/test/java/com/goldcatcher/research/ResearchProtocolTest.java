@@ -3,6 +3,15 @@ import static org.assertj.core.api.Assertions.*;
 import com.goldcatcher.TestSupport;
 import org.junit.jupiter.api.Test;
 class ResearchProtocolTest {
+    @Test void missingTextMarkerAndKnownImpactAliasesPreserveSubmittedValues(){
+        var f=new TestSupport();String body="title=观察\noutput=等待\nshortDirection=UNKNOWN\nlongDirection=MIXED\nplan.action=WAIT\nnewsImpact.1.newsId=original-id\nnewsImpact.1.horizon=SHORT\nnewsImpact.1.direction=UNKNOWN\nnewsImpact.1.reason=原始依据\nnewsImpact.1.counter=原始反证\n";
+        assertThat(ResearchProtocol.text(body)).isTrue();var output=ResearchProtocol.parse(f.mapper,body,false,false);
+        assertThat(output.path("impacts").path(0).path("newsId").asText()).isEqualTo("original-id");
+        assertThat(output.path("plan").path("action").asText()).isEqualTo("WAIT");
+        assertThatThrownBy(()->ResearchProtocol.parse(f.mapper,"protocol=OTHER\n"+body,false,false)).hasMessage("INVALID_STRUCTURED_OUTPUT");
+        assertThatThrownBy(()->ResearchProtocol.parse(f.mapper,body+"impact.1.newsId=conflicting-id",false,false)).hasMessageStartingWith("INVALID_STRUCTURED_OUTPUT_CONFLICT");
+        assertThatThrownBy(()->ResearchProtocol.parse(f.mapper,"summary=无协议",true,false)).hasMessage("INVALID_STRUCTURED_OUTPUT");
+    }
     final TestSupport f=new TestSupport();
     final String base="protocol=GOLD_RESEARCH_V1\ntitle=形势观察\noutput=成本=未知: 等待确认\nshortDirection=UNKNOWN\nlongDirection=MIXED\n";
     @Test void flatPlanPreservesEveryExplicitDecimalAndReferenceWithoutGuessing(){

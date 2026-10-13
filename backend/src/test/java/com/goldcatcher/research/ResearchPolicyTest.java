@@ -5,6 +5,10 @@ import java.time.*;
 import org.junit.jupiter.api.Test;
 
 class ResearchPolicyTest {
+    @Test void horizonDoesNotSilentlyOverrideTheSavedUiPolicy(){
+        var policy=new ResearchPolicy(3,2,30,120,100,500,240).validated();assertThat(policy.forHorizon("SHORT")).isEqualTo(policy);
+        assertThat(ResearchPolicy.defaults("SHORT").stageSeconds()).isEqualTo(90);
+    }
     @Test void aSlowFirstResponseGetsTheFullRequestBudgetRatherThanOneThirdOfTheStage(){
         var policy=ResearchPolicy.defaults("SHORT");
         assertThat(policy.attemptMillis(600000,300)).isEqualTo(300000);
@@ -26,7 +30,7 @@ class ResearchPolicyTest {
         assertThat(Any2ApiClient.retryAfterMillis("invalid",now)).isZero();
     }
     @Test void validationKeepsExecutionAndTradingWindowsSeparateAndRejectsUnboundedRetries(){
-        assertThat(ResearchPolicy.defaults("SHORT").validated().workflowSeconds()).isLessThan(ResearchPolicy.defaults("SHORT").decisionSeconds());
+        assertThat(ResearchPolicy.defaults("SHORT").validated().workflowSeconds()).isGreaterThan(ResearchPolicy.defaults("SHORT").decisionSeconds());
         assertThatThrownBy(()->new ResearchPolicy(100,2,30,360,360,1440,240).validated()).hasMessage("INVALID_RESEARCH_RETRY_POLICY");
     }
 }

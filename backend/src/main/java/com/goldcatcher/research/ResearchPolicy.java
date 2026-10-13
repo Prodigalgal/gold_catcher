@@ -9,7 +9,7 @@ public record ResearchPolicy(int maxAttempts,int retryBaseSeconds,int retryMaxSe
                              int stageSeconds,int judgeSeconds,int workflowSeconds,int decisionSeconds) {
     public static ResearchPolicy defaults(String horizon){
         boolean longTerm=horizon.equals("LONG");
-        return new ResearchPolicy(3,2,30,longTerm?900:30,longTerm?900:30,longTerm?3600:120,longTerm?3600:240);
+        return new ResearchPolicy(3,2,30,longTerm?900:90,longTerm?900:90,longTerm?3600:360,longTerm?3600:240);
     }
     public static ResearchPolicy from(RuntimeSettings settings,String horizon){
         var d=defaults(horizon);String prefix=horizon.equals("LONG")?"GOLD_LONG_":"GOLD_SHORT_";
@@ -35,9 +35,8 @@ public record ResearchPolicy(int maxAttempts,int retryBaseSeconds,int retryMaxSe
         // Give a slow but healthy first attempt its configured duration; retries consume the remaining stage budget.
         return Math.max(1,Math.min(remaining,requestSeconds*1000L));
     }
-    public ResearchPolicy forHorizon(String horizon){return horizon.equals("SHORT")
-        ?new ResearchPolicy(maxAttempts,retryBaseSeconds,retryMaxSeconds,Math.min(stageSeconds,30),Math.min(judgeSeconds,30),Math.min(workflowSeconds,120),Math.min(decisionSeconds,240))
-        :this;}
+    /** UI policy is frozen verbatim; request-level routing limits are applied separately. */
+    public ResearchPolicy forHorizon(String horizon){return this;}
     private static final Set<String> REPAIRABLE=Set.of("INVALID_STRUCTURED_OUTPUT","MISSING_REQUIRED_OUTPUT","OUTPUT_FIELDS_TOO_LONG",
         "INVALID_DIRECTION","INVALID_EVIDENCE_ARRAY","PLAN_NARRATIVE_TOO_LONG","INVALID_IMPACT","MISSING_JUDGE_VOTE",
         "INVALID_JUDGE_CANDIDATE","INVALID_PREVIOUS_STAGE_REFERENCE","INVALID_NEWS_REFERENCE","INVALID_EVIDENCE_REFERENCE",

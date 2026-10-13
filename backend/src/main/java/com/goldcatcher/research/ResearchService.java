@@ -85,6 +85,7 @@ public class ResearchService {
     private final Queue<Run> recovery=new ConcurrentLinkedQueue<>();private volatile boolean stopping;
     private record NewsTrigger(String id,Instant at) {}
     private final AtomicReference<NewsTrigger> pendingNews=new AtomicReference<>();private volatile Instant lastAutomatic=Instant.EPOCH;
+    private final Set<String> pendingAdmissions=ConcurrentHashMap.newKeySet();
     private volatile String automaticError;
     public record Preparation(String key,Instant until) {}
     private final Map<String,Preparation> preparations=new ConcurrentHashMap<>();
@@ -141,11 +142,10 @@ public class ResearchService {
         if(!recovery.remove(run)){lease.close();continue;}
         try{
             if(!clock.instant().isBefore(run.workflowExpiresAt))throw new IllegalStateException("WORKFLOW_DEADLINE");
-            if(run.horizon.equals("SHORT")&&!clock.instant().isBefore(run.startedAt.plusSeconds(ResearchLanes.FAST_RUN_SECONDS)))throw new IllegalStateException("FAST_LANE_DEADLINE");
             var routes=configuration==null?settings.routes(run.horizon):configuration.routesForRun(run.routeConfiguration,run.horizon);
             var bindings=new LinkedHashMap<String,AiRoute>();for(var actor:run.actors)bindings.put(actor.id(),routes.stream()
                 .filter(route->route.id().equals(actor.routeId())&&route.model().equals(actor.model())).findFirst().orElseThrow(()->new IllegalStateException("FROZEN_AI_CONFIGURATION_MISMATCH")));
-            run.executionLane=ResearchLanes.name(run.horizon);run.status="RUNNING";run.error=null;save(run);active.put(run.id,run);monotonicDeadlines.put(run.id,lease.deadlineNanos);lanes.rounds(run.horizon).submit(()->execute(run,bindings,lease));
+            run.executionLane=ResearchLanes.name(run.horizon);run.status="RUNNING";run.error=null;save(run);active.put(run.id,run);monotonicDeadlines.put(run.id,deadline(run));lanes.rounds(run.horizon).submit(()->execute(run,bindings,lease));
         }catch(Exception failure){active.remove(run.id,run);monotonicDeadlines.remove(run.id);run.status="FAILED_RECOVERY";run.error=Any2ApiClient.safeError(failure);run.completedAt=clock.instant();try{save(run);}finally{lease.close();}}}
     }
     public List<Run> history(){return store.list("research",Run.class,200).stream().sorted(Comparator.comparing((Run run)->run.startedAt).reversed()).limit(40).toList();}
@@ -167,7 +167,7 @@ public class ResearchService {
         if(stopping||recovery.stream().anyMatch(run->run.horizon.equals(horizon)&&run.symbol.equals(symbol)))throw new IllegalArgumentException("RESEARCH_ALREADY_RUNNING");
         var lease=lanes.acquire(symbol,horizon);
         try {
-            var requested=routes;routes=ai.selectRoutes(routes,settings.fallbackRoutes());researchers=routes.stream().filter(route->!route.judge()).toList();
+            var requested=routes;routes=ai.selectRoutes(routes,settings.fallbackRoutes(),horizon);researchers=routes.stream().filter(route->!route.judge()).toList();
             judges=routes.stream().filter(AiRoute::judge).toList();identities=researchers.stream().map(ResearchService::modelIdentity).toList();
             if(judges.size()<AdjudicationPanel.MINIMUM_JUDGES)throw new IllegalArgumentException("NO_AVAILABLE_JUDGE_QUORUM");
             snapshot=market.snapshot(symbol);analysisOnly=symbol.equals("GATE:XAUUSD")&&horizon.equals("LONG")&&snapshot.state().equals("MARKET_CLOSED");
@@ -248,7 +248,7 @@ public class ResearchService {
             var shuffledJudges=new ArrayList<>(judges);Collections.shuffle(shuffledJudges,new Random(run.seed+97));
             for(int i=0;i<shuffledJudges.size();i++){var judge=shuffledJudges.get(i);String id="J"+(i+1);
                 run.actors.add(new Actor(id,"独立裁决",judge.id(),judge.provider(),judge.model()));bindings.put(id,judge);}
-            save(run);active.put(run.id,run);monotonicDeadlines.put(run.id,lease.deadlineNanos);
+            save(run);active.put(run.id,run);monotonicDeadlines.put(run.id,deadline(run));
             try{lanes.rounds(horizon).submit(()->execute(run,bindings,lease));}catch(RejectedExecutionException stopped){
                 active.remove(run.id,run);monotonicDeadlines.remove(run.id);run.status="FAILED";run.error="EXECUTOR_UNAVAILABLE";run.completedAt=clock.instant();save(run);throw stopped;
             }return find(run.id);
@@ -296,6 +296,7 @@ public class ResearchService {
         final long stageDeadline=batchDeadline;
         Set<String> previousIds=new HashSet<>();previous.forEach(message->previousIds.add(message.id()));
         var evidenceIds=new HashSet<String>();run.evidence.path("news").forEach(article->evidenceIds.add(article.path("id").asText()));
+        var newsSubmissionIds=new ArrayList<String>();run.evidence.path("news").forEach(article->newsSubmissionIds.add(article.path("id").asText()));
         run.evidence.path("calendar").forEach(event->evidenceIds.add(event.path("id").asText()));run.evidence.path("evidenceIds").forEach(value->evidenceIds.add(value.asText()));
         store.find("research-analysis-references",run.id,Map.class).ifPresent(refs->refs.keySet().forEach(key->evidenceIds.add(key.toString())));
         for(int actorIndex=0;actorIndex<actors.size();actorIndex++) {
@@ -313,6 +314,7 @@ public class ResearchService {
                 for(int attempt=consumed+1;attempt<=run.retryPolicy.maxAttempts()&&System.nanoTime()<stageDeadline&&current(run);attempt++){
                     String id=run.id+"-"+stage+"-"+actor.id()+"-"+attempt;Instant started=clock.instant();
                     var packet=new LinkedHashMap<String,Object>(frozenPacket);
+                    packet.put("submissionIds",Map.of("news",List.copyOf(newsSubmissionIds),"peers",reading));
                     packet.put("execution",Map.of("at",started,"clientTraceId",id,"attempt",attempt,"decisionExpired",run.decisionExpired,"missingPreviousActors",run.actors.stream().filter(a->!a.id().startsWith("J")&&stage>0&&previous.stream().noneMatch(message->message.actorId().equals(a.id()))).map(Actor::id).toList()));
                     if(!correction.isBlank())packet.put("formatCorrection",Map.of("error",correction,"instruction",ResearchProtocol.repairInstruction(correction)));
                     synchronized(run){run.messages.add(new Message(id,actor.id(),actor.role(),stage,"WAITING_RESPONSE",started,null,null,reading,null,attempt,null));save(run);}
@@ -321,7 +323,7 @@ public class ResearchService {
                     long remaining=Math.max(1,TimeUnit.NANOSECONDS.toMillis(stageDeadline-System.nanoTime()));
                     var route=bindings.get(actor.id());long allowance=run.retryPolicy.attemptMillis(remaining,Any2ApiClient.requestSeconds(route));
                     var instruction=stage==3?JUDGE_INSTRUCTION:INSTRUCTION;
-                    if(run.horizon.equals("SHORT"))instruction+="\n快速研究：只输出关键依据与反证，不复述整份输入；保持完整提交格式，成本或信号不可靠时WAIT。";
+                    if(run.horizon.equals("SHORT"))instruction+="\n快速研究：说明合计尽量控制在180个汉字内，保留完整订单参数；引用仅选必要项，新闻判断可省略。只输出关键依据与反证，不复述整份输入；保持完整提交格式，成本或信号不可靠时WAIT。";
                     var answer=ai.complete(route,instruction,packet,clock.instant().plusMillis(allowance));
                     provided=answer;
                     if(stage==3)AdjudicationPanel.validateVote(answer.output(),previous);
@@ -364,8 +366,8 @@ public class ResearchService {
     static Map<String,Object> snapshotRoute(AiRoute route){var value=new LinkedHashMap<String,Object>(Map.ofEntries(Map.entry("id",route.id()),Map.entry("provider",route.provider()),Map.entry("model",route.model()),Map.entry("judge",route.judge()),Map.entry("characterLimit",route.characterLimit()),Map.entry("byteLimit",route.byteLimit()),Map.entry("inputEstimateLimit",route.inputEstimateLimit()),Map.entry("messageLimit",route.messageLimit()),Map.entry("outputReserve",route.outputReserve()),Map.entry("timeoutSeconds",route.timeoutSeconds())));if(route.fallback()!=null)value.put("fallback",snapshotRoute(route.fallback()));return value;}
     private boolean current(Run run){synchronized(run){if(!run.status.equals("RUNNING"))return false;
         run.decisionExpired=run.decisionExpiresAt!=null&&!clock.instant().isBefore(run.decisionExpiresAt);
-        if(run.horizon.equals("SHORT")&&(!clock.instant().isBefore(run.startedAt.plusSeconds(ResearchLanes.FAST_RUN_SECONDS))||System.nanoTime()>=monotonicDeadlines.getOrDefault(run.id,Long.MAX_VALUE))){run.status="EXECUTION_TIMED_OUT";run.error="FAST_LANE_DEADLINE";run.executionState="NO_ORDER_FAST_LANE_TIMEOUT";return false;}
-        if(run.workflowExpiresAt!=null&&!clock.instant().isBefore(run.workflowExpiresAt)){run.status="EXECUTION_TIMED_OUT";run.error="WORKFLOW_DEADLINE";run.executionState="NO_ORDER_EXECUTION_TIMEOUT";return false;}return true;}}
+        if(run.workflowExpiresAt!=null&&(!clock.instant().isBefore(run.workflowExpiresAt)||System.nanoTime()>=monotonicDeadlines.getOrDefault(run.id,Long.MAX_VALUE))){run.status="EXECUTION_TIMED_OUT";run.error="WORKFLOW_DEADLINE";run.executionState="NO_ORDER_EXECUTION_TIMEOUT";return false;}return true;}}
+    private long deadline(Run run){return System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(Math.max(0,Duration.between(clock.instant(),run.workflowExpiresAt).toMillis()));}
     public Run cancel(String id){var run=active.get(id);if(run==null)throw new IllegalArgumentException("RESEARCH_NOT_RUNNING");
         synchronized(run){if(!run.status.equals("RUNNING"))throw new IllegalArgumentException("RESEARCH_NOT_RUNNING");run.status="CANCELED";run.error="CANCELED_BY_USER";run.completedAt=clock.instant();save(run);}calls.getOrDefault(id,Set.of()).forEach(future->future.cancel(true));return find(id);}
     private void replace(Run run,Message replacement){for(int i=0;i<run.messages.size();i++)if(run.messages.get(i).id().equals(replacement.id())){run.messages.set(i,replacement);return;}}
@@ -388,7 +390,7 @@ public class ResearchService {
         var today=cutoff.atZone(ZoneId.of(event.originalZone())).toLocalDate();var start=LocalDate.parse(event.scheduledDate());var end=LocalDate.parse(event.endDate()==null?event.scheduledDate():event.endDate());
         return !end.isBefore(today)&&!start.isAfter(today.plusDays(2));
     }
-    private void save(Run run){store.transaction(()->{store.save("research",run.id,run);store.save("research-summary",run.id,summary(run));return null;});events.changed();}
+    private void save(Run run){store.journal(()->{store.save("research",run.id,run);store.save("research-summary",run.id,summary(run));return null;});events.changed();}
     private JsonNode peerOutput(JsonNode original) {
         var compact=mapper.createObjectNode();
         for(String field:List.of("title","shortDirection","longDirection","evidenceRefs","impacts"))if(original.has(field))compact.set(field,original.path(field));
@@ -411,23 +413,14 @@ public class ResearchService {
     public Map<String,Object> scheduling(){var queued=pendingNews.get();var config=scheduleConfig();var result=new LinkedHashMap<String,Object>(Map.of("automatic",config.automatic,"config",config,"running",!active.isEmpty()||!recovery.isEmpty(),
         "lastAutomatic",lastAutomatic,"lastByProductHorizon",Map.copyOf(automaticTimes),"queuedNews",queued==null?"":queued.id(),"error",automaticError==null?"":automaticError,
         "state",!config.automatic?"DISABLED":!active.isEmpty()?"RUNNING":preparations.values().stream().anyMatch(p->p.until().isAfter(clock.instant()))?"PREPARING_EVIDENCE":"MONITORING",
-        "disabledProviders",settings.disabledAiProviders(),"routeReadiness",List.of(ai.routeReadiness("SHORT"),ai.routeReadiness("LONG"))));result.put("lanes",lanes.status());result.put("startRetryAt",Map.copyOf(automaticRetryTimes));result.put("pendingRecovery",recovery.size());
+        "disabledProviders",settings.disabledAiProviders(),"routeReadiness",List.of(ai.routeReadiness("SHORT"),ai.routeReadiness("LONG"))));result.put("lanes",lanes.status());result.put("providerPools",ai.executionPools());result.put("startRetryAt",Map.copyOf(automaticRetryTimes));result.put("pendingRecovery",recovery.size());result.put("pendingStarts",pendingAdmissions.size());
         result.put("preparingUntil",preparations.values().stream().map(Preparation::until).min(Comparator.naturalOrder()).orElse(null));result.put("preparations",Map.copyOf(preparations));return result;}
     private void persistPreparations(){store.save("research-scheduling","preparations",Map.copyOf(preparations));
         store.save("research-scheduling","preparation",preparations.values().stream().min(Comparator.comparing(Preparation::until)).orElse(new Preparation("",Instant.EPOCH)));}
     private void clearPreparation(String key){if(preparations.keySet().removeIf(existing->existing.startsWith(key+"/")))persistPreparations();}
     private boolean prepareAutomatic(String key,String symbol,MarketTypes.Snapshot snapshot){
         if(compression==null)return false;
-        String scheduledKey=key;key=key+"/"+compression.configurationKey();
-        var orders=snapshot.quote()==null?List.<SimulationLedger.Order>of():ledger.view(symbol,snapshot.quote()).orders();
-        int limit=Math.max(1,Math.min(4,settings.integer("GOLD_RESEARCH_NEWS_LIMIT",orders.stream().noneMatch(order->order.openQuantity.signum()>0||List.of("PENDING","PARTIALLY_FILLED").contains(order.status))?2:1)));
-        if(!compression.needsPreparation(limit)){clearPreparation(scheduledKey);return false;}
-        if(!preparations.containsKey(key)){
-            clearPreparation(scheduledKey);preparations.put(key,new Preparation(key,clock.instant().plusSeconds(compression.preparationSeconds())));
-            persistPreparations();events.changed();
-        }
-        if(!preparations.get(key).until().isAfter(clock.instant()))return false;
-        compression.collect();return true;
+        clearPreparation(key);compression.enqueue();return false;
     }
     @PreDestroy void stop(){stopping=true;for(var run:active.values())synchronized(run){if(run.status.equals("RUNNING")){run.status="RECOVERY_PENDING";run.error="REQUEST_INTERRUPTED_BY_RESTART";run.completedAt=null;save(run);}}
         lanes.close();}
@@ -444,10 +437,14 @@ public class ResearchService {
             if(!snapshot.state().equals("LIVE")&&!closedLong)continue;
             int interval=parts[1].equals("SHORT")?config.shortIntervalSeconds:config.longIntervalSeconds;
             var last=automaticTimes.getOrDefault(key,Instant.EPOCH);if(last.plusSeconds(interval).isAfter(clock.instant())&&(!newsDue||last.plusSeconds(30).isAfter(clock.instant())))continue;
-            if(prepareAutomatic(key,parts[0],snapshot))continue;
-            try{start(parts[0],parts[1]);automaticError=null;automaticRetryTimes.remove(key);if(newsDue)pendingNews.compareAndSet(trigger,null);
-                clearPreparation(key);automaticTimes.put(key,clock.instant());lastAutomatic=clock.instant();store.save("research-scheduling","times",automaticTimes);}
-            catch(IllegalArgumentException invalid){automaticError=invalid.getMessage();automaticRetryTimes.put(key,clock.instant().plusSeconds(policy(parts[1]).retryMaxSeconds()));events.changed();}
+            if(!pendingAdmissions.add(key))continue;
+            try{lanes.admissions(parts[1]).submit(()->{try{
+                if(stopping||!scheduleConfig().automatic)return;
+                prepareAutomatic(key,parts[0],snapshot);
+                start(parts[0],parts[1]);automaticError=null;automaticRetryTimes.remove(key);if(newsDue)pendingNews.compareAndSet(trigger,null);
+                clearPreparation(key);synchronized(automaticTimes){automaticTimes.put(key,clock.instant());lastAutomatic=clock.instant();store.save("research-scheduling","times",Map.copyOf(automaticTimes));}
+            }catch(IllegalArgumentException invalid){automaticError=invalid.getMessage();automaticRetryTimes.put(key,clock.instant().plusSeconds(policy(parts[1]).retryMaxSeconds()));events.changed();}
+            finally{pendingAdmissions.remove(key);}});}catch(RejectedExecutionException stopping){pendingAdmissions.remove(key);}
         }
     }
 }

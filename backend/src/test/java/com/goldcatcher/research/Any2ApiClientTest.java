@@ -5,6 +5,17 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
+    @Test void deepFailureDoesNotCoolDownTheSameModelsInTheFastLane()throws Exception{
+        var f=new TestSupport();f.environment.setProperty("TEST","test-only");var routes=new java.util.ArrayList<AiRoute>();
+        for(String provider:java.util.List.of("pa","pb","pc"))for(boolean judge:java.util.List.of(false,true))routes.add(new AiRoute(provider+(judge?"-judge":"-research"),provider,provider+"/"+provider+"-model","https://localhost/"+provider+"/v1","TEST",10000,16000,30000,2,1000,2,judge));
+        f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(routes));var remote=mock(RemoteHttp.class);
+        var catalog=response(200,"{\"available\":true}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
+        var failed=response(503,"{\"error\":{\"code\":\"UPSTREAM_DOWN\"}}");when(remote.sendInference(any(),eq(8_000_000),any())).thenReturn(failed);
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        assertThatThrownBy(()->client.complete(routes.getFirst(),"观察",java.util.Map.of("lane","deep_lane","phase",0),f.clock.instant().plusSeconds(2))).hasMessageStartingWith("INFERENCE_HTTP_503");
+        assertThat(client.selectRoutes(routes,java.util.List.of(),"SHORT")).hasSize(6);
+        assertThatThrownBy(()->client.selectRoutes(routes,java.util.List.of(),"LONG")).hasMessageStartingWith("NO_AVAILABLE_");
+    }
     @Test void fastMinmaxRequestRecognizesTheLiveToggleMappingCatalog()throws Exception{
         var f=new TestSupport();var remote=mock(RemoteHttp.class);f.environment.setProperty("TEST","test-credential");
         var route=new AiRoute("minmax-fast","minmax","minmax/MiniMax-M3.1-Flash-Preview","https://localhost/minmax/v1","TEST",10000,16000,30000,2,1000,120,false);
@@ -136,25 +147,28 @@ class Any2ApiClientTest {
             verify(remote,never()).sendInference(any(),eq(8_000_000),any());
         }
     }
-    @Test void aResearchRequestPreemptsOnlyItsProvidersCompressorAndReleasesTheLease()throws Exception{
+    @Test void allThreeLanesUseIndependentPermitsForTheSameProvider()throws Exception{
         var f=new TestSupport();f.environment.setProperty("ANY2API_MIMO_API_KEY","test-only");f.environment.setProperty("TEST","test-only");
         var remote=mock(RemoteHttp.class);var catalog=response(200,"{\"available\":true}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
-        var started=new java.util.concurrent.CountDownLatch(1);var compressor=new java.util.concurrent.atomic.AtomicReference<Thread>();
-        String output="{\"title\":\"等待\",\"output\":\"观察\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"UNKNOWN\",\"plan\":{\"action\":\"WAIT\"}}";
-        when(remote.sendInference(any(),eq(8_000_000),any())).thenAnswer(call->{
-            if(Thread.currentThread()==compressor.get()){started.countDown();new java.util.concurrent.CountDownLatch(1).await(10,java.util.concurrent.TimeUnit.SECONDS);throw new AssertionError("compressor was not preempted");}
-            return response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));
-        });
+        var started=new java.util.concurrent.CountDownLatch(3);var release=new java.util.concurrent.CountDownLatch(1);
+        var compressorThread=new java.util.concurrent.atomic.AtomicReference<Thread>();
+        when(remote.sendInference(any(),eq(8_000_000),any())).thenAnswer(call->{started.countDown();assertThat(release.await(5,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            String output=Thread.currentThread()==compressorThread.get()?"{\"summary\":\"官方事实\"}":"{\"title\":\"等待\",\"output\":\"观察\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"UNKNOWN\",\"plan\":{\"action\":\"WAIT\"}}";
+            return response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",output))))));});
         var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var mimo=f.settings.compressionRoute();
-        var research=new AiRoute("research","mimo","mimo/pro","https://localhost/mimo/v1","TEST",10000,16000,30000,2,1000,2,false);
-        var other=new AiRoute("other","deepseek","deepseek/default","https://localhost/deepseek/v1","TEST",10000,16000,30000,2,1000,2,false);
+        var route=new AiRoute("research","mimo","mimo/pro","https://localhost/mimo/v1","TEST",10000,16000,30000,2,1000,5,false);
         try(var workers=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()){
-            var pending=workers.submit(()->{compressor.set(Thread.currentThread());try{client.compress(mimo,"摘要",java.util.Map.of("text","官方事实"));return "UNEXPECTED_SUCCESS";}catch(Exception failure){return Any2ApiClient.safeError(failure);}});
-            assertThat(started.await(2,java.util.concurrent.TimeUnit.SECONDS)).isTrue();assertThat(client.compressionAvailable(mimo)).isFalse();
-            assertThat(client.complete(other,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(2)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
-            assertThat(pending.isDone()).isFalse();
-            assertThat(client.complete(research,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(2)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
-            assertThat(pending.get(2,java.util.concurrent.TimeUnit.SECONDS)).isEqualTo("REQUEST_CANCELED");assertThat(client.compressionAvailable(mimo)).isTrue();
+            var compression=workers.submit(()->{compressorThread.set(Thread.currentThread());return client.compress(mimo,"摘要",java.util.Map.of("text","官方事实"));});
+            var deep=workers.submit(()->client.complete(route,"观察",java.util.Map.of("lane","deep_lane","phase",0),f.clock.instant().plusSeconds(5)));
+            var fast=workers.submit(()->client.complete(route,"观察",java.util.Map.of("lane","fast_lane","phase",0),f.clock.instant().plusSeconds(5)));
+            try{assertThat(started.await(2,java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                assertThat(client.executionPools()).extracting(row->row.get("lane")).containsExactlyInAnyOrder("compression_lane","deep_lane","fast_lane");
+                assertThat(client.executionPools()).allMatch(row->row.get("running").equals(1));assertThat(compression.isDone()).isFalse();
+            }finally{release.countDown();}
+            assertThat(compression.get(2,java.util.concurrent.TimeUnit.SECONDS).output().path("summary").asText()).isEqualTo("官方事实");
+            assertThat(deep.get(2,java.util.concurrent.TimeUnit.SECONDS).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+            assertThat(fast.get(2,java.util.concurrent.TimeUnit.SECONDS).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+            assertThat(client.executionPools()).allMatch(row->row.get("running").equals(0));assertThat(client.compressionAvailable(mimo)).isTrue();
         }
     }
     @SuppressWarnings("unchecked") private java.net.http.HttpResponse<byte[]> response(int status,String body){var result=(java.net.http.HttpResponse<byte[]>)mock(java.net.http.HttpResponse.class);when(result.statusCode()).thenReturn(status);when(result.headers()).thenReturn(java.net.http.HttpHeaders.of(java.util.Map.of(),(a,b)->true));when(result.body()).thenReturn(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));return result;}

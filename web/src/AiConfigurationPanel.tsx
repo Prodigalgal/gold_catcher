@@ -59,9 +59,9 @@ const defaultPolicy = (longTerm: boolean): ResearchPolicy => ({
   maxAttempts: 3,
   retryBaseSeconds: 2,
   retryMaxSeconds: 30,
-  stageSeconds: longTerm ? 900 : 30,
-  judgeSeconds: longTerm ? 900 : 30,
-  workflowSeconds: longTerm ? 3600 : 120,
+  stageSeconds: longTerm ? 900 : 90,
+  judgeSeconds: longTerm ? 900 : 90,
+  workflowSeconds: longTerm ? 3600 : 360,
   decisionSeconds: longTerm ? 3600 : 240,
 });
 
@@ -350,7 +350,7 @@ export default function AiConfigurationPanel({
             void save();
           }}
         >
-          <p className="gc-small">短线与长线独立执行。短线整轮最多 120 秒，每阶段最多 30 秒，关闭支持的深度思考并跳过慢兜底；超时或缺票时放弃信号。长线请求可配置到 900 秒，仍受阶段、整轮预算和证据有效期限制。</p>
+          <p className="gc-small">短线、长线和信息压缩使用独立队列与并发许可。短线单次请求上限 120 秒，长线请求上限 900 秒；阶段与整轮按这里保存的预算执行。交易有效期独立，过期结论只归档。短线关闭支持的深度思考并跳过慢兜底。</p>
           {/* Sub-tab Switcher for 4 Config Areas */}
           <div className="gc-segment" role="tablist" style={{ marginBottom: '16px' }}>
             <button
