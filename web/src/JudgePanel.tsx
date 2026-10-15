@@ -21,7 +21,8 @@ export default function JudgePanel({ run, showMessage }: { run: Run; showMessage
       return <article className="gc-judge-vote" key={judge.id}>
         <div className="gc-panel-head"><b>{judge.id} · {judge.model.split('/').pop()}</b><span className={`gc-badge ${message?.state === 'FAILED' || message?.state === 'TIMED_OUT' ? 'gc-negative' : ''}`}>{message ? messageStates[message.state] ?? message.state : '尚未裁决'}</span></div>
         {message?.answer?.routing?.fallbackUsed && <p className="gc-small">兜底：{message.answer.routing.usedModel} · {message.answer.routing.reason}{message.answer.model !== message.answer.routing.usedModel ? ` · 上游模型 ${message.answer.model}` : ''}</p>}
-        {choice && <p className="gc-judge-choice">选择：{candidate(choice)}{choice !== 'WAIT' && <a className="gc-text-button" href={`#message-${choice}`} onClick={showMessage}>查看候选 ↗</a>}</p>}
+        {choice ? <p className="gc-judge-choice">选择：{candidate(choice)}{choice !== 'WAIT' && <a className="gc-text-button" href={`#message-${choice}`} onClick={showMessage}>查看候选 ↗</a>}</p>
+          : message?.state==='SUBMITTED' && message.answer?.output?.plan && <p className="gc-judge-choice">{message.answer.output.plan.action==='WAIT' ? '选择：等待' : '已提交完整候选方案，等待 Java 核对计票'}</p>}
         {message?.error && <p className="gc-live-error">{message.error}</p>}
         {message && <small>第 {message.attempt||1}/{run.retryPolicy?.maxAttempts??1} 次尝试{message.retryAt ? ' · 已安排重试' : ''}</small>}
         {(vote?.reason || message?.answer?.output?.output) && <details><summary>裁决理由</summary><p className="gc-live-prose">{vote?.reason ?? message?.answer?.output?.output}</p></details>}

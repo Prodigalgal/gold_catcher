@@ -9,10 +9,13 @@ import tools.jackson.databind.*;
 final class EvidenceWire {
     private EvidenceWire() {}
     static String encode(ObjectMapper mapper,JsonNode packet){
+        return encode(mapper,packet,true);
+    }
+    static String encode(ObjectMapper mapper,JsonNode packet,boolean references){
         String json=mapper.writeValueAsString(packet);var options=new DumperOptions();options.setDefaultFlowStyle(DumperOptions.FlowStyle.FLOW);
         options.setExplicitStart(true);options.setAllowUnicode(true);options.setSplitLines(false);options.setWidth(1000000);
         // Equal collection subtrees share YAML anchors. Distinct peer IDs/plans remain distinct.
-        String yaml=compactFlow(new Yaml(options).dump(value(packet,new HashMap<>())).stripTrailing());
+        String yaml=compactFlow(new Yaml(options).dump(value(packet,references?new HashMap<>():null)).stripTrailing());
         return mapper.writeValueAsString(yaml).length()<mapper.writeValueAsString(json).length()?yaml:json;
     }
     /** Remove optional flow-separator padding, never whitespace belonging to a scalar. */
@@ -40,8 +43,8 @@ final class EvidenceWire {
         return out.toString();
     }
     private static Object value(JsonNode node,Map<Object,Object> shared){
-        if(node.isObject()){var result=new LinkedHashMap<String,Object>();node.properties().forEach(field->result.put(field.getKey(),value(field.getValue(),shared)));return shared.computeIfAbsent(result,key->result);}
-        if(node.isArray()){var result=new ArrayList<>();node.forEach(item->result.add(value(item,shared)));return shared.computeIfAbsent(result,key->result);}
+        if(node.isObject()){var result=new LinkedHashMap<String,Object>();node.properties().forEach(field->result.put(field.getKey(),value(field.getValue(),shared)));return shared==null?result:shared.computeIfAbsent(result,key->result);}
+        if(node.isArray()){var result=new ArrayList<>();node.forEach(item->result.add(value(item,shared)));return shared==null?result:shared.computeIfAbsent(result,key->result);}
         if(node.isTextual())return node.asText();if(node.isIntegralNumber())return node.bigIntegerValue();if(node.isFloatingPointNumber())return node.decimalValue();
         if(node.isBoolean())return node.asBoolean();if(node.isNull())return null;throw new IllegalArgumentException("UNSUPPORTED_EVIDENCE_VALUE");
     }

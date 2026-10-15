@@ -233,14 +233,18 @@ public class Any2ApiClient {
             request.put("stream",true);
             request.put("stream_options",Map.of("include_usage",true));
             boolean adjudication=!compression&&mapper.valueToTree(packet).path("phase").asInt(-1)==3;
-            boolean unified=mapper.valueToTree(packet).path("protocol").asText().equals(compression?ResearchProtocol.COMPRESSION_VERSION:ResearchProtocol.VERSION);
+            var internalPacket=mapper.valueToTree(packet);
+            boolean unified=Set.of(ResearchProtocol.VERSION,ModelProtocol.VERSION,ResearchProtocol.COMPRESSION_VERSION).contains(internalPacket.path("protocol").asText());
+            boolean modelFacts=compression||unified;
+            JsonNode modelPacket=compression?ModelInput.compression(mapper,internalPacket):unified?ModelInput.research(mapper,internalPacket):internalPacket;
+            if(modelFacts)instruction+=ModelInput.instruction(internalPacket,compression);
             request.put("messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",mapper.writeValueAsString(packet))));
             var parameters=capabilities.path("supported_parameters").path("chat_completions");
             boolean structuredTool=!compression&&!settings.preferJsonText(route)&&capabilities.path("tools").path("function_calling").asBoolean(false)
                 &&capabilities.path("tools").path("strict").asBoolean(false)&&!capabilities.path("tools").path("bridge").asText().equals("emulated_function_bridge");
             boolean jsonMode=capabilities.path("structured_output").asBoolean(false)||capabilities.path("structured_output").path("supported").asBoolean(false);
             if(!structuredTool&&jsonMode&&!unified)for(var parameter:parameters)if(parameter.asText().equals("response_format"))request.put("response_format",Map.of("type","json_object"));
-            if(unified&&!compression)request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(adjudication,structuredTool,ResearchProtocol.onlyWait(mapper.valueToTree(packet)))),Map.of("role","user","content",mapper.writeValueAsString(packet))));
+            if(unified&&!compression)request.put("messages",List.of(Map.of("role","system","content",instruction+ModelProtocol.instruction(adjudication,structuredTool,ResearchProtocol.onlyWait(internalPacket))),Map.of("role","user","content",mapper.writeValueAsString(modelPacket))));
             var sourceOptions=new LinkedHashMap<String,Object>();
             // One external research seat must not silently launch a second team inside MiniMax.
             if(route.provider().equals("minmax")&&capabilities.path("provider_options").has("enable_team"))sourceOptions.put("enable_team",false);
@@ -253,7 +257,7 @@ public class Any2ApiClient {
                 if(format>=0&&wait>format)request.put("messages",List.of(Map.of("role","system","content",instruction.substring(0,format)+instruction.substring(wait)),
                     Map.of("role","user","content",mapper.writeValueAsString(packet))));
             }
-            if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",ResearchProtocol.schema(adjudication)))));
+            if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",unified?ModelProtocol.schema():ResearchProtocol.schema(adjudication)))));
                 request.put("tool_choice",Map.of("type","function","function",Map.of("name","submit_research")));}
             String outputParameter=null;
             for(String candidate:List.of("max_tokens","max_completion_tokens","max_output_tokens"))
@@ -262,7 +266,7 @@ public class Any2ApiClient {
             if(settings.genericAiEndpoint(route))outputParameter="max_tokens";
             if(outputParameter!=null)request.put(outputParameter,route.outputReserve());
             var limits=ContextWindow.limits(route,catalog);
-            var prepared=ContextWindow.prepare(mapper,request,packet,limits);String body=prepared.body();
+            var prepared=modelFacts?ContextWindow.prepareModel(mapper,request,modelPacket,limits):ContextWindow.prepare(mapper,request,packet,limits);String body=prepared.body();
             Budget budget=budget(route,body,catalog,outputParameter!=null,prepared,
                 NewsService.hash(mapper.writeValueAsString(packet)),NewsService.hash(mapper.writeValueAsString(prepared.packet())));
             budgets.put(route.id(),budget);budgetTimes.put(route.id(),clock.instant());
@@ -312,10 +316,11 @@ public class Any2ApiClient {
             if(structuredTool&&!submitted)throw new IllegalStateException("REQUIRED_SUBMISSION_MISSING");
             if(!submitted&&!finish.equals("stop"))throw new IllegalStateException("OUTPUT_NOT_COMPLETE_"+finish.toUpperCase(Locale.ROOT));
             Integer phase=packetJson.has("phase")?packetJson.path("phase").asInt():null;
-            JsonNode output=ResearchProtocol.text(raw)?ResearchProtocol.parse(mapper,raw,compression,adjudication,phase):ResearchProtocol.normalize(parseOutput(raw),compression,adjudication,phase);
+            JsonNode output=unified&&!compression?(ResearchProtocol.text(raw)?ModelProtocol.parse(mapper,raw):ModelProtocol.normalize(parseOutput(raw))):
+                ResearchProtocol.text(raw)?ResearchProtocol.parse(mapper,raw,compression,adjudication,phase):ResearchProtocol.normalize(parseOutput(raw),compression,adjudication,phase);
             if(!compression&&!adjudication&&!output.path("plan").isObject())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT");
             if(compression)validateCompression(output);else validate(output);
-            if(adjudication&&(!output.path("selectedCandidateId").isTextual()||output.path("selectedCandidateId").asText().isBlank()))throw new IllegalStateException("MISSING_JUDGE_VOTE");
+            if(adjudication&&(unified?!output.path("plan").isObject():!output.path("selectedCandidateId").isTextual()||output.path("selectedCandidateId").asText().isBlank()))throw new IllegalStateException("MISSING_JUDGE_VOTE");
             if(!attempts.isEmpty())attempts.set(attempts.size()-1,attempts.getLast().result("VALIDATED_OUTPUT",null));
             String analysis=reasoning.isBlank()?output.path("analysisSummary").asText():reasoning;
             String source=reasoning.isBlank()?(analysis.isBlank()?"NOT_PROVIDED":"EXPLICIT_OUTPUT_SUMMARY"):"PROVIDER_FIELD";

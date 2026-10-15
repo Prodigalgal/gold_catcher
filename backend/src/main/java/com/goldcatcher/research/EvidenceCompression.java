@@ -15,7 +15,7 @@ import tools.jackson.databind.*;
 @Service
 public class EvidenceCompression {
     static final String VERSION="source-summary-v5";
-    static final String INSTRUCTION="""
+    private static final String CACHE_INSTRUCTION_V5="""
         将给定来源资料压缩为下游研究可直接使用的中文精华摘要，目标120至180个字符，绝对不超过300个字符。
         字数包括汉字、英文、数字和标点；输出前核对长度。只用2至4个短句，无需引用、编号或原文片段。
         保留关键事实、重要数值及原口径/单位、事件时间、修订、否定、条件、限制和不确定性，去掉重复和背景铺陈。
@@ -24,6 +24,9 @@ public class EvidenceCompression {
         无法提炼时说明资料缺少有效事实，不猜测。
         sourceFormat为FEED_SUMMARY或HEADLINE_ONLY时，只概括所给摘要/标题，注明材料范围，不冒充已读全文。
         """+ResearchProtocol.compressionInstruction();
+    // Same summary semantics: retain completed v5 caches while removing envelope fields from new requests.
+    static final String INSTRUCTION=CACHE_INSTRUCTION_V5.replace("task=MERGE时将同一篇原文的分块摘要合并、去重", "摘要合并时去重")
+        .replace("sourceFormat为FEED_SUMMARY或HEADLINE_ONLY时，只概括所给摘要/标题", "仅有来源摘要或标题时，只概括所给内容");
     // Read old archived records without requiring references in new summaries.
     public record Segment(String id,int start,int end,String text,boolean partial) {}
     public record Chunk(String id,int index,int start,int end,String text) {}
@@ -67,7 +70,7 @@ public class EvidenceCompression {
     }
     /** Signal the independent queue; callers never wait for compression. */
     public void enqueue(){signal();}
-    private String runtimeKey(RuntimeSettings.AiRoute route){return NewsService.hash(VERSION+"|"+INSTRUCTION+"|"+route.provider()+"|"+route.model()+"|"+route.baseUrl()+"|"+settings.genericAiEndpoint(route));}
+    private String runtimeKey(RuntimeSettings.AiRoute route){return NewsService.hash(VERSION+"|"+CACHE_INSTRUCTION_V5+"|"+route.provider()+"|"+route.model()+"|"+route.baseUrl()+"|"+settings.genericAiEndpoint(route));}
     private synchronized void loadRuntime(RuntimeSettings.AiRoute route){String key=runtimeKey(route);if(key.equals(checkpointId))return;
         var saved=store.find("compression-runtime",key,Checkpoint.class).orElse(new Checkpoint(0,Instant.EPOCH,null,null));
         coverage=new Coverage(0,0,0,0,0,0,0,0,null);checkpointId=key;consecutiveFailures=saved.consecutiveFailures();retryAt=saved.retryAt();lastError=saved.lastError();lastSuccessfulAt=saved.lastSuccessfulAt();

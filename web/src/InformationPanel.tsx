@@ -320,7 +320,7 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
         .toLowerCase()
         .includes(query.toLowerCase())
     )
-    .filter((article) => filter === 'ALL' || (impact(article)?.direction ?? 'UNKNOWN') === filter);
+    .filter((article) => !impacts.some(item=>item.newsId) || filter === 'ALL' || (impact(article)?.direction ?? 'UNKNOWN') === filter);
 
   const pagedNews = filteredNews.slice(
     (newsPage - 1) * newsPageSize,
@@ -449,6 +449,14 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
             </div>
           </div>
 
+          {impacts.some(item=>!item.newsId && item.horizon===horizon) && <div className="gc-news-impact-summary" aria-label="模型事件判断">
+            <h4>模型事件判断</h4><p className="gc-small">基于已压缩资讯的综合判断；消息按来源展示，模型判断按事件展示。</p>
+            {impacts.filter(item=>!item.newsId && item.horizon===horizon).map((item,index)=><article key={index} className="gc-factor">
+              <b>{item.topic} · {item.direction==='BULLISH'?'偏多':item.direction==='BEARISH'?'偏空':item.direction==='MIXED'?'分歧':'待确认'}</b>
+              <p>{item.reason}</p><small>反证：{item.counter}</small>
+            </article>)}
+          </div>}
+
           {/* Search and Filters Toolbar */}
           <div className="gc-live-toolbar">
             <input
@@ -484,7 +492,7 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
           </div>
 
           {/* Direction Filter Pills */}
-          <div className="gc-segment" style={{ marginBottom: '16px' }}>
+          {impacts.some(item=>item.newsId) && <div className="gc-segment" style={{ marginBottom: '16px' }}>
             {[
               ['ALL', '全部情绪'],
               ['BULLISH', '支持上涨'],
@@ -501,7 +509,7 @@ export default function InformationPanel({ data }: { data: Dashboard }) {
                 {label}
               </button>
             ))}
-          </div>
+          </div>}
 
           {/* News List */}
           {summaryError && <p className="gc-live-error" role="alert">压缩摘要读取失败：{summaryError}</p>}

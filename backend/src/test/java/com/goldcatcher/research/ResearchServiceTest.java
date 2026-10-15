@@ -33,8 +33,8 @@ class ResearchServiceTest {
         when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->{
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));
             var output=f.mapper.createObjectNode().put("title","内部回放").put("output","只验证固定历史情景").put("shortDirection","BULLISH").put("longDirection","UNKNOWN");
-            output.putArray("quotedMessages");output.putArray("evidenceRefs");output.putArray("impacts");
-            if(packet.path("phase").asInt()==3)output.put("selectedCandidateId",packet.path("peers").path(0).path("id").asText());
+            output.putArray("impacts");
+            if(packet.path("phase").asInt()==3)output.set("plan",packet.path("peers").path(0).path("output").path("plan"));
             else output.putObject("plan").put("action","CREATE").put("side","BUY").put("type","LIMIT").put("quantity","1").put("leverage","10").put("entryPrice","100").put("stopLoss","99").put("takeProfit","103")
                 .put("expiresAt",f.clock.instant().plusSeconds(120).toString()).put("holdUntil",f.clock.instant().plusSeconds(600).toString()).put("riskAssessment","回放固定风险情景").put("invalidate","仅对本次固定回放有效");
             return new Any2ApiClient.Answer(route.model(),"","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
@@ -60,8 +60,7 @@ class ResearchServiceTest {
             var packet=f.mapper.valueToTree(call.getArgument(2));var route=(RuntimeSettings.AiRoute)call.getArgument(0);
             if(packet.path("lane").asText().equals("deep_lane")&&packet.path("phase").asInt()==0){deepEntered.countDown();releaseDeep.await(6,TimeUnit.SECONDS);}
             var output=f.mapper.createObjectNode().put("title","等待").put("output","观察").put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN");
-            output.putArray("evidenceRefs");output.putArray("quotedMessages");output.putArray("impacts");
-            if(packet.path("phase").asInt()==3)output.put("selectedCandidateId","WAIT");else output.putObject("plan").put("action","WAIT");
+            output.putArray("impacts");output.putObject("plan").put("action","WAIT");
             return new Any2ApiClient.Answer(route.model(),"","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
         });
         var deep=research.start("XAU_USDT","LONG");assertThat(deepEntered.await(2,TimeUnit.SECONDS)).isTrue();
@@ -102,9 +101,7 @@ class ResearchServiceTest {
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);JsonNode packet=f.mapper.valueToTree(call.getArgument(2));packets.add(packet);
             if(route.id().equals("r")&&packet.path("phase").asInt()==0)Thread.sleep(1500);
             var output=f.mapper.createObjectNode().put("title","观察").put("analysisSummary","摘要").put("output","保持等待").put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN");
-            var quotes=output.putArray("quotedMessages");for(var peer:packet.path("peers"))quotes.add(peer.path("id").asText());
-            output.putObject("plan").put("action","WAIT");output.putArray("impacts");output.putArray("evidenceRefs");
-            if(packet.path("phase").asInt()==3){output.remove("plan");output.put("selectedCandidateId","WAIT");}
+            output.putObject("plan").put("action","WAIT");output.putArray("impacts");
             return new Any2ApiClient.Answer(route.model(),"摘要","EXPLICIT_OUTPUT_SUMMARY",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",
                 new Any2ApiClient.Budget(100,100,34,2,1000,"hash","CONFIG","NOT_SUPPORTED"),1);
         });
@@ -158,7 +155,7 @@ class ResearchServiceTest {
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);JsonNode packet=f.mapper.valueToTree(call.getArgument(2));
             if(route.id().equals("l"))throw new IllegalStateException("REQUEST_TIMEOUT");
             var output=f.mapper.createObjectNode().put("title","观察").put("output","等待").put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN");
-            if(packet.path("phase").asInt()==3)output.put("selectedCandidateId","WAIT");else output.putObject("plan").put("action","WAIT");
+            output.putObject("plan").put("action","WAIT");
             return new Any2ApiClient.Answer(route.model(),"摘要","EXPLICIT_OUTPUT_SUMMARY",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
         });
         var run=research.start("XAU_USDT","SHORT");long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
@@ -200,8 +197,7 @@ class ResearchServiceTest {
     }
     private Any2ApiClient.Answer waiting(RuntimeSettings.AiRoute route,JsonNode packet){
         var output=f.mapper.createObjectNode().put("title","等待").put("output","冻结证据观察").put("shortDirection","UNKNOWN").put("longDirection","UNKNOWN");
-        output.putArray("quotedMessages");output.putArray("evidenceRefs");output.putArray("impacts");
-        if(packet.path("phase").asInt()==3)output.put("selectedCandidateId","WAIT");else output.putObject("plan").put("action","WAIT");
+        output.putArray("impacts");output.putObject("plan").put("action","WAIT");
         return new Any2ApiClient.Answer(route.model(),"","NOT_PROVIDED",output.toString(),output,f.mapper.createObjectNode(),"UNKNOWN","stop",null,1);
     }
     private ResearchService.Run await(String id)throws Exception{
@@ -225,7 +221,7 @@ class ResearchServiceTest {
         assertThat(saved.messages.stream().filter(m->m.stage()==0&&m.error()!=null)).anyMatch(m->m.error().equals("REQUEST_TIMEOUT"));
         assertThat(evidence.stream().distinct()).hasSize(1);assertThat(saved.adjudication.path("validJudges").asInt()).isEqualTo(3);
     }
-    @Test void invalidReferenceIsReturnedToSameModelForRepairWithoutLeakingSameStageReplies()throws Exception{
+    @Test void forbiddenIdentityFieldIsReturnedToSameModelForRepairWithoutLeakingSameStageReplies()throws Exception{
         f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","5");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");var seen=new ConcurrentHashMap<String,Integer>();
         var routes=f.settings.routes().stream().map(route->new RuntimeSettings.AiRoute(route.id(),route.provider(),route.model(),route.baseUrl(),route.apiKeyEnv(),route.inputEstimateLimit(),route.characterLimit(),route.byteLimit(),route.messageLimit(),route.outputReserve(),route.timeoutSeconds(),route.judge(),
             new RuntimeSettings.AiRoute(route.id()+"-fallback","arena","arena/Max","https://localhost/arena/v1","TEST_KEY",10000,14000,30000,2,1000,2,route.judge()))).toList();
@@ -234,28 +230,29 @@ class ResearchServiceTest {
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));var answer=waiting(route,packet);
             if(route.id().equals("q")&&packet.path("phase").asInt()==0){int attempt=seen.merge("q",1,Integer::sum);
                 assertThat(packet.path("peers")).isEmpty();
-                if(attempt==1)((tools.jackson.databind.node.ArrayNode)answer.output().path("quotedMessages")).add("invented-reference");
-                else assertThat(packet.path("formatCorrection").path("error").asText()).isEqualTo("INVALID_PREVIOUS_STAGE_REFERENCE");
+                if(attempt==1)((tools.jackson.databind.node.ObjectNode)answer.output()).putArray("quotedMessages").add("invented-reference");
+                else assertThat(packet.path("formatCorrection").path("error").asText()).isEqualTo("INVALID_STRUCTURED_OUTPUT_UNKNOWN_FIELD");
             }return answer;
         });
         var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("COMPLETED");assertThat(seen.get("q")).isEqualTo(2);
         verify(ai,never()).completeFallback(any(),anyString(),any(),any(Instant.class),anyString());
         assertThat(saved.messages.stream().filter(m->m.error()!=null)).anyMatch(m->m.answer()!=null&&m.answer().output().path("quotedMessages").path(0).asText().equals("invented-reference"));
     }
-    @Test void yamlAnchorNamesAreRejectedAndTheRetryReceivesTheExactEvidenceAllowlist()throws Exception{
+    @Test void retryKeepsControlsPrivateAndRejectsReferenceFieldsWithoutAnAllowlist()throws Exception{
         f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","5");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");var attempts=new java.util.concurrent.atomic.AtomicInteger();
         when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->{
             var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));var answer=waiting(route,packet);
             assertThat(packet.path("execution").path("maxAttempts").asInt()).isEqualTo(3);
-            var ids=new java.util.HashSet<String>();packet.path("submissionIds").path("evidenceRefs").forEach(id->ids.add(id.asText()));
-            assertThat(ids).contains("market:quote","market:rules","account","indicators").doesNotContain("id002");
+            assertThat(packet.has("submissionIds")).isFalse();
+            var sent=ModelInput.research(f.mapper,packet);
+            assertThat(sent.has("execution")).isFalse();assertThat(sent.has("actorId")).isFalse();
             if(route.id().equals("q")&&packet.path("phase").asInt()==0){
-                int attempt=attempts.incrementAndGet();var refs=(tools.jackson.databind.node.ArrayNode)answer.output().path("evidenceRefs");refs.add(attempt==1?"id002":"market:quote");
-                if(attempt>1)assertThat(packet.path("formatCorrection").path("error").asText()).isEqualTo("INVALID_EVIDENCE_REFERENCE");
+                int attempt=attempts.incrementAndGet();if(attempt==1)((tools.jackson.databind.node.ObjectNode)answer.output()).putArray("evidenceRefs").add("id002");
+                if(attempt>1)assertThat(packet.path("formatCorrection").path("error").asText()).isEqualTo("INVALID_STRUCTURED_OUTPUT_UNKNOWN_FIELD");
             }return answer;
         });
         var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("COMPLETED");assertThat(attempts.get()).isEqualTo(2);
-        assertThat(saved.messages).anyMatch(m->"INVALID_EVIDENCE_REFERENCE".equals(m.error()));
+        assertThat(saved.messages).anyMatch(m->"INVALID_STRUCTURED_OUTPUT_UNKNOWN_FIELD".equals(m.error()));
     }
     @Test void expiredTradingEvidenceStillCompletesAllFourStagesAndThreeJudgeVotes()throws Exception{
         f.environment.setProperty("GOLD_LONG_DECISION_SECONDS","240");var advanced=new java.util.concurrent.atomic.AtomicBoolean();var phases=ConcurrentHashMap.<Integer>newKeySet();

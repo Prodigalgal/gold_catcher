@@ -4,7 +4,7 @@ import java.util.*;
 import tools.jackson.databind.*;
 import tools.jackson.databind.node.ObjectNode;
 
-/** One logical result schema; text adapters never infer financial values or evidence identities. */
+/** Archived v1 grammar and shared text/compression framing. Live research uses ModelProtocol v2. */
 final class ResearchProtocol {
     static final String VERSION="GOLD_RESEARCH_V1",COMPRESSION_VERSION="GOLD_COMPRESSION_V1";
     static final List<String> PLAN_FIELDS=List.of("action","orderId","side","type","quantity","leverage","entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation","expiresAt","holdUntil","riskAssessment","invalidate");

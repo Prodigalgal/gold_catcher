@@ -8,7 +8,7 @@ import tools.jackson.databind.*;
 public final class AdjudicationPanel {
     public static final int MINIMUM_JUDGES=3;
     private static final List<String> EXECUTION_FIELDS=List.of("action","orderId","side","type","quantity","leverage",
-        "entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation","expiresAt","holdUntil","riskAssessment","invalidate");
+        "entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation","expiresAt","holdUntil","riskAssessment","invalidate","target");
     private static final Set<String> DECIMALS=Set.of("quantity","leverage","entryPrice","triggerPrice","stopLoss","takeProfit","trailingDistance","trailingActivation");
     public record Result(JsonNode verdict,JsonNode audit) {}
     private AdjudicationPanel() {}
@@ -22,8 +22,26 @@ public final class AdjudicationPanel {
         if(!chosen.answer().output().path("plan").isObject())throw new IllegalStateException("INVALID_JUDGE_CANDIDATE");
     }
 
+    static void validateVote(ObjectMapper mapper,JsonNode output,List<ResearchService.Message> proposals,JsonNode evidence) {
+        selected(mapper,output,proposals,evidence);
+    }
+    private static String selected(ObjectMapper mapper,JsonNode output,List<ResearchService.Message> proposals,JsonNode evidence) {
+        if(output.has("selectedCandidateId")){validateVote(output,proposals);return output.path("selectedCandidateId").asText();}
+        var plan=output.path("plan");if(!plan.isObject()||plan.path("action").asText().isBlank())throw new IllegalStateException("MISSING_JUDGE_VOTE");
+        if(plan.path("action").asText().equals("WAIT"))return "WAIT";
+        String signature=signature(mapper,plan);
+        return proposals.stream().filter(proposal->proposal.answer().output().path("plan").isObject())
+            .filter(proposal->signature(mapper,ModelInput.plan(mapper,proposal.answer().output().path("plan"),evidence)).equals(signature))
+            .sorted(Comparator.comparing(ResearchService.Message::id)).map(ResearchService.Message::id).findFirst()
+            .orElseThrow(()->new IllegalStateException("INVALID_JUDGE_CANDIDATE"));
+    }
+
     public static Result aggregate(ObjectMapper mapper,List<ResearchService.Message> proposals,
                                    List<ResearchService.Message> judges,List<ResearchService.Actor> actors) {
+        return aggregate(mapper,proposals,judges,actors,mapper.createObjectNode());
+    }
+    public static Result aggregate(ObjectMapper mapper,List<ResearchService.Message> proposals,
+                                   List<ResearchService.Message> judges,List<ResearchService.Actor> actors,JsonNode evidence) {
         if(judges.size()<MINIMUM_JUDGES)throw new IllegalStateException("INSUFFICIENT_VALID_JUDGE_OUTPUTS");
         var actorModels=new HashMap<String,String>();actors.forEach(actor->actorModels.put(actor.id(),actor.model()));
         var judgeModels=new HashSet<String>();var judgeIds=new HashSet<String>();
@@ -31,7 +49,7 @@ public final class AdjudicationPanel {
             String model=actorModels.get(judge.actorId());
             if(!judge.actorId().startsWith("J")||model==null||!judgeIds.add(judge.actorId())
                 ||!judgeModels.add(ResearchService.modelIdentity(model)))throw new IllegalStateException("DUPLICATE_JUDGE_MODEL");
-            validateVote(judge.answer().output(),proposals);
+            validateVote(mapper,judge.answer().output(),proposals,evidence);
         }
         // Equivalent decimal spellings and missing/null fields do not split votes.
         // Risk and invalidation text must also agree; different conditions do not merge.
@@ -46,7 +64,7 @@ public final class AdjudicationPanel {
         var tallies=new LinkedHashMap<String,Integer>();var votes=mapper.createArrayNode();
         var orderedJudges=judges.stream().sorted(Comparator.comparing(ResearchService.Message::actorId)).toList();
         for(var judge:orderedJudges) {
-            var output=judge.answer().output();String selected=output.path("selectedCandidateId").asText();
+            var output=judge.answer().output();String selected=selected(mapper,output,proposals,evidence);
             String key=selected.equals("WAIT")?"WAIT":signature(mapper,byId.get(selected).answer().output().path("plan"));
             String canonical=key.equals("WAIT")?"WAIT":candidates.get(key).id();
             tallies.merge(key,1,Integer::sum);
@@ -71,7 +89,7 @@ public final class AdjudicationPanel {
         verdict.put("selectedCandidateId",chosenId);verdict.put("changes","Java 按独立席位票数汇总；价格、数量、杠杆及退出条件不做平均或拼接。");
         var citations=verdict.putArray("quotedMessages");orderedJudges.forEach(judge->citations.add(judge.id()));
         var evidenceIds=new TreeSet<String>();orderedJudges.forEach(judge->judge.answer().output().path("evidenceRefs").forEach(id->evidenceIds.add(id.asText())));
-        var evidence=verdict.putArray("evidenceRefs");evidenceIds.stream().limit(14).forEach(evidence::add);
+        var evidenceReferences=verdict.putArray("evidenceRefs");evidenceIds.stream().limit(14).forEach(evidenceReferences::add);
         verdict.set("impacts",consensusImpacts(mapper,orderedJudges,majority));
         if(chosenId.equals("WAIT"))verdict.putObject("plan").put("action","WAIT").put("riskAssessment",explanation).put("invalidate","取得新的冻结证据后重新研究。");
         else verdict.set("plan",candidates.get(winner).answer().output().path("plan").deepCopy());
@@ -99,7 +117,7 @@ public final class AdjudicationPanel {
     private static JsonNode consensusImpacts(ObjectMapper mapper,List<ResearchService.Message> judges,int majority) {
         var groups=new TreeMap<String,Map<String,JsonNode>>();
         for(var judge:judges)for(var impact:judge.answer().output().path("impacts")) {
-            String key=impact.path("newsId").asText()+"/"+impact.path("horizon").asText()+"/"+impact.path("direction").asText();
+            String key=(impact.has("newsId")?impact.path("newsId").asText():impact.path("topic").asText())+"/"+impact.path("horizon").asText()+"/"+impact.path("direction").asText();
             groups.computeIfAbsent(key,ignored->new TreeMap<>()).putIfAbsent(judge.actorId(),impact);
         }
         var result=mapper.createArrayNode();groups.values().stream().filter(group->group.size()>=majority).limit(4)
@@ -115,6 +133,10 @@ public final class AdjudicationPanel {
             else if(DECIMALS.contains(field)) {
                 try{canonical.put(field,new BigDecimal(value.asText()).stripTrailingZeros().toPlainString());}
                 catch(NumberFormatException invalid){canonical.set(field,value.deepCopy());}
+            }else if(field.equals("target")&&value.isObject()){
+                var target=canonical.putObject(field);for(String key:ModelProtocol.TARGET_FIELDS){var v=value.path(key);
+                    if(DECIMALS.contains(key))try{target.put(key,new BigDecimal(v.asText()).stripTrailingZeros().toPlainString());}catch(NumberFormatException invalid){target.set(key,v.deepCopy());}
+                    else target.set(key,v.deepCopy());}
             }else canonical.set(field,value.deepCopy());
         }
         return mapper.writeValueAsString(canonical);

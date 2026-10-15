@@ -1285,3 +1285,7 @@ body {
   }
   .gc-main pre { max-width: 100%; overflow-x: auto; }
 }
+/* Event-level model judgments have no article identity in the model context. */
+.gc-news-impact-summary { margin: 16px 0; padding: 16px; border: 1px solid var(--gc-line); border-radius: 12px; }
+.gc-news-impact-summary .gc-factor { display: block; margin-top: 12px; }
+.gc-news-impact-summary p { margin: 8px 0; }
