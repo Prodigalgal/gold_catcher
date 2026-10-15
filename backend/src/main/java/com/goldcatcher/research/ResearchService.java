@@ -315,7 +315,7 @@ public class ResearchService {
                     String id=run.id+"-"+stage+"-"+actor.id()+"-"+attempt;Instant started=clock.instant();
                     var packet=new LinkedHashMap<String,Object>(frozenPacket);
                     packet.put("submissionIds",Map.of("news",List.copyOf(newsSubmissionIds),"peers",reading));
-                    packet.put("execution",Map.of("at",started,"clientTraceId",id,"attempt",attempt,"decisionExpired",run.decisionExpired,"missingPreviousActors",run.actors.stream().filter(a->!a.id().startsWith("J")&&stage>0&&previous.stream().noneMatch(message->message.actorId().equals(a.id()))).map(Actor::id).toList()));
+                    packet.put("execution",Map.of("at",started,"clientTraceId",id,"attempt",attempt,"maxAttempts",run.retryPolicy.maxAttempts(),"decisionExpired",run.decisionExpired,"missingPreviousActors",run.actors.stream().filter(a->!a.id().startsWith("J")&&stage>0&&previous.stream().noneMatch(message->message.actorId().equals(a.id()))).map(Actor::id).toList()));
                     if(!correction.isBlank())packet.put("formatCorrection",Map.of("error",correction,"instruction",ResearchProtocol.repairInstruction(correction)));
                     synchronized(run){run.messages.add(new Message(id,actor.id(),actor.role(),stage,"WAITING_RESPONSE",started,null,null,reading,null,attempt,null));save(run);}
                     Message completed;Any2ApiClient.Answer provided=null;long retryAfter=0;
