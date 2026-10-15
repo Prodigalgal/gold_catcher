@@ -13,7 +13,7 @@ import ResearchProgress from './ResearchProgress';
 import AiConfigurationPanel from './AiConfigurationPanel';
 import ReviewPanel from './ReviewPanel';
 import MarketChart from './MarketChart';
-import { SchedulerPanel, MarketJournal } from './RuntimeControls';
+import { SchedulerPanel, MarketJournal, routeStateLabel } from './RuntimeControls';
 import SourceControls from './SourceControls';
 import ApiPerformancePanel from './ApiPerformancePanel';
 
@@ -810,9 +810,9 @@ function Operations({
         />
         <Stat
           title="自动研究调度"
-          value={data.scheduling.automatic ? '自动运行中' : '手动模式'}
+          value={!data.scheduling.automatic ? '手动模式' : data.scheduling.running ? '正在研究' : data.scheduling.error ? '启动受阻' : '等待下一轮'}
           detail={
-            data.scheduling.error ||
+            routeStateLabel(data.scheduling.error) ||
             (data.scheduling.running ? '有研究正在执行' : '等待调度窗口')
           }
         />

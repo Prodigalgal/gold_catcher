@@ -195,7 +195,7 @@ public class AiConfiguration {
             else if(credential(provider).isBlank())result=new ModelCatalog(provider.id(),"CREDENTIAL_MISSING",clock.instant(),List.of(),null);
             else try{
                 String endpoint=provider.baseUrl().replaceAll("/+$","");endpoint+=(endpoint.endsWith("/v1")?"/":"/v1/")+"models";
-                var response=http.send(HttpRequest.newBuilder(URI.create(endpoint)).timeout(Duration.ofSeconds(6)).header("Authorization","Bearer "+credential(provider)).GET().build(),500_000);
+                var response=http.send(HttpRequest.newBuilder(URI.create(endpoint)).timeout(Duration.ofSeconds(6)).header("Authorization","Bearer "+credential(provider)).GET().build(),2_000_000);
                 if(response.statusCode()!=200)throw new IllegalStateException("CATALOG_HTTP_"+response.statusCode());
                 var body=mapper.readTree(response.body());if(!body.path("data").isArray())throw new IllegalStateException("INVALID_MODEL_CATALOG");
                 var choices=new ArrayList<ModelChoice>();for(var model:body.path("data")){
@@ -205,7 +205,7 @@ public class AiConfiguration {
                         tokenLimit(model,"max_context_tokens"),tokenLimit(model,"max_input_tokens"),tokenLimit(model,"max_output_tokens")));
                 }
                 result=new ModelCatalog(provider.id(),"CURRENT",clock.instant(),List.copyOf(choices),null);
-            }catch(Exception failure){result=new ModelCatalog(provider.id(),"FAILED",clock.instant(),List.of(),failure.getMessage()!=null&&failure.getMessage().matches("CATALOG_HTTP_[0-9]+|INVALID_MODEL_CATALOG")?failure.getMessage():"CATALOG_REQUEST_FAILED");}
+            }catch(Exception failure){result=new ModelCatalog(provider.id(),"FAILED",clock.instant(),List.of(),"RESPONSE_TOO_LARGE".equals(failure.getMessage())?"CATALOG_RESPONSE_TOO_LARGE":failure.getMessage()!=null&&failure.getMessage().matches("CATALOG_HTTP_[0-9]+|INVALID_MODEL_CATALOG")?failure.getMessage():"CATALOG_REQUEST_FAILED");}
             synchronized(this){if(current.revision()==config.revision())catalogs.put(provider.id(),result);}
         }
         events.changed();return view();
