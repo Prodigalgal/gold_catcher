@@ -10,6 +10,14 @@ import tools.jackson.databind.node.ObjectNode;
 
 class ModelInputTest {
     final TestSupport f=new TestSupport();
+    @Test void csvProjectionPreservesQuotedCommasNewlinesEmptyUnknownZeroAndLongNumbers(){
+        var rows=f.mapper.createArrayNode();rows.addObject().put("id","private-id").put("value","00010000000000000000000000001")
+            .put("label","a,\"quoted\"\nline").put("empty","").putNull("unknown").put("zero","0");
+        var packet=f.mapper.createObjectNode();packet.putObject("evidence").set("indicators",f.mapper.valueToTree(EvidenceTable.pack(f.mapper,rows,List.of("id","value","label","empty","unknown","zero"))));
+        var projected=ModelInput.research(f.mapper,packet);var restored=ModelInput.records(f.mapper,projected.path("evidence").path("indicators"));
+        var expected=rows.deepCopy();((ObjectNode)expected.path(0)).remove("id");assertThat(restored).isEqualTo(expected);
+        assertThat(projected.toString()).doesNotContain("private-id");
+    }
     @Test void researchSeparatesEveryIdentityControlAndNewsMetadataFromFinancialFacts(){
         var packet=f.mapper.createObjectNode().put("protocol",ModelProtocol.VERSION).put("phase",3).put("actorId","private-actor");
         packet.putObject("execution").put("clientTraceId","private-trace").put("attempt",3);packet.putObject("submissionIds").putArray("news").add("private-news");
