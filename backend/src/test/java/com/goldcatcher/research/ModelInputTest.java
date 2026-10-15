@@ -19,10 +19,11 @@ class ModelInputTest {
         evidence.putObject("newsCoverage").put("omitted",3);evidence.putArray("evidenceIds").add("private-ref");
         evidence.putObject("quote").put("sequence",123).put("bid","4096.123456789012345678").put("ask","4096.123456789012345679").put("mark","0").put("exchangeTime","2026-10-15T02:59:59Z").put("receivedAt","2026-10-15T03:00:00Z");
         var peer=packet.putArray("peers").addObject().put("id","private-peer").put("actor","private-actor");var output=peer.putObject("output");
-        output.put("title","候选").put("output","条件判断").putArray("evidenceRefs").add("private-ref");
+        output.put("title","候选").put("output","条件判断：pub:7二十档偏卖，analysis:drivers显示US_INTRADAY_REAL_10Y走高。").putArray("evidenceRefs").add("private-ref");
         output.putObject("plan").put("action","CREATE").put("quantity","0001.0000000000000001").put("entryPrice","4096.123456789012345678").put("riskAssessment","可亏损本金").putNull("triggerPrice");
         var original=packet.deepCopy();var projected=ModelInput.research(f.mapper,packet);var wire=EvidenceWire.encode(f.mapper,projected,false);
         assertThat(wire).doesNotContain("private-","execution","submissionIds","newsCoverage","decisionExpiresAt","actorId","evidenceRefs","bodyHash","&id","*id");
+        assertThat(wire).doesNotContain("pub:7","analysis:drivers","US_INTRADAY_REAL_10Y").contains("二十档偏卖","美债10年实际收益率（公开盘中）");
         assertThat(projected.path("evidence").path("news")).isEqualTo(f.mapper.valueToTree(List.of("CPI同比3.7%，高于发布前预期3.6%。")));
         assertThat(projected.path("peers").path(0).path("plan").path("quantity").asText()).isEqualTo("0001.0000000000000001");
         assertThat(projected.path("evidence").path("quote").path("bid").asText()).isEqualTo("4096.123456789012345678");

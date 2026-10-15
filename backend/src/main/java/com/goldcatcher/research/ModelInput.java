@@ -12,6 +12,7 @@ final class ModelInput {
         "evidenceIds","evidenceRefs","quotedMessages","selectedCandidateId","bodyHash","sourceTextHash","hash","version",
         "extractionVersion","extractedAt","calculatedAt","sequence","receivedAt","expectationReceivedAt","method","reference","url","link");
     private static final List<String> TARGET_FIELDS=List.of("side","type","quantity","leverage","entryPrice");
+    private static final Set<String> PROSE_FIELDS=Set.of("title","output","changes","riskAssessment","invalidate","reason","counter","note");
     private ModelInput() {}
 
     static JsonNode research(ObjectMapper mapper,JsonNode packet) {
@@ -115,18 +116,21 @@ final class ModelInput {
                     }
                     if(archiveField(key))continue;
                     if(key.equals("indicator"))row.put(key,value.asText().startsWith("UNMAPPED:")?"未映射指标，仅使用标题及原文值":name(value.asText()));
-                    else row.set(key,clean(mapper,value));
+                    else row.set(key,field(mapper,key,value));
                 }
                 columns.addAll(row.propertyNames());rows.add(row);
             }
             return mapper.valueToTree(EvidenceTable.pack(mapper,rows,List.copyOf(columns)));
         }
-        if(node.isObject()){var result=mapper.createObjectNode();node.properties().forEach(field->{if(!archiveField(field.getKey()))result.set(field.getKey(),clean(mapper,field.getValue()));});return result;}
+        if(node.isObject()){var result=mapper.createObjectNode();node.properties().forEach(field->{if(!archiveField(field.getKey()))result.set(field.getKey(),field(mapper,field.getKey(),field.getValue()));});return result;}
         if(node.isArray()){var result=mapper.createArrayNode();node.forEach(value->result.add(clean(mapper,value)));return result;}
+        if(node.isTextual())return mapper.getNodeFactory().stringNode(names(node.asText()));
         return node.deepCopy();
     }
-    private static boolean archiveField(String key){return ARCHIVE_FIELDS.contains(key)||key.endsWith("Id")||key.endsWith("Ids")||key.endsWith("Hash");}
-    private static String prose(String text){return text.replaceAll("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-[0-3]-[A-Z][0-9]?-\\d+)?\\b|\\b(?=[0-9a-f]*[a-f])[0-9a-f]{32,64}\\b", "");}
+    private static JsonNode field(ObjectMapper mapper,String key,JsonNode value){return value.isTextual()&&PROSE_FIELDS.contains(key)?mapper.getNodeFactory().stringNode(prose(value.asText())):clean(mapper,value);}
+    private static boolean archiveField(String key){return ARCHIVE_FIELDS.contains(key)||key.endsWith("Id")||key.endsWith("Ids")||key.endsWith("Hash")||key.endsWith("_id")||key.endsWith("_ids");}
+    private static String names(String text){return java.util.regex.Pattern.compile("econ:[A-Z][A-Z0-9_]*|US_(?:INTRADAY_)?(?:NOMINAL_(?:2Y|10Y)|REAL_10Y)|GATE_(?:EURUSD|USDJPY|USIDX)").matcher(text).replaceAll(match->name(match.group()));}
+    private static String prose(String text){return names(text).replaceAll("(?i)(?<![a-z0-9_])(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-[0-3]-[A-Z][0-9]?-\\d+)?|(?=[0-9a-f]*[a-f])[0-9a-f]{32,64}|(?:market|analysis):[a-z_]+|(?:pub|ff):\\d+|s\\d+)(?![a-z0-9_])", "");}
 
     static String name(String code){return switch(code.replace("econ:","")){
         case "GATE_EURUSD"->"欧元/美元";case "GATE_USDJPY"->"美元/日元";case "GATE_USIDX"->"Gate美元指数CFD";
