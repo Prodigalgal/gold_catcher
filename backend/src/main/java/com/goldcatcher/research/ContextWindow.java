@@ -41,11 +41,17 @@ final class ContextWindow {
         return (int)Math.min(Integer.MAX_VALUE,Math.ceil(ratio*100));
     }
     static Prepared prepare(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits) {
-        JsonNode originalPacket=mapper.valueToTree(packet);String originalBody=body(mapper,request,originalPacket);
+        return prepare(mapper,request,packet,limits,true);
+    }
+    static Prepared prepareModel(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits) {
+        return prepare(mapper,request,packet,limits,false);
+    }
+    private static Prepared prepare(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits,boolean references) {
+        JsonNode originalPacket=mapper.valueToTree(packet);String originalBody=body(mapper,request,originalPacket,references);
         int messages=((List<?>)request.get("messages")).size();Size original=size(originalBody,messages);
         Prepared last=new Prepared(originalBody,originalPacket,original,original,List.of());
         if(fits(original,limits,true))return last;
-        // Only optional prose is shortened. All financial fields, every peer, all IDs and timestamps remain.
+        // Only optional prose is shortened. Already compressed news strings and financial facts stay intact.
         for(int level=1;level<=3;level++) {
             JsonNode selected=originalPacket.deepCopy();List<Change> changes=new ArrayList<>();
             int newsLimit=level==1?120:level==2?60:0,peerLimit=level==1?240:level==2?160:40;
@@ -67,7 +73,7 @@ final class ContextWindow {
             for(JsonNode driver:selected.path("evidence").path("analysis").path("drivers"))shorten(driver,"note",impactLimit,"evidence.analysis.drivers["+(index++)+"].note",changes);
             index=0;
             for(JsonNode peer:selected.path("peers")) {
-                String path="peers["+(index++)+"].output.";JsonNode output=peer.path("output");
+                String path="peers["+(index++)+"].";JsonNode output=peer.path("output").isObject()?peer.path("output"):peer;
                 shorten(output,"analysisSummary",peerLimit,path+"analysisSummary",changes);
                 shorten(output,"output",peerLimit,path+"output",changes);
                 shorten(output,"changes",changeLimit,path+"changes",changes);
@@ -78,19 +84,19 @@ final class ContextWindow {
                     shorten(impact,"counter",impactLimit,impactPath+"counter",changes);
                 }
             }
-            String serialized=body(mapper,request,selected);
+            String serialized=body(mapper,request,selected,references);
             last=new Prepared(serialized,selected,original,size(serialized,messages),List.copyOf(changes));
             if(fits(last.sent(),limits,true))return last;
         }
         return last; // The caller records this failed preflight and does not send it.
     }
-    private static String body(ObjectMapper mapper,Map<String,Object> request,JsonNode packet) {
+    private static String body(ObjectMapper mapper,Map<String,Object> request,JsonNode packet,boolean references) {
         Map<String,Object> selected=new LinkedHashMap<>(request);
         var messages=new ArrayList<Map<String,Object>>();
         for(Object message:(List<?>)request.get("messages")) {
             var node=mapper.valueToTree(message);Map<String,Object> copy=new LinkedHashMap<>();
             node.properties().forEach(field->copy.put(field.getKey(),field.getValue()));
-            if(node.path("role").asText().equals("user"))copy.put("content",EvidenceWire.encode(mapper,packet));
+            if(node.path("role").asText().equals("user"))copy.put("content",EvidenceWire.encode(mapper,packet,references));
             messages.add(copy);
         }
         selected.put("messages",messages);return mapper.writeValueAsString(selected);

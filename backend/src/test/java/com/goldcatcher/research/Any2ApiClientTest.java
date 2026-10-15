@@ -377,16 +377,21 @@ class Any2ApiClientTest {
     void nativeAndEmulatedAdaptersUseOneLogicalProtocolWithoutForcingTextModelsToWriteJson(boolean nativeTool)throws Exception{
         var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);var route=new AiRoute("vendor","vendor","vendor/model","https://localhost/vendor/v1","TEST",10000,16000,30000,2,1000,2,true);
         var catalog=response(200,"{\"available\":true,\"capabilities\":{\"structured_output\":true,\"tools\":{\"function_calling\":true,\"strict\":true,\"bridge\":\""+(nativeTool?"native":"emulated_function_bridge")+"\"},\"supported_parameters\":{\"chat_completions\":[\"response_format\"]}}}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
-        var canonical=f.mapper.readTree("{\"title\":\"裁决\",\"output\":\"等待确认\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"MIXED\",\"selectedCandidateId\":\"WAIT\",\"quotedMessages\":[],\"evidenceRefs\":[],\"impacts\":[]}");
+        var canonical=f.mapper.readTree("{\"title\":\"裁决\",\"output\":\"等待确认\",\"shortDirection\":\"UNKNOWN\",\"longDirection\":\"MIXED\",\"plan\":{\"action\":\"WAIT\"},\"impacts\":[]}");
         when(remote.sendInference(any(),eq(8_000_000),any())).thenAnswer(call->{
             var request=(java.net.http.HttpRequest)call.getArgument(0);var bytes=new java.io.ByteArrayOutputStream();request.bodyPublisher().orElseThrow().subscribe(new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>(){public void onSubscribe(java.util.concurrent.Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(java.nio.ByteBuffer b){var chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}public void onError(Throwable t){throw new AssertionError(t);}public void onComplete(){}});
             var wire=f.mapper.readTree(bytes.toByteArray());assertThat(wire.has("response_format")).isFalse();assertThat(wire.has("tools")).isEqualTo(nativeTool);
             assertThat(wire.path("messages").path(0).path("content").asText()).contains(nativeTool?"只调用 submit_research":"每行一个 key=value");
+            assertThat(wire.toString()).doesNotContain("private-sentinel","submissionIds","actorId","clientTraceId","maxAttempts","bodyHash","&id","*id","selectedCandidateId","quotedMessages","evidenceRefs");
+            assertThat(wire.path("messages").path(1).path("content").asText()).contains("CPI同比3.7%","4096.123456789012345678");
+            assertThat(request.headers().firstValue("X-Client-Trace-Id")).isPresent();
             var message=f.mapper.createObjectNode();if(nativeTool){var function=message.putArray("tool_calls").addObject().putObject("function");function.put("name","submit_research").put("arguments",canonical.toString());}
-            else message.put("content","protocol=GOLD_RESEARCH_V1\ntitle=裁决\noutput=等待确认\nshortDirection=UNKNOWN\nlongDirection=MIXED\nselectedCandidateId=WAIT\n");
+            else message.put("content","protocol=GOLD_RESEARCH_V2\ntitle=裁决\noutput=等待确认\nshortDirection=UNKNOWN\nlongDirection=MIXED\nplan.action=WAIT\n");
             return response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason",nativeTool?"tool_calls":"stop","message",message)))));
         });
-        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var packet=java.util.Map.of("protocol",ResearchProtocol.VERSION,"phase",3,"evidence",java.util.Map.of());
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);var packet=java.util.Map.of("protocol",ModelProtocol.VERSION,"phase",3,"actorId","private-sentinel-actor",
+            "execution",java.util.Map.of("clientTraceId","private-sentinel-trace","attempt",1,"maxAttempts",3),"submissionIds",java.util.Map.of("news",java.util.List.of("private-sentinel-news")),
+            "evidence",java.util.Map.of("quote",java.util.Map.of("bid","4096.123456789012345678"),"news",java.util.List.of(java.util.Map.of("id","private-sentinel-news","bodyHash","private-sentinel-hash","source","private-sentinel-source","excerpt","CPI同比3.7%"))));
         assertThat(client.complete(route,"冻结证据。",packet,f.clock.instant().plusSeconds(2)).output()).isEqualTo(canonical);
     }
     @Test void oversizedLocalPacketDoesNotCoolDownAProviderThatWasNeverCalled()throws Exception{

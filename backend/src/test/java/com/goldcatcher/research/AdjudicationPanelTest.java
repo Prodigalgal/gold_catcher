@@ -7,6 +7,19 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 
 class AdjudicationPanelTest {
+    @Test void noIdJudgesMustCopyOneWholeCandidateAndCannotBlendOrRewriteConditions(){
+        var a=proposal("a","100");var b=proposal("b","105");
+        var judges=new ArrayList<ResearchService.Message>();for(String actor:List.of("J1","J2","J3")){
+            var output=(tools.jackson.databind.node.ObjectNode)output();output.set("plan",a.answer().output().path("plan").deepCopy());
+            judges.add(message("judge-"+actor,actor,3,output));
+        }
+        var result=AdjudicationPanel.aggregate(f.mapper,List.of(a,b),judges,actors);
+        assertThat(result.verdict().path("plan")).isEqualTo(a.answer().output().path("plan"));assertThat(result.audit().path("winningVotes").asInt()).isEqualTo(3);
+        var mixed=judges.getFirst().answer().output().deepCopy();((tools.jackson.databind.node.ObjectNode)mixed.path("plan")).put("entryPrice","103");
+        assertThatThrownBy(()->AdjudicationPanel.validateVote(f.mapper,mixed,List.of(a,b),f.mapper.createObjectNode())).hasMessage("INVALID_JUDGE_CANDIDATE");
+        ((tools.jackson.databind.node.ObjectNode)mixed.path("plan")).put("entryPrice","100").put("invalidate","另一失效条件");
+        assertThatThrownBy(()->AdjudicationPanel.validateVote(f.mapper,mixed,List.of(a,b),f.mapper.createObjectNode())).hasMessage("INVALID_JUDGE_CANDIDATE");
+    }
     @Test void independentJudgesUsingArenaRandomFallbackStillNeedThreeDistinctSeats(){
         var votes=new ArrayList<ResearchService.Message>();for(String id:List.of("J1","J2","J3")){
             var vote=vote(id,"WAIT");var a=vote.answer();var actor=actors.stream().filter(item->item.id().equals(id)).findFirst().orElseThrow();
