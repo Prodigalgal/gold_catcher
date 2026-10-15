@@ -4,6 +4,21 @@
 .gc-news-summary .gc-live-prose { margin: 8px 0; line-height: 1.75; }
 .gc-news-summary small { display: block; margin-top: 6px; font-size: 11px; line-height: 1.65; }
 .gc-news-summary small.gc-live-error { color: var(--gc-danger, #e06a73); }
+.gc-live-news-list { display: grid; gap: 12px; margin-top: 16px; }
+.gc-live-news { appearance: none; display: block; width: 100%; min-width: 0; padding: 16px; border: 1px solid var(--gc-line); border-radius: var(--gc-radius-sm); background: var(--gc-surface); color: var(--gc-text); font: inherit; text-align: left; overflow-wrap: anywhere; }
+.gc-live-news:hover { border-color: var(--gc-gold); }
+.gc-live-news:focus-visible { outline: 2px solid var(--gc-gold); outline-offset: 3px; }
+.gc-live-news-meta { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; color: var(--gc-text-secondary, var(--gc-muted)); font-size: 11px; line-height: 1.6; }
+.gc-live-news-meta time { white-space: nowrap; }
+.gc-live-news-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.gc-live-news-title h3 { min-width: 0; margin: 0; font-size: 14px; line-height: 1.6; }
+.gc-live-news-title .gc-impact-badge { flex-shrink: 0; }
+.gc-live-news > p { margin: 8px 0; color: var(--gc-text); font-size: 12px; line-height: 1.75; }
+.gc-live-news .gc-news-summary .gc-live-prose { color: var(--gc-text); font-size: 12px; }
+.gc-live-news .gc-news-summary-label span, .gc-live-news .gc-news-summary small { color: var(--gc-text-secondary, var(--gc-muted)); }
+.gc-news-quality-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; color: var(--gc-text-secondary, var(--gc-muted)); font-size: 11px; line-height: 1.6; }
+.gc-news-quality-tags span { padding: 2px 6px; border: 1px solid var(--gc-line); border-radius: 4px; }
+@media (max-width: 580px) { .gc-live-news { padding: 12px; } .gc-live-news-title { flex-wrap: wrap; gap: 6px; } }
 .gc-source-selection details { margin: 14px 0; }
 .gc-source-choice-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 10px; margin: 14px 0; }
 .gc-source-choice { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--gc-line); border-radius: var(--gc-radius-sm); background: var(--gc-surface-raised); }
