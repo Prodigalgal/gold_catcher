@@ -1,0 +1,16 @@
+{
+  "case": "production-minmax-preface-20261015",
+  "raw": "采纳 B 的等待结论，但不照抄它的双向 UNKNOWN —— 风险与成交这条线我看下来，结论是继续等，理由写进 output 了。\n\nprotocol=GOLD_RESEARCH_V1\ntitle=风险复核：维持等待\noutput=采纳B等待，拒绝其双向UNKNOWN。反证：5分钟MACD柱-0.6221、1分钟-0.0167，冲高动能衰减；15分钟收4142.72高于EMA20 4119.7915、贴上轨4148.9686、RSI14=71.1029，多空两侧均缺确认。4小时K线停更于2026-10-14T21:00:00Z不可作当期依据。执行侧：报价为GATE_REST_CFD轮询，无tick时刻与深度，资金费UNVERIFIED，手续费6/手且为单边成本；决策2026-10-15T01:43:29.340562653Z到期，仅余约58秒，触价非成交。账户1000 USD、无挂单，空仓不承担强平敞口；新闻完成0条，无催化可依。\nshortDirection=MIXED\nlongDirection=UNKNOWN\nchanges=复核成本与执行口径仍未核实；方向由双向UNKNOWN收窄为短线MIXED\nquotedMessages=c5741c30-519c-4506-9d14-d41a0cfb19e5-1-B-1\nevidenceRefs=market:quote,market:rules,account,indicators,analysis:drivers,analysis:gaps,333a42d4ebb9bef8547b732861f733e4b18cd01d3305ee813a670ee33e474c08\nplan.action=WAIT\nplan.riskAssessment=仅报价情景：CFD无深度与tick时刻，资金费未核实；15分钟RSI 71.1且高于EMA20，追单双向回吐；窗口仅约58秒，触价非成交。\nplan.invalidate=若核实资金费与撮合口径并出现可成交窗口，或新闻落地给出方向，则重评。",
+  "quotedMessages": [
+    "c5741c30-519c-4506-9d14-d41a0cfb19e5-1-B-1"
+  ],
+  "evidenceRefs": [
+    "market:quote",
+    "market:rules",
+    "account",
+    "indicators",
+    "analysis:drivers",
+    "analysis:gaps",
+    "333a42d4ebb9bef8547b732861f733e4b18cd01d3305ee813a670ee33e474c08"
+  ]
+}
