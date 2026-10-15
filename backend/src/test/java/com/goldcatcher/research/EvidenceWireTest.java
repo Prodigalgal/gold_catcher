@@ -5,6 +5,16 @@ import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.*;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
 class EvidenceWireTest {
+    @Test void stableNumericEncodingIgnoresRuntimeNumberTypeAndScaleWithoutChangingValues(){
+        var f=new TestSupport();var original=f.mapper.createObjectNode();
+        original.put("precise",new java.math.BigDecimal("0.100000000000000000000000000001"));
+        original.put("text","0005.0000");original.put("zero",new java.math.BigDecimal("0.000"));
+        original.putArray("permittedLeverages").add(new java.math.BigDecimal("5")).add(new java.math.BigDecimal("10.0")).add(50.0);
+        var restored=f.mapper.reader().with(tools.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(f.mapper.writeValueAsString(original));
+        assertThat(EvidenceWire.encode(f.mapper,original,false,true)).isEqualTo(EvidenceWire.encode(f.mapper,restored,false,true));
+        assertThat(EvidenceWire.encode(f.mapper,original,false,true)).contains("0005.0000","0.100000000000000000000000000001").doesNotContain("!!float");
+        assertThat(original.path("permittedLeverages").path(0).isFloatingPointNumber()).isTrue();
+    }
     @Test void sharedPlansUseLosslessReferencesWithoutMergingDistinctPeersOrFinancialValues(){
         var f=new TestSupport();var input=f.mapper.createObjectNode();var peers=input.putArray("peers");
         for(int i=0;i<3;i++){

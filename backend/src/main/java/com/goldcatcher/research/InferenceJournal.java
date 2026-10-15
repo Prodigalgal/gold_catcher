@@ -32,7 +32,7 @@ public class InferenceJournal {
     void finish(String id,JsonNode output,String error){if(id==null)return;store.journal(()->{
         var old=find(id);store.save("inference-flow",id,new Snapshot(old.id(),old.createdAt(),old.version(),old.kind(),old.input(),old.flow(),old.body(),old.bodyHash(),
             error==null?"VALIDATED":"FAILED",output,error));return null;});}
-    public Snapshot find(String id){checkId(id);return store.find("inference-flow",id,Snapshot.class).orElseThrow(()->new IllegalArgumentException("DATA_FLOW_NOT_FOUND"));}
+    public Snapshot find(String id){checkId(id);return store.findExact("inference-flow",id,Snapshot.class).orElseThrow(()->new IllegalArgumentException("DATA_FLOW_NOT_FOUND"));}
     public Map<String,Object> detail(String id){return Map.of("snapshot",find(id),"exchanges",exchanges(id));}
     private List<Exchange> exchanges(String id){var out=new ArrayList<Exchange>();for(int n=1;n<=2;n++)store.find("inference-exchange",id+":"+n,Exchange.class).ifPresent(out::add);return List.copyOf(out);}
     public Replay replay(String id){return replay(mapper,find(id),exchanges(id));}
@@ -40,7 +40,7 @@ public class InferenceJournal {
         if(!ModelDataFlow.VERSION.equals(saved.version()))throw new IllegalArgumentException("UNSUPPORTED_DATA_FLOW_VERSION");
         return ModelDataFlow.inspect(mapper,saved.input().packet(),saved.input().compression(),name);}
     public static Replay replay(ObjectMapper mapper,Snapshot saved,List<Exchange> exchanges){
-        if(!ModelDataFlow.VERSION.equals(saved.version())||!InferenceRequest.VERSION.equals(saved.input().version()))
+        if(!ModelDataFlow.VERSION.equals(saved.version())||!InferenceRequest.supported(saved.input().version()))
             return new Replay(saved.version(),false,false,false,false,"UNSUPPORTED_VERSION",null,null,List.of());
         var plan=InferenceRequest.prepare(mapper,saved.input());
         boolean inputMatches=plan.flow().output().equals(saved.flow().output());

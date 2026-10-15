@@ -41,13 +41,16 @@ final class ContextWindow {
         return (int)Math.min(Integer.MAX_VALUE,Math.ceil(ratio*100));
     }
     static Prepared prepare(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits) {
-        return prepare(mapper,request,packet,limits,true);
+        return prepare(mapper,request,packet,limits,true,false);
     }
     static Prepared prepareModel(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits) {
-        return prepare(mapper,request,packet,limits,false);
+        return prepare(mapper,request,packet,limits,false,true);
     }
-    private static Prepared prepare(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits,boolean references) {
-        JsonNode originalPacket=mapper.valueToTree(packet);String originalBody=body(mapper,request,originalPacket,references);
+    static Prepared prepareModelV1(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits) {
+        return prepare(mapper,request,packet,limits,false,false);
+    }
+    private static Prepared prepare(ObjectMapper mapper,Map<String,Object> request,Object packet,Limits limits,boolean references,boolean stableNumbers) {
+        JsonNode originalPacket=mapper.valueToTree(packet);String originalBody=body(mapper,request,originalPacket,references,stableNumbers);
         int messages=((List<?>)request.get("messages")).size();Size original=size(originalBody,messages);
         Prepared last=new Prepared(originalBody,originalPacket,original,original,List.of());
         if(!references||fits(original,limits,true))return last;
@@ -84,19 +87,19 @@ final class ContextWindow {
                     shorten(impact,"counter",impactLimit,impactPath+"counter",changes);
                 }
             }
-            String serialized=body(mapper,request,selected,references);
+            String serialized=body(mapper,request,selected,references,stableNumbers);
             last=new Prepared(serialized,selected,original,size(serialized,messages),List.copyOf(changes));
             if(fits(last.sent(),limits,true))return last;
         }
         return last; // The caller records this failed preflight and does not send it.
     }
-    private static String body(ObjectMapper mapper,Map<String,Object> request,JsonNode packet,boolean references) {
+    private static String body(ObjectMapper mapper,Map<String,Object> request,JsonNode packet,boolean references,boolean stableNumbers) {
         Map<String,Object> selected=new LinkedHashMap<>(request);
         var messages=new ArrayList<Map<String,Object>>();
         for(Object message:(List<?>)request.get("messages")) {
             var node=mapper.valueToTree(message);Map<String,Object> copy=new LinkedHashMap<>();
             node.properties().forEach(field->copy.put(field.getKey(),field.getValue()));
-            if(node.path("role").asText().equals("user"))copy.put("content",EvidenceWire.encode(mapper,packet,references));
+            if(node.path("role").asText().equals("user"))copy.put("content",EvidenceWire.encode(mapper,packet,references,stableNumbers));
             messages.add(copy);
         }
         selected.put("messages",messages);return com.goldcatcher.CanonicalJson.text(mapper,selected);

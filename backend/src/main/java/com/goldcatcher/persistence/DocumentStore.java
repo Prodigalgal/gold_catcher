@@ -43,6 +43,11 @@ public class DocumentStore {
         return jdbc.query("SELECT body FROM gc_document WHERE kind=? AND id=?",
             (rs,row)->mapper.readValue(rs.getString(1),type),kind,id).stream().findFirst();
     }
+    /** Replay records contain arbitrary JSON numbers; never round them through a binary double when loading. */
+    public <T> Optional<T> findExact(String kind,String id,Class<T> type){
+        var reader=mapper.readerFor(type).with(tools.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+        return jdbc.query("SELECT body FROM gc_document WHERE kind=? AND id=?",(rs,row)->reader.<T>readValue(rs.getString(1)),kind,id).stream().findFirst();
+    }
     public <T> Optional<T> find(String kind,String id,tools.jackson.core.type.TypeReference<T> type){return jdbc.query("SELECT body FROM gc_document WHERE kind=? AND id=?",
         (rs,row)->mapper.readValue(rs.getString(1),type),kind,id).stream().findFirst();}
     public <T> List<T> list(String kind, Class<T> type, int limit) {

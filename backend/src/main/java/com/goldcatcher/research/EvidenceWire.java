@@ -12,11 +12,14 @@ final class EvidenceWire {
         return encode(mapper,packet,true);
     }
     static String encode(ObjectMapper mapper,JsonNode packet,boolean references){
+        return encode(mapper,packet,references,false);
+    }
+    static String encode(ObjectMapper mapper,JsonNode packet,boolean references,boolean stableNumbers){
         packet=com.goldcatcher.CanonicalJson.tree(mapper,packet);
         String json=mapper.writeValueAsString(packet);var options=new DumperOptions();options.setDefaultFlowStyle(DumperOptions.FlowStyle.FLOW);
         options.setExplicitStart(true);options.setAllowUnicode(true);options.setSplitLines(false);options.setWidth(1000000);
         // Equal collection subtrees share YAML anchors. Distinct peer IDs/plans remain distinct.
-        String yaml=compactFlow(new Yaml(options).dump(value(packet,references?new HashMap<>():null)).stripTrailing());
+        String yaml=compactFlow(new Yaml(options).dump(value(packet,references?new HashMap<>():null,stableNumbers)).stripTrailing());
         return mapper.writeValueAsString(yaml).length()<mapper.writeValueAsString(json).length()?yaml:json;
     }
     /** Remove optional flow-separator padding, never whitespace belonging to a scalar. */
@@ -43,10 +46,11 @@ final class EvidenceWire {
         }
         return out.toString();
     }
-    private static Object value(JsonNode node,Map<Object,Object> shared){
-        if(node.isObject()){var result=new LinkedHashMap<String,Object>();node.properties().forEach(field->result.put(field.getKey(),value(field.getValue(),shared)));return shared==null?result:shared.computeIfAbsent(result,key->result);}
-        if(node.isArray()){var result=new ArrayList<>();node.forEach(item->result.add(value(item,shared)));return shared==null?result:shared.computeIfAbsent(result,key->result);}
-        if(node.isTextual())return node.asText();if(node.isIntegralNumber())return node.bigIntegerValue();if(node.isFloatingPointNumber())return node.decimalValue();
+    private static Object value(JsonNode node,Map<Object,Object> shared,boolean stableNumbers){
+        if(node.isObject()){var result=new LinkedHashMap<String,Object>();node.properties().forEach(field->result.put(field.getKey(),value(field.getValue(),shared,stableNumbers)));return shared==null?result:shared.computeIfAbsent(result,key->result);}
+        if(node.isArray()){var result=new ArrayList<>();node.forEach(item->result.add(value(item,shared,stableNumbers)));return shared==null?result:shared.computeIfAbsent(result,key->result);}
+        if(node.isTextual())return node.asText();if(node.isIntegralNumber())return node.bigIntegerValue();
+        if(node.isFloatingPointNumber()){var decimal=node.decimalValue();if(stableNumbers){decimal=decimal.stripTrailingZeros();if(decimal.scale()<=0)return decimal.toBigIntegerExact();}return decimal;}
         if(node.isBoolean())return node.asBoolean();if(node.isNull())return null;throw new IllegalArgumentException("UNSUPPORTED_EVIDENCE_VALUE");
     }
 }
