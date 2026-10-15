@@ -4,10 +4,10 @@ import os
 import time
 import urllib.error
 import urllib.request
-import http.client
 from decimal import Decimal
 from pathlib import Path
 from auth_client import SessionClient, USER_AGENT
+from http_snapshot import get_snapshot
 
 commit = os.environ["SOURCE_COMMIT"]
 token = os.environ["ARGOCD_READ_TOKEN"]
@@ -46,13 +46,7 @@ else:
     raise SystemExit('API unexpectedly accessible without authentication')
 client.login(username, password)
 def snapshot(path):
-    for attempt in range(3):
-        try:
-            return client.request(path)
-        except (http.client.IncompleteRead, ConnectionResetError, urllib.error.URLError, TimeoutError):
-            if attempt == 2:
-                raise
-            time.sleep(1)
+    return get_snapshot(client, path)
 api = client.request('/api/system/status')
 if api.get("sourceCommit") != commit or api.get("mode") != "INTERNAL_SIMULATION_ALPHA" or api.get('venue') != 'GATE' or api.get('authentication') != 'SESSION_CSRF_SHA256_POW':
     raise SystemExit("API source commit/mode/venue/authentication mismatch")
