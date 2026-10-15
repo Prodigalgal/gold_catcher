@@ -43,18 +43,27 @@ final class ResearchProtocol {
         }
         return Map.of("type","object","properties",properties,"required",List.copyOf(properties.keySet()),"additionalProperties",false);
     }
-    static boolean text(String raw){return unfence(raw).matches("(?s)^(?:protocol|title|analysisSummary|output|shortDirection|longDirection)\\s*=.*");}
+    static boolean text(String raw){return framedText(raw).matches("(?s)^(?:protocol|title|analysisSummary|output|shortDirection|longDirection)\\s*=.*");}
     static String unfence(String raw){
         String content=raw.strip();if(content.startsWith("```")){int newline=content.indexOf('\n'),end=content.lastIndexOf("```");
             if(newline<0||end<=newline||!content.substring(end+3).isBlank())throw invalid();content=content.substring(newline+1,end).strip();}
         return content;
+    }
+    private static String framedText(String raw){
+        String content=unfence(raw);var marker=java.util.regex.Pattern.compile("(?m)^protocol[\\t ]*=").matcher(content);
+        if(!marker.find()||marker.start()==0)return content;
+        String prefix=content.substring(0,marker.start());
+        // A bounded prose preface may surround a result, but must never hide earlier structured fields or JSON.
+        if(prefix.length()>2048||prefix.contains("```")||prefix.contains("{")||prefix.contains("}")
+            ||java.util.regex.Pattern.compile("(?m)^[\\t ]*[A-Za-z_][A-Za-z0-9_.-]*[\\t ]*=").matcher(prefix).find())throw invalid("PREFIX");
+        return content.substring(marker.start());
     }
     static JsonNode parse(ObjectMapper mapper,String raw,boolean compression,boolean judging){
         return parse(mapper,raw,compression,judging,null);
     }
     static JsonNode parse(ObjectMapper mapper,String raw,boolean compression,boolean judging,Integer phase){
         var fields=new LinkedHashMap<String,String>();
-        for(String line:unfence(raw).split("\\R")){if(line.isBlank())continue;int split=line.indexOf('=');if(split<1)throw invalid("LINE");
+        for(String line:framedText(raw).split("\\R")){if(line.isBlank())continue;int split=line.indexOf('=');if(split<1)throw invalid("LINE");
             String key=line.substring(0,split).strip(),value=line.substring(split+1).strip();
             if(key.startsWith("impacts."))key="impact."+key.substring(8);
             if(key.matches("(?:newsImpact|news|impact)\\.[1-4]\\.(?:newsId|horizon|direction|reason|counter)"))key=key.replaceFirst("^[^.]+","impact");
@@ -131,7 +140,7 @@ final class ResearchProtocol {
         else if(error.startsWith("INVALID_DIRECTION"))detail="两方向只用BULLISH/BEARISH/UNKNOWN/MIXED。";
         else if(error.equals("INVALID_EVIDENCE_ARRAY"))detail="quotedMessages最多6个原id，evidenceRefs最多14个原id，impact最多4组；只选相关引用，无项留空。";
         else if(error.equals("INVALID_IMPACT"))detail="impact每组完整提交newsId/horizon/direction/reason/counter；newsId只抄news.id，horizon=SHORT/LONG，direction按协议；无判断省略整组。";
-        else if(error.equals("INVALID_EVIDENCE_REFERENCE")||error.equals("INVALID_NEWS_REFERENCE")||error.equals("INVALID_PREVIOUS_STAGE_REFERENCE"))detail="引用逐字抄冻结证据或上轮peers的原id，无项留空。";
+        else if(error.equals("INVALID_EVIDENCE_REFERENCE")||error.equals("INVALID_NEWS_REFERENCE")||error.equals("INVALID_PREVIOUS_STAGE_REFERENCE"))detail="引用只选submissionIds中对应列表的完整原id，不用YAML锚点id001等，不确定留空。";
         else if(error.equals("INVALID_JUDGE_CANDIDATE")||error.equals("MISSING_JUDGE_VOTE"))detail="selectedCandidateId=WAIT或修订peers.id，禁止plan。";
         else if(error.startsWith("INVALID_STRUCTURED_OUTPUT"))detail="只用协议列出的key=value，不回显输入，同字段不可冲突。";
         else detail="按协议完整重交，方向、数值/id不猜补。";

@@ -3,6 +3,27 @@ import static org.assertj.core.api.Assertions.*;
 import com.goldcatcher.TestSupport;
 import org.junit.jupiter.api.Test;
 class ResearchProtocolTest {
+    @Test void proseBeforeAnExplicitProtocolPreservesEveryFinancialValueAndIdentity(){
+        String body=base+"quotedMessages=original-peer\nevidenceRefs=original-news,market:quote\nplan.action=CREATE\nplan.quantity=0001.0000000000000001\nplan.entryPrice=4096.123456789012345678\nplan.stopLoss=0\n";
+        String raw="采纳对方的风险结论，下面是本阶段的正式输出。\n\n"+body;
+        assertThat(ResearchProtocol.text(raw)).isTrue();assertThat(ResearchProtocol.parse(f.mapper,raw,false,false)).isEqualTo(ResearchProtocol.parse(f.mapper,body,false,false));
+        assertThat(ResearchProtocol.text("仅有说明，没有协议字段")).isFalse();
+    }
+    @Test void proseFramingNeverDiscardsEarlierFieldsJsonConflictsOrTrailingData(){
+        for(String prefix:java.util.List.of("plan.action=CREATE\n","title=另一结论\n","{\"plan\":{\"action\":\"CREATE\"}}\n","x".repeat(2049)+"\n"))
+            assertThatThrownBy(()->ResearchProtocol.parse(f.mapper,prefix+base+"plan.action=WAIT",false,false)).hasMessageStartingWith("INVALID_STRUCTURED_OUTPUT");
+        assertThatThrownBy(()->ResearchProtocol.parse(f.mapper,"说明\n"+base+"plan.action=WAIT\n额外尾文",false,false)).hasMessage("INVALID_STRUCTURED_OUTPUT_LINE");
+        assertThatThrownBy(()->ResearchProtocol.parse(f.mapper,"说明\nprotocol=OTHER\n"+base+"plan.action=WAIT",false,false)).hasMessageStartingWith("INVALID_STRUCTURED_OUTPUT");
+    }
+    @Test void actualMinmaxPrefaceReplaysThroughTheNormalOutputValidator()throws Exception{
+        try(var stream=getClass().getResourceAsStream("/research/minmax-prefaced-result.json")){
+            var fixture=f.mapper.readTree(stream);String raw=fixture.path("raw").asText();assertThat(ResearchProtocol.text(raw)).isTrue();
+            var result=ResearchProtocol.parse(f.mapper,raw,false,false,2);
+            new Any2ApiClient(f.settings,new com.goldcatcher.RemoteHttp(),f.mapper,f.clock).validate(result);
+            assertThat(result.path("quotedMessages")).isEqualTo(fixture.path("quotedMessages"));assertThat(result.path("evidenceRefs")).isEqualTo(fixture.path("evidenceRefs"));
+            assertThat(result.path("plan").path("action").asText()).isEqualTo("WAIT");assertThat(result.path("shortDirection").asText()).isEqualTo("MIXED");
+        }
+    }
     @Test void missingTextMarkerAndKnownImpactAliasesPreserveSubmittedValues(){
         var f=new TestSupport();String body="title=观察\noutput=等待\nshortDirection=UNKNOWN\nlongDirection=MIXED\nplan.action=WAIT\nnewsImpact.1.newsId=original-id\nnewsImpact.1.horizon=SHORT\nnewsImpact.1.direction=UNKNOWN\nnewsImpact.1.reason=原始依据\nnewsImpact.1.counter=原始反证\n";
         assertThat(ResearchProtocol.text(body)).isTrue();var output=ResearchProtocol.parse(f.mapper,body,false,false);

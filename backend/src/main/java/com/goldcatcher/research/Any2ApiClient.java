@@ -199,6 +199,10 @@ public class Any2ApiClient {
         if(forced==null)try{return routed(complete(primary,instruction,packet,compression,limit),primary,primary,false,null,failed,began);}
         catch(Exception failure){
             if(failure instanceof InterruptedException||Thread.currentThread().isInterrupted()||!fallbackAllowed(safeError(failure)))throw failure;
+            var execution=mapper.valueToTree(packet).path("execution");
+            // Research owns format-correction retries. Preserve its primary error until the final allowed attempt.
+            if(!compression&&ResearchPolicy.repairable(safeError(failure))
+                &&execution.path("attempt").asInt(1)<execution.path("maxAttempts").asInt(1))throw failure;
             reason=safeError(failure);failed.add(new RouteFailure(primary.provider(),primary.model(),reason,failure instanceof InferenceFailure partial?partial.partial():null));
         }
         if(!clock.instant().isBefore(limit)){Answer partial=failed.isEmpty()?null:failed.getFirst().partial();if(partial==null)partial=new Answer(primary.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_RECEIVED",null,0);throw new InferenceFailure("REQUEST_TIMEOUT",routed(partial,primary,primary,false,reason,failed,began));}

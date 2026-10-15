@@ -5,6 +5,25 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
+    @Test void repairableResearchOutputRetriesThePrimaryBeforeTheFinalArenaFallback()throws Exception{
+        var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);var catalog=response(200,"{\"available\":true}");when(remote.send(any(),eq(500_000))).thenReturn(catalog);
+        var backup=new AiRoute("backup","arena","arena/Max","https://localhost/arena/v1","TEST",10000,16000,30000,2,1000,300,false);
+        var primary=new AiRoute("primary","grok_web","grok_web/grok-3","https://localhost/grok_web/v1","TEST",10000,16000,30000,2,1000,300,false,backup);
+        String valid="protocol=GOLD_RESEARCH_V1\ntitle=等待\noutput=观察\nshortDirection=UNKNOWN\nlongDirection=UNKNOWN\nplan.action=WAIT\n";
+        var good=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",valid))))));
+        var bad=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",valid+"plan.riskAssessment="+"险".repeat(121)))))));
+        var failPrimary=new java.util.concurrent.atomic.AtomicBoolean(true);var arenaCalls=new java.util.concurrent.atomic.AtomicInteger();
+        when(remote.sendInference(any(),eq(8_000_000),any())).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);
+            if(request.uri().getPath().contains("/arena/")){arenaCalls.incrementAndGet();return good;}return failPrimary.get()?bad:good;});
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        assertThatThrownBy(()->client.complete(primary,"观察",java.util.Map.of("phase",0,"lane","deep_lane","execution",java.util.Map.of("attempt",1,"maxAttempts",3)),f.clock.instant().plusSeconds(300)))
+            .hasMessage("PLAN_NARRATIVE_TOO_LONG_RISKASSESSMENT");assertThat(arenaCalls.get()).isZero();
+        failPrimary.set(false);var repaired=client.complete(primary,"观察",java.util.Map.of("phase",0,"lane","deep_lane","execution",java.util.Map.of("attempt",2,"maxAttempts",3)),f.clock.instant().plusSeconds(300));
+        assertThat(repaired.routing().fallbackUsed()).isFalse();assertThat(arenaCalls.get()).isZero();
+        failPrimary.set(true);var fallback=client.complete(primary,"观察",java.util.Map.of("phase",0,"lane","deep_lane","execution",java.util.Map.of("attempt",3,"maxAttempts",3)),f.clock.instant().plusSeconds(300));
+        assertThat(fallback.routing().fallbackUsed()).isTrue();assertThat(fallback.routing().reason()).isEqualTo("PLAN_NARRATIVE_TOO_LONG_RISKASSESSMENT");assertThat(arenaCalls.get()).isEqualTo(1);
+        verify(remote,times(4)).sendInference(any(),eq(8_000_000),any());
+    }
     @Test void currentAny2apiCatalogWithoutAvailabilityAdmitsResearchJudgingAndCompression()throws Exception{
         var f=new TestSupport();f.environment.setProperty("GOLD_AI_ROUTES_JSON",java.nio.file.Files.readString(java.nio.file.Path.of("../config/ai-routes.fast.example.json")));
         for(var route:f.settings.allRoutes())f.environment.setProperty(route.apiKeyEnv(),"test-only");var remote=mock(RemoteHttp.class);
