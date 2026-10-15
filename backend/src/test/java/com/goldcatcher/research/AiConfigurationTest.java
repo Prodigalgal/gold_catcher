@@ -8,6 +8,20 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class AiConfigurationTest {
+    @Test void largeCurrentCatalogRetainsAllChoicesWithoutClaimingInferenceAvailability()throws Exception{
+        var models=new ArrayList<Map<String,Object>>();for(int i=0;i<249;i++)models.add(Map.of("id",i==0?"Max":"model-"+i,"metadata",Map.of("description","x".repeat(4000))));
+        byte[] bytes=f.mapper.writeValueAsBytes(Map.of("data",models));assertThat(bytes.length).isGreaterThan(500_000);
+        var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/v1/models",exchange->{exchange.sendResponseHeaders(200,bytes.length);try(var out=exchange.getResponseBody()){out.write(bytes);}});server.start();
+        try{
+            var u=update(0,null);var providers=u.providers().stream().map(p->new AiConfiguration.ProviderInput(p.id(),p.label(),"http://127.0.0.1:"+server.getAddress().getPort()+"/v1",p.protocol(),p.catalogMode(),"catalog-test-only")).toList();
+            service.save(new AiConfiguration.Update(0,providers,u.shortRoutes(),u.longRoutes(),true,u.compression()));
+            var liveHttp=new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,new RemoteHttp());liveHttp.recover();var result=f.mapper.valueToTree(liveHttp.refreshCatalogs());
+            assertThat(result.path("catalogs").size()).isGreaterThanOrEqualTo(3);
+            for(var catalog:result.path("catalogs")){assertThat(catalog.path("state").asText()).isEqualTo("CURRENT");assertThat(catalog.path("models").size()).isEqualTo(249);
+                assertThat(catalog.path("models").get(0).path("available").isNull()).isTrue();}
+        }finally{server.stop(0);}
+    }
     @Test void upgradeAddsArenaForEverySeatOnceAndPreservesTheOldFrozenRevision(){
         f.environment.setProperty("ANY2API_ARENA_API_KEY","arena-bootstrap-secret");service.save(update(0,"prior-secret"));
         var old=(tools.jackson.databind.node.ObjectNode)f.mapper.valueToTree(f.store.find("ai-configuration","current",AiConfiguration.Configuration.class).orElseThrow());old.remove("schemaVersion");
