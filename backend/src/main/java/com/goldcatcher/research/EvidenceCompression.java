@@ -139,21 +139,20 @@ public class EvidenceCompression {
             coverage.eligibleBodies()==0?"NO_ELIGIBLE_BODY":"UP_TO_DATE");return status;}
     /** Never waits for AI or admits summaries completed after the research cutoff. */
     public List<Map<String,Object>> apply(List<Map<String,Object>> frozen,Instant cutoff,String runId){
-        var route=settings.compressionRoute();var selected=new ArrayList<Map<String,Object>>();var audit=new ArrayList<Map<String,Object>>();
+        var route=settings.compressionRoute();boolean enabled=enabled();var inputs=new ArrayList<NewsSummaryProjection.Item>();
         var snapshots=new HashMap<String,JsonNode>();store.find("research-news",runId,JsonNode.class).ifPresent(archive->{for(var snapshot:archive.path("articles"))snapshots.put(snapshot.path("news").path("id").asText(),snapshot);});
         for(var original:frozen){var row=new LinkedHashMap<>(original);String id=String.valueOf(row.get("id"));var snapshot=snapshots.get(id);
             var article=snapshot==null?store.find("news",id,NewsService.News.class).orElse(null):mapper.treeToValue(snapshot.path("news"),NewsService.News.class);
             var text=snapshot!=null&&!snapshot.path("sourceText").isNull()&&!snapshot.path("sourceText").isMissingNode()?mapper.treeToValue(snapshot.path("sourceText"),NewsService.SourceText.class):article==null?null:news.textForCompression(article.id(),cutoff);Result result=null;
             Object sourceHash=row.containsKey("sourceTextHash")?row.get("sourceTextHash"):row.get("bodyHash");
-            if(enabled()&&suitable(text)&&Objects.equals(text.hash(),sourceHash))result=ready(key(article,text,route),cutoff);
-            var entry=new LinkedHashMap<String,Object>();entry.put("newsId",row.get("id"));entry.put("title",row.get("title"));entry.put("bodyHash",row.get("bodyHash"));entry.put("sourceTextHash",sourceHash);
-            entry.put("sourceFormat",text==null?null:text.format());entry.put("originalCharacters",text==null?null:text.text().codePointCount(0,text.text().length()));
-            if(result!=null){row.put("excerpt",result.excerpt());row.remove("sourceTextHash");
-                entry.put("state",result.state());entry.put("resultId",result.id());entry.put("provider",result.provider());entry.put("model",result.model());entry.put("completedAt",result.completedAt());entry.put("processedChunks",result.processedChunks());entry.put("totalChunks",result.totalChunks());selected.add(row);}
-            else entry.put("state",enabled()?"COMPRESSION_PENDING":"COMPRESSION_DISABLED");
-            String excerpt=result==null?"":result.excerpt();entry.put("sentCharacters",excerpt.codePointCount(0,excerpt.length()));audit.add(entry);
+            if(enabled&&suitable(text)&&Objects.equals(text.hash(),sourceHash))result=ready(key(article,text,route),cutoff);
+            inputs.add(new NewsSummaryProjection.Item(row,sourceHash==null?null:sourceHash.toString(),text==null?null:text.format(),
+                text==null?null:text.text().codePointCount(0,text.text().length()),result));
         }
-        store.save("research-preprocessing",runId,Map.of("provider",route.provider(),"model",route.model(),"method",VERSION,"voting",false,"cutoff",cutoff,"articles",audit,"completedArticles",selected.size(),"omittedArticles",audit.size()-selected.size()));return selected;
+        var input=new NewsSummaryProjection.Input(NewsSummaryProjection.VERSION,enabled,cutoff,route.provider(),route.model(),inputs);
+        var result=NewsSummaryProjection.project(input);
+        store.transaction(()->{store.save("research-summary-selection",runId,Map.of("input",input,"output",result));
+            store.save("research-preprocessing",runId,result.audit());return null;});return result.selected();
     }
     @Scheduled(fixedDelay=2000,initialDelay=15000) public synchronized void collect(){
         var route=settings.compressionRoute();loadRuntime(route);Instant cutoff=clock.instant();var articles=news.compressionCandidates(cutoff);

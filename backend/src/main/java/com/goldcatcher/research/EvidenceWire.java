@@ -12,6 +12,7 @@ final class EvidenceWire {
         return encode(mapper,packet,true);
     }
     static String encode(ObjectMapper mapper,JsonNode packet,boolean references){
+        packet=com.goldcatcher.CanonicalJson.tree(mapper,packet);
         String json=mapper.writeValueAsString(packet);var options=new DumperOptions();options.setDefaultFlowStyle(DumperOptions.FlowStyle.FLOW);
         options.setExplicitStart(true);options.setAllowUnicode(true);options.setSplitLines(false);options.setWidth(1000000);
         // Equal collection subtrees share YAML anchors. Distinct peer IDs/plans remain distinct.

@@ -1,0 +1,11 @@
+.gc-data-flow { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--gc-line); border-radius: var(--gc-radius-sm,8px); background: var(--gc-surface-raised,var(--gc-surface)); color: var(--gc-text); }
+.gc-data-flow summary { cursor: pointer; color: var(--gc-text); overflow-wrap: anywhere; }
+.gc-data-flow p { font-size: 12px; line-height: 1.65; color: var(--gc-text); }
+.gc-data-flow pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--gc-text); padding: 10px; background: var(--gc-bg); }
+.gc-flow-meta,.gc-flow-steps summary { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; font-size: 12px; }
+.gc-flow-meta b { color: var(--gc-gold); }
+.gc-flow-steps { padding-left: 22px; }
+.gc-flow-steps li { padding: 9px 0; border-bottom: 1px solid var(--gc-line); }
+.gc-flow-steps code,.gc-data-flow small { display: block; margin-top: 5px; overflow-wrap: anywhere; color: var(--gc-muted); font-size: 11px; }
+.gc-flow-replay { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 12px 0; padding: 10px; border-left: 3px solid var(--gc-gold); font-size: 12px; }
+.gc-data-flow .gc-flow-error { color: var(--gc-negative); }

@@ -20,16 +20,18 @@ public class Any2ApiClient {
     public record Budget(int bytes,int characters,long gatewayInputEstimate,int messages,int outputReserve,
         String inputHash,String limitSource,String outputEnforcement,ContextWindow.Limits limits,String preparation,
         Integer utilizationPercent,Integer originalBytes,Integer originalCharacters,List<ContextWindow.Change> changes,
-        String sourcePacketHash,String sentPacketHash,String wireEncoding) {
+        String sourcePacketHash,String sentPacketHash,String wireEncoding,String dataFlowId) {
         public Budget {
             if(preparation==null)preparation="LEGACY_NOT_RECORDED";
             if(changes==null)changes=List.of();
             if(wireEncoding==null)wireEncoding="LEGACY_NOT_RECORDED";
         }
+        Budget withDataFlow(String id){return new Budget(bytes,characters,gatewayInputEstimate,messages,outputReserve,inputHash,limitSource,
+            outputEnforcement,limits,preparation,utilizationPercent,originalBytes,originalCharacters,changes,sourcePacketHash,sentPacketHash,wireEncoding,id);}
         public Budget(int bytes,int characters,long gatewayInputEstimate,int messages,int outputReserve,
             String inputHash,String limitSource,String outputEnforcement) {
             this(bytes,characters,gatewayInputEstimate,messages,outputReserve,inputHash,limitSource,outputEnforcement,
-                null,"LEGACY_NOT_RECORDED",0,bytes,characters,List.of(),null,null,null);
+                null,"LEGACY_NOT_RECORDED",0,bytes,characters,List.of(),null,null,null,null);
         }
     }
     public record Answer(String model,String analysis,String analysisSource,String raw,JsonNode output,
@@ -50,7 +52,7 @@ public class Any2ApiClient {
     public record RouteCheck(String routeId,String provider,String model,boolean judge,String state,Instant catalogRetrievedAt,Instant retryAt,String fallbackFor) {}
     public record RouteSelection(String state,List<AiRoute> routes,List<RouteCheck> checks,String basis) {}
     private record Cached(JsonNode catalog,Instant at,String routeKey) {}
-    private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;
+    private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;private final Clock clock;private final InferenceJournal journal;
     private final Map<String,Cached> catalogs=new ConcurrentHashMap<>();
     private static final class ProviderWork {
         final Semaphore lease;final int capacity;final AtomicInteger waiting=new AtomicInteger();
@@ -66,7 +68,11 @@ public class Any2ApiClient {
     private record FailureAt(Instant at,String error) {}
     private final Map<String,String> catalogErrors=new ConcurrentHashMap<>();private final Map<String,FailureAt> failedAt=new ConcurrentHashMap<>();
     public Any2ApiClient(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,Clock clock) {
-        this.settings=settings;this.http=http;this.mapper=mapper;this.clock=clock;
+        this(settings,http,mapper,clock,null);
+    }
+    @org.springframework.beans.factory.annotation.Autowired
+    public Any2ApiClient(RuntimeSettings settings,RemoteHttp http,ObjectMapper mapper,Clock clock,InferenceJournal journal) {
+        this.settings=settings;this.http=http;this.mapper=mapper;this.clock=clock;this.journal=journal;
     }
     public List<ModelState> states() {return settings.allRoutes().stream().map(route->{var cached=currentCatalog(route);
         return new ModelState(route.id(),route.provider(),route.model(),!settings.secret(route).isBlank(),cached==null?null:cached.catalog(),
@@ -224,51 +230,19 @@ public class Any2ApiClient {
         var lease=acquireProvider(route,compression,attemptDeadline,lane);
         Answer captured=null;
         long retryAfter=0;
-        List<Attempt> attempts=new ArrayList<>();
+        List<Attempt> attempts=new ArrayList<>();String flowId=null;
         try {
             JsonNode catalog=catalog(route);
             if(catalogReadiness(route,catalog).equals("MODEL_NOT_AVAILABLE"))throw new IllegalStateException("MODEL_NOT_AVAILABLE");
-            JsonNode capabilities=catalog.path("capabilities");
-            Map<String,Object> request=new LinkedHashMap<>();request.put("model",settings.requestModel(route));
-            request.put("stream",true);
-            request.put("stream_options",Map.of("include_usage",true));
-            boolean adjudication=!compression&&mapper.valueToTree(packet).path("phase").asInt(-1)==3;
             var internalPacket=mapper.valueToTree(packet);
-            boolean unified=Set.of(ResearchProtocol.VERSION,ModelProtocol.VERSION,ResearchProtocol.COMPRESSION_VERSION).contains(internalPacket.path("protocol").asText());
-            boolean modelFacts=compression||unified;
-            JsonNode modelPacket=compression?ModelInput.compression(mapper,internalPacket):unified?ModelInput.research(mapper,internalPacket):internalPacket;
-            if(modelFacts)instruction+=ModelInput.instruction(internalPacket,compression);
-            request.put("messages",List.of(Map.of("role","system","content",instruction),Map.of("role","user","content",mapper.writeValueAsString(packet))));
-            var parameters=capabilities.path("supported_parameters").path("chat_completions");
-            boolean structuredTool=!compression&&!settings.preferJsonText(route)&&capabilities.path("tools").path("function_calling").asBoolean(false)
-                &&capabilities.path("tools").path("strict").asBoolean(false)&&!capabilities.path("tools").path("bridge").asText().equals("emulated_function_bridge");
-            boolean jsonMode=capabilities.path("structured_output").asBoolean(false)||capabilities.path("structured_output").path("supported").asBoolean(false);
-            if(!structuredTool&&jsonMode&&!unified)for(var parameter:parameters)if(parameter.asText().equals("response_format"))request.put("response_format",Map.of("type","json_object"));
-            if(unified&&!compression)request.put("messages",List.of(Map.of("role","system","content",instruction+ModelProtocol.instruction(adjudication,structuredTool,ResearchProtocol.onlyWait(internalPacket))),Map.of("role","user","content",mapper.writeValueAsString(modelPacket))));
-            var sourceOptions=new LinkedHashMap<String,Object>();
-            // One external research seat must not silently launch a second team inside MiniMax.
-            if(route.provider().equals("minmax")&&capabilities.path("provider_options").has("enable_team"))sourceOptions.put("enable_team",false);
-            if(capabilities.path("provider_options").has("web_search_status")&&capabilities.path("parameter_adaptation").path("search").path("mode").asText().equals("mapped"))sourceOptions.put("web_search_status","disabled");
-            if((compression||lane.equals("fast_lane"))&&capabilities.path("provider_options").has("thinking"))sourceOptions.put("thinking",false);
-            if(lane.equals("fast_lane")&&route.provider().equals("minmax")&&Set.of("mapped","toggle_mapping").contains(capabilities.path("parameter_adaptation").path("reasoning").path("mode").asText()))request.put("reasoning_effort","none");
-            if(!sourceOptions.isEmpty())request.put("provider_options",Map.of(route.provider(),sourceOptions));
-            if(structuredTool&&!unified) {
-                int format=instruction.indexOf("格式："),wait=instruction.indexOf("WAIT 时");
-                if(format>=0&&wait>format)request.put("messages",List.of(Map.of("role","system","content",instruction.substring(0,format)+instruction.substring(wait)),
-                    Map.of("role","user","content",mapper.writeValueAsString(packet))));
-            }
-            if(structuredTool){request.put("tools",List.of(Map.of("type","function","function",Map.of("name","submit_research","description","提交本阶段研究结果，只有数据归档，无外部交易行为", "strict",true,"parameters",unified?ModelProtocol.schema():ResearchProtocol.schema(adjudication)))));
-                request.put("tool_choice",Map.of("type","function","function",Map.of("name","submit_research")));}
-            String outputParameter=null;
-            for(String candidate:List.of("max_tokens","max_completion_tokens","max_output_tokens"))
-                for(JsonNode parameter:parameters)if(parameter.asText().equals(candidate)
-                    &&capabilities.path("parameter_adaptation").path(candidate).path("mode").asText().equals("mapped")){outputParameter=candidate;break;}
-            if(settings.genericAiEndpoint(route))outputParameter="max_tokens";
-            if(outputParameter!=null)request.put(outputParameter,route.outputReserve());
-            var limits=ContextWindow.limits(route,catalog);
-            var prepared=modelFacts?ContextWindow.prepareModel(mapper,request,modelPacket,limits):ContextWindow.prepare(mapper,request,packet,limits);String body=prepared.body();
-            Budget budget=budget(route,body,catalog,outputParameter!=null,prepared,
-                NewsService.hash(mapper.writeValueAsString(packet)),NewsService.hash(mapper.writeValueAsString(prepared.packet())));
+            var input=new InferenceRequest.Input(InferenceRequest.VERSION,settings.requestModel(route),route.provider(),route.outputReserve(),
+                settings.preferJsonText(route),settings.genericAiEndpoint(route),compression,lane,catalog.path("capabilities").deepCopy(),
+                ContextWindow.limits(route,catalog),instruction,internalPacket.deepCopy());
+            var plan=InferenceRequest.prepare(mapper,input);var prepared=plan.prepared();String body=prepared.body();
+            boolean unified=plan.unified(),adjudication=plan.adjudication(),structuredTool=plan.structuredTool();var limits=input.limits();
+            Budget budget=budget(route,body,catalog,plan.outputRequested(),prepared,
+                CanonicalJson.hash(CanonicalJson.text(mapper,packet)),CanonicalJson.hash(CanonicalJson.text(mapper,prepared.packet())));
+            if(journal!=null){flowId=journal.prepare(plan);budget=budget.withDataFlow(flowId);}
             budgets.put(route.id(),budget);budgetTimes.put(route.id(),clock.instant());
             if(!ContextWindow.fits(prepared.sent(),limits,true)||(limits.declaredOutput()>0&&route.outputReserve()>limits.declaredOutput()))
                 throw new InferenceFailure("CONTEXT_INSUFFICIENT",new Answer(route.model(),"","NOT_PROVIDED","",null,mapper.createObjectNode(),"UNKNOWN","NOT_SENT",budget,0));
@@ -289,46 +263,32 @@ public class Any2ApiClient {
                     .header("Content-Type","application/json").header("Accept","text/event-stream").header("Accept-Encoding","identity")
                     .POST(HttpRequest.BodyPublishers.ofString(body,StandardCharsets.UTF_8)).build(),8_000_000,responseInfo::set);
                     var headers=responseInfo.get()==null?response.headers():responseInfo.get().headers();
+                    if(journal!=null)journal.exchange(flowId,attempt,response.statusCode(),response.body(),clientTraceId,requestId(headers),null);
                     attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,response.statusCode(),response.statusCode()==200?null:"INFERENCE_HTTP_"+response.statusCode(),clientTraceId,requestId(headers),response.statusCode()==200?"RECEIVED":"FAILED"));
                     retryAfter=response.statusCode()==200?0:retryAfterMillis(response.headers().firstValue("Retry-After").orElse(""),clock.instant());
                     if(attempt==attemptLimit||!List.of(408,425,429,500,502,503,504).contains(response.statusCode())||Duration.between(clock.instant(),deadline).toSeconds()<5)break;
                     long delay=Math.max(1000,retryAfter);if(delay>=Duration.between(clock.instant(),deadline).toMillis())break;Thread.sleep(delay);
-                }catch(Exception transport){var info=responseInfo.get();attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,info==null?null:info.statusCode(),safeError(transport),clientTraceId,info==null?null:requestId(info.headers()),"FAILED"));
+                }catch(Exception transport){var info=responseInfo.get();if(journal!=null)journal.exchange(flowId,attempt,info==null?null:info.statusCode(),null,clientTraceId,info==null?null:requestId(info.headers()),safeError(transport));attempts.add(new Attempt(attempt,began,(System.nanoTime()-measured)/1000000,info==null?null:info.statusCode(),safeError(transport),clientTraceId,info==null?null:requestId(info.headers()),"FAILED"));
                     if(attempt==attemptLimit||!ResearchPolicy.retryable(safeError(transport))||Duration.between(clock.instant(),deadline).toMillis()<=1000)throw transport;
                     Thread.sleep(1000);}
             }
-            if(response.statusCode()!=200) {
-                String code="";try{String upstream=mapper.readTree(response.body()).path("error").path("code").asText().toUpperCase(Locale.ROOT);
-                    if(upstream.matches("[A-Z0-9_]{1,60}"))code="_"+upstream;}catch(RuntimeException ignored){}
-                throw new IllegalStateException("INFERENCE_HTTP_"+response.statusCode()+code);
-            }
-            JsonNode envelope=OpenAiStream.decode(mapper,response.body()),choice=envelope.path("choices").path(0),message=choice.path("message");
-            String finish=choice.path("finish_reason").asText("UNKNOWN");
-            String raw=message.path("content").asText();
-            var calls=message.path("tool_calls");
-            boolean submitted=finish.equals("tool_calls")&&calls.isArray()&&calls.size()==1&&calls.path(0).path("function").path("name").asText().equals("submit_research");
-            if(submitted)raw=calls.path(0).path("function").path("arguments").asText();
-            String reasoning=message.path("reasoning_content").asText();
-            String usageSource=envelope.path("usage_source").asText(envelope.path("usage").path("usage_source").asText("UNKNOWN"));
-            captured=new Answer(envelope.path("model").asText(route.model()),reasoning,reasoning.isBlank()?"NOT_PROVIDED":"PROVIDER_FIELD",raw,null,envelope.path("usage"),usageSource,
+            if(response.statusCode()!=200)throw new IllegalStateException(ModelResponse.httpError(mapper,response.statusCode(),response.body()));
+            var decoded=ModelResponse.extract(mapper,response.body(),route.model());
+            String finish=decoded.finish(),raw=decoded.raw(),reasoning=decoded.reasoning(),usageSource=decoded.usageSource();
+            captured=new Answer(decoded.model(),reasoning,reasoning.isBlank()?"NOT_PROVIDED":"PROVIDER_FIELD",raw,null,decoded.usage(),usageSource,
                 finish,budget,(System.nanoTime()-started)/1_000_000);
-            if(upstreamBusy(raw))throw new IllegalStateException("UPSTREAM_BUSY_TEXT");
-            if(structuredTool&&!submitted)throw new IllegalStateException("REQUIRED_SUBMISSION_MISSING");
-            if(!submitted&&!finish.equals("stop"))throw new IllegalStateException("OUTPUT_NOT_COMPLETE_"+finish.toUpperCase(Locale.ROOT));
             Integer phase=packetJson.has("phase")?packetJson.path("phase").asInt():null;
-            JsonNode output=unified&&!compression?(ResearchProtocol.text(raw)?ModelProtocol.parse(mapper,raw):ModelProtocol.normalize(parseOutput(raw))):
-                ResearchProtocol.text(raw)?ResearchProtocol.parse(mapper,raw,compression,adjudication,phase):ResearchProtocol.normalize(parseOutput(raw),compression,adjudication,phase);
-            if(!compression&&!adjudication&&!output.path("plan").isObject())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT");
-            if(compression)validateCompression(output);else validate(output);
-            if(adjudication&&(unified?!output.path("plan").isObject():!output.path("selectedCandidateId").isTextual()||output.path("selectedCandidateId").asText().isBlank()))throw new IllegalStateException("MISSING_JUDGE_VOTE");
+            JsonNode output=ModelResponse.accept(mapper,decoded,compression,adjudication,unified,structuredTool,phase);
+            if(journal!=null)journal.finish(flowId,output,null);
             if(!attempts.isEmpty())attempts.set(attempts.size()-1,attempts.getLast().result("VALIDATED_OUTPUT",null));
             String analysis=reasoning.isBlank()?output.path("analysisSummary").asText():reasoning;
             String source=reasoning.isBlank()?(analysis.isBlank()?"NOT_PROVIDED":"EXPLICIT_OUTPUT_SUMMARY"):"PROVIDER_FIELD";
             inference.put(route.id(),"VALID_OUTPUT");failures.remove(route.id());
             if(!compression)failedAt.remove(modelKey(route,lane));
-            return new Answer(envelope.path("model").asText(route.model()),analysis,source,raw,output,envelope.path("usage"),usageSource,
+            return new Answer(decoded.model(),analysis,source,raw,output,decoded.usage(),usageSource,
                 finish,budget,(System.nanoTime()-started)/1_000_000,List.copyOf(attempts));
         }catch(Exception failure) {
+            if(journal!=null)try{journal.finish(flowId,null,safeError(failure));}catch(RuntimeException auditFailure){failure.addSuppressed(auditFailure);}
             if(!attempts.isEmpty()&&attempts.getLast().outcome().equals("RECEIVED"))attempts.set(attempts.size()-1,attempts.getLast().result("FAILED",safeError(failure)));
             inference.put(route.id(),"FAILED");failures.put(route.id(),safeError(failure));
             if(!compression&&!(failure instanceof InterruptedException)&&!safeError(failure).equals("CONTEXT_INSUFFICIENT"))failedAt.put(modelKey(route,lane),new FailureAt(clock.instant(),safeError(failure)));
@@ -388,32 +348,10 @@ public class Any2ApiClient {
             outputRequested?"REQUESTED_NOT_ASSUMED_ENFORCED":"NOT_SUPPORTED",limits,
             !fits?"BLOCKED_BY_BUDGET":prepared.changes().isEmpty()?"WITHIN_BUDGET":"COMPACTED_WITH_ARCHIVE",
             ContextWindow.utilization(size,limits),prepared.original().bytes(),prepared.original().characters(),prepared.changes(),originalHash,sentHash,
-            prepared.packet()==null?"NOT_APPLICABLE":mapper.readTree(body).path("messages").path(1).path("content").asText().startsWith("---")?"YAML_FLOW_LOSSLESS":"JSON");
+            prepared.packet()==null?"NOT_APPLICABLE":mapper.readTree(body).path("messages").path(1).path("content").asText().startsWith("---")?"YAML_FLOW_LOSSLESS":"JSON",null);
     }
-    private static boolean upstreamBusy(String raw){if(raw==null||raw.length()>120)return false;String plain=raw.strip().replaceAll("[\\p{Punct}，。！\\s]","").toLowerCase(Locale.ROOT);
-        return Set.of("服务器繁忙请稍后再试","服务器繁忙请稍后重试","服务繁忙请稍后再试","serverbusypleasetryagainlater","theserverisbusypleasetryagainlater").contains(plain);}
-    JsonNode parseOutput(String raw) {
-        String content=ResearchProtocol.unfence(raw);
-        JsonNode output=mapper.readTree(content);
-        if(!output.isObject())throw new IllegalStateException("INVALID_STRUCTURED_OUTPUT");return output;
-    }
-    void validate(JsonNode output) {
-        if(output.path("title").asText().isBlank()||output.path("output").asText().isBlank())throw new IllegalStateException("MISSING_REQUIRED_OUTPUT");
-        if(output.path("title").asText().length()>160||output.path("analysisSummary").asText().length()>1800
-            ||output.path("output").asText().length()>2400)throw new IllegalStateException("OUTPUT_FIELDS_TOO_LONG");
-        for(String field:List.of("shortDirection","longDirection"))
-            if(!List.of("BULLISH","BEARISH","UNKNOWN","MIXED").contains(output.path(field).asText()))throw new IllegalStateException("INVALID_DIRECTION");
-        for(String field:List.of("quotedMessages","evidenceRefs","impacts")) {
-            JsonNode values=output.path(field);
-            int maximum=field.equals("impacts")?4:field.equals("quotedMessages")?6:14;
-            if(!values.isMissingNode()&&(!values.isArray()||values.size()>maximum))throw new IllegalStateException("INVALID_EVIDENCE_ARRAY");
-        }
-        if(output.path("changes").asText().length()>800)throw new IllegalStateException("OUTPUT_FIELDS_TOO_LONG");
-        for(String field:List.of("riskAssessment","invalidate"))if(output.path("plan").path(field).asText().codePointCount(0,output.path("plan").path(field).asText().length())>(field.equals("riskAssessment")?120:80))throw new IllegalStateException("PLAN_NARRATIVE_TOO_LONG_"+field.toUpperCase(Locale.ROOT));
-        for(var impact:output.path("impacts"))if(!List.of("SHORT","LONG").contains(impact.path("horizon").asText())
-            ||!List.of("BULLISH","BEARISH","UNKNOWN","MIXED").contains(impact.path("direction").asText())
-            ||impact.path("reason").asText().length()>500||impact.path("counter").asText().length()>400)throw new IllegalStateException("INVALID_IMPACT");
-    }
+    JsonNode parseOutput(String raw) {return ModelResponse.parse(mapper,raw);}
+    void validate(JsonNode output) {ModelResponse.validateOutput(output);}
     public static class InferenceFailure extends IllegalStateException {
         private final Answer partial;
         private final long retryAfterMillis;

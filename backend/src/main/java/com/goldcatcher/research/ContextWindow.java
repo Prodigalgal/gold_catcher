@@ -50,7 +50,7 @@ final class ContextWindow {
         JsonNode originalPacket=mapper.valueToTree(packet);String originalBody=body(mapper,request,originalPacket,references);
         int messages=((List<?>)request.get("messages")).size();Size original=size(originalBody,messages);
         Prepared last=new Prepared(originalBody,originalPacket,original,original,List.of());
-        if(fits(original,limits,true))return last;
+        if(!references||fits(original,limits,true))return last;
         // Only optional prose is shortened. Already compressed news strings and financial facts stay intact.
         for(int level=1;level<=3;level++) {
             JsonNode selected=originalPacket.deepCopy();List<Change> changes=new ArrayList<>();
@@ -99,7 +99,7 @@ final class ContextWindow {
             if(node.path("role").asText().equals("user"))copy.put("content",EvidenceWire.encode(mapper,packet,references));
             messages.add(copy);
         }
-        selected.put("messages",messages);return mapper.writeValueAsString(selected);
+        selected.put("messages",messages);return com.goldcatcher.CanonicalJson.text(mapper,selected);
     }
     private static void shorten(JsonNode node,String field,int limit,String path,List<Change> changes) {
         if(!(node instanceof ObjectNode object)||!node.path(field).isTextual())return;

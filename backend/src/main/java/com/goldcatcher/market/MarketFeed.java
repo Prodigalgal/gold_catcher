@@ -23,6 +23,7 @@ public class MarketFeed {
     private final RuntimeSettings settings;private final RemoteHttp http;private final ObjectMapper mapper;
     private final DocumentStore store;private final IndicatorEngine engine;private final EventHub events;private final Clock clock;private final GateCfdFeed gate;
     private final Map<String,List<Candle>> candles=new ConcurrentHashMap<>();private final Map<String,Indicators> calculated=new ConcurrentHashMap<>();
+    private final Map<String,List<IndicatorReplay.Calculation>> indicatorInputs=new ConcurrentHashMap<>();
     private record Inbound(long generation,String raw,Instant receivedAt) {}
     public record StreamFrame(String symbol,String channel,long connectionEpoch,Instant sourceAt,Instant receivedAt,String raw) {}
     private final BlockingQueue<Inbound> incoming=new ArrayBlockingQueue<>(1024);private final AtomicLong generation=new AtomicLong();
@@ -50,6 +51,8 @@ public class MarketFeed {
     public Map<String,Object> depth(){return depth.view(clock.instant());}
     public List<Candle> candles(String symbol,String frame){if(!FRAMES.containsKey(frame))throw new IllegalArgumentException("UNKNOWN_FRAME");
         if(GateCfdFeed.PRODUCT.equals(symbol))return gate.candles(frame);if(!PRODUCT.equals(symbol))throw new IllegalArgumentException("UNKNOWN_PRODUCT");return candles.getOrDefault(frame,List.of());}
+    public List<IndicatorReplay.Calculation> indicatorInputs(String symbol,Map<String,Indicators> frozen){
+        return GateCfdFeed.PRODUCT.equals(symbol)?gate.indicatorInputs(frozen):IndicatorReplay.select(Map.copyOf(indicatorInputs),frozen);}
     public BigDecimal feeRate(String symbol){return PRODUCT.equals(symbol)?settings.decimal("GOLD_TAKER_FEE_RATE",null)!=null?
         settings.decimal("GOLD_TAKER_FEE_RATE",null):rules==null?null:rules.takerFeeRate():null;}
     public Map<String,String> costConfiguration(String symbol) {
@@ -103,7 +106,9 @@ public class MarketFeed {
             for(String frame:List.of("1","5","15","60","240","D")) {
                 var body=get("/futures/usdt/candlesticks?contract=XAU_USDT&interval="+FRAMES.get(frame)+"&limit=200");
                 var history=parseCandles(body,frame,rules.quantityMultiplier(),clock.instant());candles.put(frame,history);
-                calculated.put(frame,engine.calculate(frame,history,clock.instant()));
+                var calculation=IndicatorReplay.calculate(engine,frame,history,clock.instant());
+                indicatorInputs.compute(frame,(key,old)->IndicatorReplay.append(old,calculation));
+                calculated.put(frame,calculation.output());
             }
             lastHistorySuccess=clock.instant();historyError=null;events.changed();
         }catch(Exception failure){historyError="REST_MARKET_REFRESH_FAILED";events.changed();}
