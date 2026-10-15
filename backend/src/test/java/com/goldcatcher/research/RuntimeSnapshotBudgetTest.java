@@ -60,13 +60,15 @@ class RuntimeSnapshotBudgetTest {
   when(ai.selectRoutes(anyList(),anyList(),anyString())).thenAnswer(call->call.getArgument(0));
   when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{
    var route=(RuntimeSettings.AiRoute)call.getArgument(0);String instruction=call.getArgument(1);var packet=f.mapper.valueToTree(call.getArgument(2));
-   Map<String,Object> request=new LinkedHashMap<>();request.put("model",route.model());
-   request.put("messages",List.of(Map.of("role","system","content",instruction+ModelInput.instruction(packet,false)+ModelProtocol.instruction(packet.path("phase").asInt()==3,false,ResearchProtocol.onlyWait(packet))),Map.of("role","user","content","")));request.put("max_tokens",route.outputReserve());
-   var limits=ContextWindow.limits(route,f.mapper.createObjectNode());var result=ContextWindow.prepareModel(f.mapper,request,ModelInput.research(f.mapper,packet),limits);prepared.add(result);
+   var limits=ContextWindow.limits(route,f.mapper.createObjectNode());
+   var options=new InferenceRequest.Input(InferenceRequest.VERSION,route.model(),route.provider(),route.outputReserve(),true,true,false,
+       packet.path("evidence").path("horizon").asText().equals("SHORT")?"fast_lane":"deep_lane",f.mapper.createObjectNode(),limits,instruction,packet);
+   var result=InferenceRequest.prepare(f.mapper,options).prepared();prepared.add(result);
    for(String correction:List.of("PLAN_NARRATIVE_TOO_LONG_RISKASSESSMENT","INVALID_IMPACT","INVALID_EVIDENCE_ARRAY")){
     var retryPacket=(tools.jackson.databind.node.ObjectNode)packet.deepCopy();retryPacket.putObject("formatCorrection").put("error",correction).put("instruction",ModelProtocol.repairInstruction(correction));
-    var retryRequest=new LinkedHashMap<>(request);retryRequest.put("messages",List.of(Map.of("role","system","content",instruction+ModelInput.instruction(retryPacket,false)+ModelProtocol.instruction(packet.path("phase").asInt()==3,false,ResearchProtocol.onlyWait(packet))),Map.of("role","user","content","")));
-    var repair=ContextWindow.prepareModel(f.mapper,retryRequest,ModelInput.research(f.mapper,retryPacket),limits);repaired.add(repair);assertThat(ContextWindow.fits(repair.sent(),limits,true)).isTrue();
+    var retryOptions=new InferenceRequest.Input(InferenceRequest.VERSION,route.model(),route.provider(),route.outputReserve(),true,true,false,
+        options.lane(),f.mapper.createObjectNode(),limits,instruction,retryPacket);
+    var repair=InferenceRequest.prepare(f.mapper,retryOptions).prepared();repaired.add(repair);assertThat(ContextWindow.fits(repair.sent(),limits,true)).isTrue();
    }
    Files.writeString(Path.of("../artifacts/offline-request-"+route.id()+"-"+packet.path("phase").asInt()+".json"),result.body());
    System.out.println(route.id()+" phase="+packet.path("phase").asInt()+" chars="+result.sent().characters()+" bytes="+result.sent().bytes()+" utilization="+ContextWindow.utilization(result.sent(),limits));

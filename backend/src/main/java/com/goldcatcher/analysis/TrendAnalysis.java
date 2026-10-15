@@ -59,10 +59,7 @@ public class TrendAnalysis {
         events.changed();
     }
     public List<Release> releases(Instant cutoff){
-        var selected=new LinkedHashMap<String,Release>();store.list("economic-release-version",Release.class,1200).stream()
-            .filter(r->!r.extractedAt().isAfter(cutoff)&&!r.receivedAt().isAfter(cutoff)&&!r.publishedAt().isAfter(cutoff))
-            .sorted(Comparator.comparing(Release::publishedAt).thenComparing(Release::extractedAt).reversed())
-            .forEach(r->selected.putIfAbsent(r.indicator(),r));return List.copyOf(selected.values());
+        return EconomicSelection.releases(store.list("economic-release-version",Release.class,1200),cutoff);
     }
     @Scheduled(fixedDelay=1000,initialDelay=1800) void observe(){for(String symbol:List.of("XAU_USDT","GATE:XAUUSD")){
         var snapshot=market.snapshot(symbol);var quote=snapshot.quote();Instant now=clock.instant();if(!snapshot.state().equals("LIVE")||quote==null||!quote.priceFresh(now))continue;
@@ -138,54 +135,13 @@ public class TrendAnalysis {
     static boolean rateFresh(Driver d,Instant at){return d.frequency().equals("INTRADAY_PUBLIC_WEB")&&!d.receivedAt().isAfter(at)&&Duration.between(d.receivedAt(),at).toSeconds()<=180&&CnbcRates.recent(d.responseAt(),at);}
     static boolean dailyFresh(Driver d,Instant at){try{long days=d.asOfDate()==null?-1:ChronoUnit.DAYS.between(LocalDate.parse(d.asOfDate()),at.atZone(ZoneId.of("America/New_York")).toLocalDate());return !d.receivedAt().isAfter(at)&&days>=0&&days<=5;}catch(RuntimeException invalid){return false;}}
     public Map<String,Object> freeze(String symbol,Instant cutoff,String runId){
-        var view=view(symbol,cutoff);store.save("research-analysis",runId,view);Map<String,Object> packet=new LinkedHashMap<>();
-        packet.put("method","FROZEN_OFFICIAL_FACTS_V1");
-        var refs=new ArrayList<String>();var referenceMap=new LinkedHashMap<String,String>();
-        var compactDrivers=mapper.valueToTree(view.drivers());for(int i=0;i<view.drivers().size();i++){var d=(tools.jackson.databind.node.ObjectNode)compactDrivers.path(i);var original=view.drivers().get(i);refs.add(original.id());referenceMap.put(original.id(),original.id());
-            d.put("freshness",original.frequency().equals("DAILY")?(dailyFresh(original,cutoff)?"DAILY_BACKGROUND":"AS_OF_DATE_STALE"):original.frequency().equals("INTRADAY_PUBLIC_WEB")?(rateFresh(original,cutoff)?"RECENT_PROVIDER_DATED_QUOTE; LATENCY_NOT_SLA":"STALE_OR_CLOSED"):(fresh(original,cutoff)?"RECENT_RESPONSE_TICK_TIME_UNKNOWN":"STALE_OR_CLOSED"));}
-        for(var node:compactDrivers){var d=(tools.jackson.databind.node.ObjectNode)node;for(String minutes:List.of("5","15","60")){
-            var value=d.path("returnsPct").path(minutes);if(!value.isMissingNode()&&!value.isNull())d.put("return"+minutes+"Pct",plain(new BigDecimal(value.asText()).setScale(8,RoundingMode.HALF_EVEN)));
-            var bp=d.path("changesBp").path(minutes);if(!bp.isMissingNode()&&!bp.isNull())d.put("change"+minutes+"Bp",bp.asText());}}
-        packet.put("drivers",EvidenceTable.pack(mapper,compactDrivers,List.of("id","source","frequency","unit","value","previous","change","changeUnit","asOfDate","responseAt","receivedAt","marketStatus","freshness","return5Pct","return15Pct","return60Pct","change5Bp","change15Bp","change60Bp")));
-        packet.put("driverTimeMeaning","Gate timestamp是响应时刻，tick未知；Treasury日频；CNBC responseAt是带日期/偏移的提供方报价时刻，bp窗口仅用已观察样本；USIDX基准未核实。");
-        var revisionRows=mapper.createArrayNode();
-        Map<String,Map<String,Object>> grouped=new LinkedHashMap<>();for(var release:view.releases()){
-            String key=release.newsId()+":"+release.bodyHash()+":"+release.extractedAt()+":"+release.precision()+":"+release.extractionVersion();var group=grouped.computeIfAbsent(key,k->{Map<String,Object> row=new LinkedHashMap<>();String id="s"+(grouped.size()+1);row.put("id",id);referenceMap.put(id,release.newsId());row.put("source",release.source());row.put("period",release.period());row.put("publishedAt",release.publishedAt());row.put("receivedAt",release.receivedAt());row.put("extractedAt",release.extractedAt());row.put("precision",release.precision());row.put("extractionVersion",release.extractionVersion());row.put("metrics",new ArrayList<>());return row;});
-            String alias="econ:"+release.indicator();refs.add(alias);referenceMap.put(alias,release.id());
-            var metric=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(release);metric.put("id",alias);metric.put("revisionCount",release.revisions().size());
-            for(var revision:release.revisions()){var row=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(revision);row.put("metricId",alias);revisionRows.add(row);}
-            @SuppressWarnings("unchecked") var metrics=(List<Object>)group.get("metrics");metrics.add(metric);
-        }
-        var metricColumns=List.of("id","unit","actual","previous","forecast","surprise","expectationSource","expectationReceivedAt","revisionCount");packet.put("metricColumns",metricColumns);
-        var metadata=mapper.createArrayNode();var releaseGroups=new ArrayList<Map<String,Object>>();for(var group:grouped.values()){
-            var source=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(group);source.remove("metrics");metadata.add(source);
-            releaseGroups.add(Map.of("sourceId",group.get("id"),"csv",EvidenceTable.pack(mapper,mapper.valueToTree(group.get("metrics")),metricColumns).get("csv")));
-        }
-        packet.put("releaseSources",EvidenceTable.packFactored(mapper,metadata,List.of("id","source","period","publishedAt","receivedAt","extractedAt","precision","extractionVersion"),List.of("extractedAt","extractionVersion","precision")));
-        packet.put("releases",releaseGroups);packet.put("revisions",EvidenceTable.pack(mapper,revisionRows,List.of("metricId","period","before","after","delta","unit")));
-        packet.put("releaseMeaning","sourceId关联releaseSources元数据；forecast空=无发布前预期；原文/hash/id映射归档。");
-        var expected=mapper.valueToTree(view.expectations().stream().filter(e->!e.scheduledAt().isBefore(cutoff)&&e.scheduledAt().isBefore(cutoff.plusSeconds(172800))).limit(6).toList());
-        int index=0;for(var node:expected){var row=(tools.jackson.databind.node.ObjectNode)node;String alias="ff:"+(++index);refs.add(alias);referenceMap.put(alias,row.path("id").asText());row.put("id",alias);}
-        packet.put("expectations",EvidenceTable.pack(mapper,expected,List.of("id","indicator","title","source","scheduledAt","timingPrecision","impact","unit","forecast","previous","rawForecast","rawPrevious","rawProviderForecast","referencePeriod","receivedAt","version")));
-        packet.put("expectationMeaning","TE forecast列是调查一致预期；rawProviderForecast是TE自有预测，不能混用。仅使用发布前实际收到的版本，不回填历史预期。多来源分别保存，不把重复提供方当独立样本。");
-        packet.put("expectationSource",Map.of("source","FOREX_FACTORY_PROVIDER_FORECAST","url",DriverSources.CALENDAR));
-        packet.put("evidenceIds",List.copyOf(refs));store.save("research-analysis-references",runId,referenceMap);
-        packet.put("precision","价格/金额/时刻原精度，派生百分比舍入8位；全精度归档。");
-        packet.put("expectationSelection","本周未来48h最多6项USD；UNMAPPED仅原文、不算差值；无实际值。");
-        if(view.supplemental()!=null){
-            var extra=mapper.createArrayNode();var latest=view.supplemental().observations().stream().sorted(Comparator.comparing(SupplementalSources.Observation::period).reversed()).toList();
-            Set<String> selected=new HashSet<>();for(var o:latest){String field=switch(o.source()){case "DOL_CLAIMS"->o.id().equals("INITIAL_CLAIMS")?"actual":null;case "CFTC_GOLD"->"managedNet";case "CENSUS_ECON"->o.label().contains("Retail and Food Services")?"reportedChangePct":null;case "TREASURY_AUCTIONS"->o.label().startsWith("Note")||o.label().startsWith("Bond")?"bid_to_cover_ratio":null;case "IAU_HOLDINGS","GLD_HOLDINGS"->"tonnes";default->null;};
-                if(field==null||!o.values().containsKey(field)||!selected.add(o.source()))continue;String alias="pub:"+(extra.size()+1);referenceMap.put(alias,o.id());
-                var row=extra.addObject().put("id",alias).put("source",o.source()).put("period",o.period()).put("field",field).put("value",o.values().get(field));row.put("unit",field.equals("bid_to_cover_ratio")?"RATIO":field.equals("tonnes")?"TONNES":o.unit());row.put("publishedAt",o.publishedAt()==null?null:o.publishedAt().toString());row.put("receivedAt",o.receivedAt().toString());
-            }
-            var depth=view.supplemental().depth();if(symbol.equals("XAU_USDT")&&depth!=null&&Duration.between(depth.receivedAt(),cutoff).toSeconds()<=10){String alias="pub:"+(extra.size()+1);referenceMap.put(alias,"public-depth:XAU_USDT:"+depth.sequence());extra.addObject().put("id",alias).put("source","GATE_DEPTH").put("field","20LevelQuantityImbalance").put("value",plain(new BigDecimal(depth.imbalance()).setScale(8,RoundingMode.HALF_EVEN))).put("unit","RATIO").put("receivedAt",depth.receivedAt().toString());}
-            var trades=view.supplemental().trades();if(symbol.equals("XAU_USDT")&&trades!=null&&trades.vwap()!=null&&Duration.between(trades.receivedAt(),cutoff).toSeconds()<=10){String alias="pub:"+(extra.size()+1);referenceMap.put(alias,"public-trades:XAU_USDT:"+trades.receivedAt());extra.addObject().put("id",alias).put("source","GATE_TRADES").put("period",trades.firstAt()+"/"+trades.lastAt()).put("field","recentSampleVwap").put("value",plain(new BigDecimal(trades.vwap()).setScale(8,RoundingMode.HALF_EVEN))).put("unit","USDT_PER_XAU").put("receivedAt",trades.receivedAt().toString());}
-            packet.put("publicFacts",EvidenceTable.pack(mapper,extra,List.of("id","source","period","field","unit","value","publishedAt","receivedAt")));
-            packet.put("publicScope","每类1值、全量封存；COT周度，Census按field，拍卖倍数非收益率，GLD/IAU日频持仓非资金流；盘口/逐笔连续性未知。");
-            store.save("research-analysis-references",runId,referenceMap);
-        }
-        packet.put("gaps",view.gaps().stream().filter(g->!g.startsWith("补充视图最多读取")).toList());
-        return packet;
+        var snapshot=view(symbol,cutoff);
+        var projected=AnalysisProjection.project(mapper,snapshot,cutoff);
+        store.transaction(()->{store.save("research-analysis",runId,snapshot);
+            store.save("research-analysis-references",runId,projected.references());
+            store.save("research-analysis-selection",runId,projected.selection());
+            store.save("research-analysis-projection",runId,Map.of("version",AnalysisProjection.VERSION,"cutoff",cutoff,"output",projected.packet()));return null;});
+        return projected.packet();
     }
     private static String plain(BigDecimal value){return DriverSources.plain(value);}
     private static String pct(String after,String before){var prior=new BigDecimal(before);return plain(new BigDecimal(after).subtract(prior,MC).divide(prior,MC).multiply(BigDecimal.valueOf(100),MC));}

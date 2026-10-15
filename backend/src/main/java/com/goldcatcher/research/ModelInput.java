@@ -16,6 +16,9 @@ final class ModelInput {
     private ModelInput() {}
 
     static JsonNode research(ObjectMapper mapper,JsonNode packet) {
+        return ModelDataFlow.project(mapper,packet,false).output();
+    }
+    static JsonNode project(ObjectMapper mapper,JsonNode packet) {
         var result=mapper.createObjectNode();var evidence=packet.path("evidence");var facts=result.putObject("evidence");
         for(String key:List.of("symbol","horizon","quote","indicators","indicatorPrecision","rules","marketProvenance","account",
             "costConfiguration","quantityUnit","marginReference","costLimitations","calendar"))
@@ -89,7 +92,7 @@ final class ModelInput {
 
     private static JsonNode analysis(ObjectMapper mapper,JsonNode source) {
         var result=mapper.createObjectNode();
-        for(String key:List.of("drivers","driverTimeMeaning","expectations","expectationMeaning","precision","expectationSelection","publicFacts","publicScope","gaps"))
+        for(String key:List.of("drivers","driverTimeMeaning","expectations","expectationMeaning","expectationDisagreements","precision","expectationSelection","publicFacts","publicScope","gaps"))
             if(source.has(key))result.set(key,clean(mapper,source.path(key)));
         // Resolve the archive's joins in Java, then discard every join key.
         var metadata=new HashMap<String,JsonNode>();for(var row:records(mapper,source.path("releaseSources")))metadata.put(row.path("id").asText(),row);

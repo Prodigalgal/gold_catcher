@@ -22,6 +22,7 @@ public class GateCfdFeed {
     private final IndicatorEngine engine;private final DocumentStore store;private final EventHub events;private final Clock clock;
     private final Map<String,List<Candle>> candles=new ConcurrentHashMap<>();
     private final Map<String,Indicators> calculated=new ConcurrentHashMap<>();
+    private final Map<String,List<IndicatorReplay.Calculation>> indicatorInputs=new ConcurrentHashMap<>();
     private volatile Quote quote;private volatile JsonNode symbolSummary,cfdRules;
     private volatile String ruleState="CREDENTIAL_NOT_CONFIGURED",ruleError;
     private volatile Instant rulesReceivedAt;
@@ -48,6 +49,7 @@ public class GateCfdFeed {
         return new Snapshot(PRODUCT,state,quote,null,Map.copyOf(presented),candles.getOrDefault("5",List.of()),clock.instant(),quoteError);
     }
     public List<Candle> candles(String frame){return candles.getOrDefault(frame,List.of());}
+    public List<IndicatorReplay.Calculation> indicatorInputs(Map<String,Indicators> frozen){return IndicatorReplay.select(Map.copyOf(indicatorInputs),frozen);}
     public Map<String,Object> provenance() {
         Map<String,Object> info=new LinkedHashMap<>();
         info.put("venue","GATE");info.put("nativeSymbol","XAUUSD");info.put("transport","REST_POLL");info.put("pollSeconds",1);
@@ -141,7 +143,9 @@ public class GateCfdFeed {
                 var body=get("/tradfi/symbols/XAUUSD/klines?kline_type="+FRAMES.get(frame)+"&limit=200",Duration.ofSeconds(8));
                 Instant serverTime=timestamp(body),cutoff=serverTime.isBefore(clock.instant())?serverTime:clock.instant();
                 var history=parseCandles(body,frame,cutoff);candles.put(frame,history);
-                calculated.put(frame,engine.calculate(frame,history,cutoff));
+                var calculation=IndicatorReplay.calculate(engine,frame,history,cutoff);
+                indicatorInputs.compute(frame,(key,old)->IndicatorReplay.append(old,calculation));
+                calculated.put(frame,calculation.output());
             }
             lastHistorySuccess=clock.instant();historyError=null;
             store.save("market-indicators",PRODUCT,Map.copyOf(calculated));events.changed();

@@ -36,6 +36,6 @@ class EvidenceWireTest {
         var loader=new LoaderOptions();loader.setMaxAliasesForCollections(1000);
         Object parsed=encoded.startsWith("---")?new Yaml(new SafeConstructor(loader)).load(encoded):f.mapper.readValue(encoded,Object.class);
         tools.jackson.databind.JsonNode restored=f.mapper.valueToTree(parsed);assertThat(restored).isEqualTo(input);
-        assertThat(encoded).startsWith("---").contains(",combined:");
+        assertThat(encoded).startsWith("---").contains(",numericStrings:");
     }
 }

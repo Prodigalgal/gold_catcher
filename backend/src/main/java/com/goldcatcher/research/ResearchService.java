@@ -177,6 +177,7 @@ public class ResearchService {
             run.workflowExpiresAt=run.startedAt.plusSeconds(run.retryPolicy.workflowSeconds());run.executionState="RESEARCHING";
             run.sourceCommit=settings.text("GOLD_SOURCE_COMMIT","development");
             run.routeConfiguration=mapper.valueToTree(Map.of("revision",routeSnapshot.revision(),"horizon",horizon,"protocol",ModelProtocol.VERSION,
+                "dataFlowVersion",ModelDataFlow.VERSION,"evidenceHashEncoding","CANONICAL_JSON_SHA256",
                 "routes",routes.stream().map(ResearchService::snapshotRoute).toList()));
             run.modelDiversity=Map.of("researchModels",identities,"judgeModels",judges.stream().map(ResearchService::modelIdentity).toList(),
                 "minimumJudges",AdjudicationPanel.MINIMUM_JUDGES,"distinctProviders",routes.stream().map(AiRoute::provider).distinct().count(),
@@ -188,16 +189,8 @@ public class ResearchService {
             Map<String,Object> core=new LinkedHashMap<>();core.put("symbol",symbol);core.put("horizon",horizon);
             core.put("evidenceCutoff",run.evidenceCutoff);core.put("quote",snapshot.quote());
             core.put("decisionExpiresAt",run.decisionExpiresAt);core.put("analysisOnly",analysisOnly);
-            var compactIndicators=mapper.valueToTree(snapshot.indicators());
-            for(var indicator:compactIndicators) {
-                ((tools.jackson.databind.node.ObjectNode)indicator).remove("readings"); // UI explanations are derived from these same numeric facts.
-                ((tools.jackson.databind.node.ObjectNode)indicator.path("values")).remove(List.of("ema20DistancePct","vwap20","volumeRatio20","bbWidthPct","bbPercentB"));
-                for(var field:indicator.path("values").properties())if(!field.getValue().isNull())
-                    ((tools.jackson.databind.node.ObjectNode)indicator.path("values")).put(field.getKey(),new java.math.BigDecimal(field.getValue().asText()).setScale(8,java.math.RoundingMode.HALF_EVEN).stripTrailingZeros().toPlainString());
-            }
-            var indicatorRows=mapper.createArrayNode();var indicatorColumns=new LinkedHashSet<String>(List.of("frame","samples","closedThrough","state","calculatedAt","freshness"));
-            for(var indicator:compactIndicators){var row=(tools.jackson.databind.node.ObjectNode)indicator.deepCopy();row.remove("values");for(var field:indicator.path("values").properties()){indicatorColumns.add(field.getKey());row.set(field.getKey(),field.getValue());}indicatorRows.add(row);}
-            core.put("indicators",EvidenceTable.packFactored(mapper,indicatorRows,List.copyOf(indicatorColumns),List.of("state","freshness","samples","calculatedAt")));core.put("indicatorPrecision","Java派生指标舍入8位；原DECIMAL128数值归档。");
+            core.put("indicators",IndicatorProjection.project(mapper,snapshot.indicators()));
+            core.put("indicatorPrecision","Java派生指标舍入8位；原DECIMAL128数值归档。");
             if(snapshot.rules()!=null) {
                 var compactRules=(tools.jackson.databind.node.ObjectNode)mapper.valueToTree(snapshot.rules());
                 compactRules.set("tiers",mapper.valueToTree(EvidenceTable.pack(mapper,mapper.valueToTree(snapshot.rules().tiers().stream().limit(4).toList()),List.of("limit","maxLeverage","maintenanceRate","deduction"))));
@@ -239,7 +232,9 @@ public class ResearchService {
             }
             core.put("evidenceIds",evidenceIds);
             if(snapshot.rules()!=null)store.save("research-rules",run.id,snapshot.rules());store.save("research-indicators",run.id,snapshot.indicators());
-            run.evidence=mapper.valueToTree(core);run.evidenceHash=NewsService.hash(mapper.writeValueAsString(core));
+            var indicatorInputs=market.indicatorInputs(symbol,snapshot.indicators());
+            store.save("research-indicator-inputs",run.id,indicatorInputs==null?List.of():indicatorInputs);
+            run.evidence=mapper.valueToTree(core);run.evidenceHash=CanonicalJson.hash(CanonicalJson.text(mapper,core));
             List<AiRoute> shuffled=new ArrayList<>(researchers);Collections.shuffle(shuffled,new Random(run.seed));
             String[] roles={"价格与趋势","宏观与事件","风险与成交","反证核验","成本与持有","综合研究"};
             Map<String,AiRoute> bindings=new LinkedHashMap<>();

@@ -118,7 +118,7 @@ class ResearchServiceTest {
             .map(packet->packet.path("peers").path(0).path("id").asText()).distinct()).hasSize(3);
         assertThat(saved.messages.stream().filter(m->m.stage()==0&&m.state().equals("LATE_ARCHIVED"))).hasSize(1);
         assertThat(packets.stream().map(p->f.mapper.writeValueAsString(p.path("evidence"))).distinct()).containsExactly(f.mapper.writeValueAsString(saved.evidence));
-        assertThat(saved.evidenceHash).isEqualTo(com.goldcatcher.information.NewsService.hash(f.mapper.writeValueAsString(saved.evidence)));
+        assertThat(saved.evidenceHash).isEqualTo(CanonicalJson.hash(CanonicalJson.text(f.mapper,saved.evidence)));
         for(var packet:packets) {
             int phase=packet.path("phase").asInt();if(phase==0)assertThat(packet.path("peers")).isEmpty();
             else for(var peer:packet.path("peers"))assertThat(peer.path("id").asText().split("-")[5]).isEqualTo(Integer.toString(phase-1));

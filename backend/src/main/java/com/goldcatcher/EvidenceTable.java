@@ -25,6 +25,6 @@ public final class EvidenceTable {
                 else csv.append(value);
             }
         }
-        return Map.of("columns",List.copyOf(columns),"csv",csv.toString());
+        var result=new LinkedHashMap<String,Object>();result.put("columns",List.copyOf(columns));result.put("csv",csv.toString());return Collections.unmodifiableMap(result);
     }
 }
