@@ -10,6 +10,23 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class InferenceJournalTest {
+    @Test void completeRequestBytesReplayAfterNumericTypesChangeInPersistentJson(){
+        var original=f.mapper.valueToTree(packet());original.withObject("evidence").withObject("rules").putArray("permittedLeverages")
+            .add(new java.math.BigDecimal("5")).add(new java.math.BigDecimal("10.0")).add(50.0);
+        original.withObject("evidence").withObject("rules").put("precisionProbe",new java.math.BigDecimal("0.100000000000000000000000000001"));
+        var input=new InferenceRequest.Input(InferenceRequest.VERSION,"model","custom",1000,true,true,false,"deep_lane",f.mapper.createObjectNode(),new ContextWindow.Limits(60000,30000,20000,0,0,0,2,512,90),"研究",original);
+        var plan=InferenceRequest.prepare(f.mapper,input);var saved=journal.find(journal.prepare(plan));
+        var persisted=f.mapper.readerFor(InferenceJournal.Snapshot.class).with(tools.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).<InferenceJournal.Snapshot>readValue(f.mapper.writeValueAsString(saved));
+        var replay=InferenceJournal.replay(f.mapper,persisted,List.of());
+        assertThat(replay.inputMatches()).isTrue();assertThat(replay.stepsMatch()).isTrue();assertThat(replay.requestMatches()).isTrue();
+        assertThat(saved.body()).contains("0.100000000000000000000000000001");assertThat(journal.replay(saved.id()).requestMatches()).isTrue();
+        var legacyPacket=original.deepCopy();legacyPacket.withObject("evidence").withObject("rules").remove("precisionProbe");
+        var legacyInput=new InferenceRequest.Input(InferenceRequest.LEGACY_VERSION,input.model(),input.provider(),input.outputReserve(),input.preferJson(),input.generic(),input.compression(),input.lane(),input.capabilities(),input.limits(),input.instruction(),legacyPacket);
+        String legacyId=journal.prepare(InferenceRequest.prepare(f.mapper,legacyInput));var legacy=f.store.find("inference-flow",legacyId,InferenceJournal.Snapshot.class).orElseThrow();
+        var legacyPersisted=f.mapper.readValue(f.mapper.writeValueAsString(legacy),InferenceJournal.Snapshot.class);
+        assertThat(InferenceJournal.replay(f.mapper,legacyPersisted,List.of()).requestMatches()).isFalse();
+        assertThat(legacyPersisted.body()).isEqualTo(legacy.body()); // Never rewrite old evidence to claim an exact replay.
+    }
     final TestSupport f=new TestSupport();final RemoteHttp remote=mock(RemoteHttp.class);
     final InferenceJournal journal=new InferenceJournal(f.store,f.mapper,f.clock);
     AiRoute route(){var r=new AiRoute("custom","custom","custom/model","https://localhost/v1","UI",20000,30000,60000,2,1000,180,false);
