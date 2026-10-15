@@ -1,0 +1,526 @@
+{
+  "protocol": "GOLD_RESEARCH_V1",
+  "lane": "fast_lane",
+  "evidence": {
+    "symbol": "GATE:XAUUSD",
+    "horizon": "SHORT",
+    "evidenceCutoff": "2026-10-15T02:46:30.047637224Z",
+    "quote": {
+      "symbol": "GATE:XAUUSD",
+      "source": "GATE_REST_CFD",
+      "sequence": 1792032389202,
+      "exchangeTime": "2026-10-15T02:46:29.202Z",
+      "receivedAt": "2026-10-15T02:46:29.237095860Z",
+      "bid": "4147.19",
+      "ask": "4147.28",
+      "bidSize": null,
+      "askSize": null,
+      "last": "4147.41",
+      "mark": null,
+      "markTime": null,
+      "fundingRate": null,
+      "nextFundingTime": null,
+      "continuous": false
+    },
+    "decisionExpiresAt": "2026-10-15T02:50:30.046965140Z",
+    "analysisOnly": false,
+    "indicators": {
+      "columns": [
+        "frame",
+        "closedThrough",
+        "calculatedAt",
+        "atr14",
+        "bbUpper",
+        "ema60",
+        "bbLower",
+        "changePct",
+        "rsi14",
+        "close",
+        "macdSignal",
+        "ema20",
+        "sma20",
+        "atrPct",
+        "roc12Pct",
+        "bbMiddle",
+        "macd",
+        "macdHistogram"
+      ],
+      "csv": "1,2026-10-15T02:46:00Z,2026-10-15T02:46:16.778Z,2.14996501,4147.76272473,4142.6481141,4137.86727527,0.05380729,61.54845171,4146.65,0.40225511,4143.65747478,4142.815,0.05184824,0.07602269,4142.815,0.63333626,0.23108115\n5,2026-10-15T02:45:00Z,2026-10-15T02:46:17.085Z,5.09381776,4148.45433594,4128.29078421,4137.37166406,0.01134184,58.83148527,4144.42,4.4275755,4141.12239519,4142.913,0.12290786,0.12780464,4142.913,3.54071496,-0.88686054\n60,2026-10-15T02:00:00Z,2026-10-15T02:46:17.975Z,16.02073465,4167.38586139,4142.7745279,4066.78613861,-0.01232009,56.7954241,4139.07,-14.68124948,4120.78069364,4117.086,0.38706122,1.00367502,4117.086,-8.90107941,5.78017007\n240,2026-10-15T01:00:00Z,2026-10-15T02:46:18.573Z,29.39562751,4224.73605988,4165.09116283,4094.99494012,0.83968517,47.90077677,4139.58,-4.36085145,4145.91222113,4159.8655,0.71011135,-0.43917034,4159.8655,-11.37286428,-7.01201283\nD,2026-10-14T21:00:00Z,2026-10-15T02:46:18.872Z,83.22180648,4388.52530827,4273.04011562,4033.60969173,-1.34366093,38.91996386,4105.11,-52.09475944,4202.12904802,4211.0675,2.02727348,-0.23718854,4211.0675,-53.50962909,-1.41486965\n15,2026-10-15T02:45:00Z,2026-10-15T02:46:17.370Z,8.68458371,4160.23888511,4120.24979269,4090.52911489,0.07147238,68.26871024,4144.42,9.87378955,4128.51828716,4125.384,0.20954883,0.95242271,4125.384,11.25773795,1.3839484",
+      "common": {
+        "state": "READY",
+        "freshness": "CURRENT",
+        "samples": 199
+      }
+    },
+    "indicatorPrecision": "Java派生指标舍入8位；原DECIMAL128数值归档。",
+    "rules": {
+      "symbol": "XAUUSD",
+      "contract_volume": "100",
+      "min_order_volume": "0.01",
+      "max_order_volume": "10",
+      "step_order_volume": "0.01",
+      "leverage": "500",
+      "leverages": [
+        "5",
+        "10",
+        "20",
+        "50",
+        "100",
+        "200",
+        "500",
+        "1000"
+      ],
+      "price_precision": 2,
+      "settlement_currency": "USD",
+      "exchange_rate": "1",
+      "price_sl_level": "50.000000",
+      "hedged_margin": "25.000000",
+      "buy_swap_cost_rate": "-72.5",
+      "sell_swap_cost_rate": "30.72",
+      "swap_cost_type": "1",
+      "swap_cost_3day": "3",
+      "trade_timezone": "GMT+3",
+      "trade_time": {},
+      "weekly_limit_leverage": "0",
+      "trade_mode": "4",
+      "commission_per_lot": "6",
+      "swapConvention": "UNVERIFIED",
+      "executionConvention": "UNVERIFIED_NO_DEPTH_OR_TICK_TIMESTAMP",
+      "maximumPermittedLeverage": "500",
+      "permittedLeverages": [
+        5,
+        10,
+        20,
+        50,
+        100,
+        200,
+        500
+      ],
+      "stopOutMarginLevelPct": "50",
+      "stopOutMethod": "CANCEL_PENDING; ACCOUNT_EQUITY_GROSS_USED_MARGIN; LARGEST_LOSS_FIRST; QUOTE_SCENARIO"
+    },
+    "marketProvenance": {
+      "venue": "GATE",
+      "nativeSymbol": "XAUUSD",
+      "transport": "REST_POLL",
+      "quoteTimestampMeaning": "SERVER_RESPONSE_TIME; last quote tick time is not supplied",
+      "depthStatus": "NOT_PROVIDED",
+      "rulesState": "SPEC_AND_COMMISSION_VERIFIED"
+    },
+    "allowedActions": [
+      "WAIT",
+      "CREATE",
+      "CANCEL",
+      "CLOSE",
+      "MODIFY",
+      "REDUCE"
+    ],
+    "account": {
+      "symbol": "GATE:XAUUSD",
+      "currency": "USD",
+      "state": "VALUED",
+      "balance": "1000",
+      "available": "1000",
+      "equity": "1000",
+      "frozenMargin": "0",
+      "unrealized": "0",
+      "estimatedExitFees": "0",
+      "valuedAt": "2026-10-15T02:46:29.237095860Z",
+      "orders": [],
+      "costStatus": "CFD_QUOTE_SCENARIO; COMMISSION_EACH_FILL_SIDE; SWAP_UNVERIFIED",
+      "liquidationMethod": "ACCOUNT_MARGIN_LEVEL_50_PERCENT; LARGEST_LOSS_FIRST; GROSS_MARGIN_ASSUMPTION"
+    },
+    "costConfiguration": {
+      "feeUnit": "USD_PER_LOT",
+      "reference": "https://www.gate.com/pt-br/help/tradfi/cfd/47533/cfd-fee-calculation",
+      "swapStatus": "UNVERIFIED",
+      "feePerLot": "6",
+      "takerFeeRate": "NOT_APPLICABLE",
+      "source": "GATE_AUTHENTICATED_COMMISSION_PER_LOT"
+    },
+    "quantityUnit": "CFD手数，contract_volume为每手XAU单位；独立USD账户，仅报价情景。",
+    "marginReference": "每笔约100U保证金参考，允许全亏；仓位/风险自行评估。",
+    "costLimitations": "公开taker费为假设；资金费用历史费率/边界mark，缺mark未知；强平简化；CFD隔夜费/执行未核实。",
+    "news": [
+      {
+        "id": "42089984bbed185e350b05a5d9c9047bc1415edeec4ee1893c806c1821ee4c89",
+        "title": "Meta- and Google-backed Jio Platforms to raise up to $3.2 billion in historic IPO in India",
+        "excerpt": "据所给FEED_SUMMARY材料（未读全文）：Meta与Google投资的Jio Platforms拟在印度进行IPO，募资至多32亿美元，或成印度史上最大规模IPO。以卢比计为印度历来最大，美元计居第二，不及现代汽车2024年IPO的33亿美元。",
+        "source": "CNBC_WORLD",
+        "publishedAt": "2026-10-15T01:56:53Z",
+        "receivedAt": "2026-10-15T01:58:24.070757369Z",
+        "publishedPrecision": "PROVIDER_REPORTED_TIME",
+        "sourcePublishedAt": "2026-10-15T01:56:53Z",
+        "version": 1,
+        "bodyHash": null,
+        "sourceTextFormat": "FEED_SUMMARY",
+        "contentState": "PUBLIC_FEED_SUMMARY"
+      }
+    ],
+    "newsCoverage": {
+      "omitted": 1,
+      "completed": 1,
+      "rule": "Only completed source summaries; pending text omitted."
+    },
+    "newsLimit": 2,
+    "calendar": [
+      {
+        "id": "333a42d4ebb9bef8547b732861f733e4b18cd01d3305ee813a670ee33e474c08",
+        "title": "Producer Price Index",
+        "source": "BLS_CALENDAR",
+        "scheduledAt": "2026-10-15T12:30:00Z",
+        "scheduledDate": null,
+        "endDate": null,
+        "timePrecision": "EXACT"
+      },
+      {
+        "id": "bb80740f75cdaaa810a3fece2593121541340d23cac9f13399ae488ce6fdb105",
+        "title": "U.S. Import and Export Price Indexes",
+        "source": "BLS_CALENDAR",
+        "scheduledAt": "2026-10-16T12:30:00Z",
+        "scheduledDate": null,
+        "endDate": null,
+        "timePrecision": "EXACT"
+      }
+    ],
+    "sourceGaps": [],
+    "selectionNote": "近7日新闻按newsLimit先选不同信源组，再按新近补足；只送已完成摘要，未完成见newsCoverage；未来48h最多6安排。活动订单CSV，完整账户封存，peer仅上轮，摘要删减记审计。",
+    "analysis": {
+      "method": "FROZEN_OFFICIAL_FACTS_V1",
+      "drivers": {
+        "columns": [
+          "id",
+          "source",
+          "frequency",
+          "unit",
+          "value",
+          "previous",
+          "change",
+          "changeUnit",
+          "asOfDate",
+          "responseAt",
+          "receivedAt",
+          "marketStatus",
+          "freshness",
+          "return5Pct",
+          "return15Pct",
+          "return60Pct",
+          "change5Bp",
+          "change15Bp",
+          "change60Bp"
+        ],
+        "csv": "GATE_EURUSD,GATE_PUBLIC_CFD,POLL_5_SECONDS,FX_RATE,1.122945,,,,,2026-10-15T02:46:25.129Z,2026-10-15T02:46:25.164082183Z,open,RECENT_RESPONSE_TICK_TIME_UNKNOWN,0.06549576,0.09939117,0.16725093,,,\nGATE_USDJPY,GATE_PUBLIC_CFD,POLL_5_SECONDS,FX_RATE,157.7155,,,,,2026-10-15T02:46:26.210Z,2026-10-15T02:46:26.256869028Z,open,RECENT_RESPONSE_TICK_TIME_UNKNOWN,0.006658,0.00982879,0.07011199,,,\nUS_INTRADAY_NOMINAL_10Y,CNBC_PUBLIC_WEB,INTRADAY_PUBLIC_WEB,PERCENT,5.106,5.19,-8.4,BASIS_POINTS,2026-10-14,2026-10-15T02:45:09Z,2026-10-15T02:46:15.369197157Z,RECENT_SOURCE_QUOTE,RECENT_PROVIDER_DATED_QUOTE; LATENCY_NOT_SLA,,,,0,0,\nUS_INTRADAY_NOMINAL_2Y,CNBC_PUBLIC_WEB,INTRADAY_PUBLIC_WEB,PERCENT,4.726,4.802,-7.6,BASIS_POINTS,2026-10-14,2026-10-15T02:44:11Z,2026-10-15T02:45:06.212189848Z,RECENT_SOURCE_QUOTE,RECENT_PROVIDER_DATED_QUOTE; LATENCY_NOT_SLA,,,,0,-0.4,-0.2\nUS_INTRADAY_REAL_10Y,CNBC_PUBLIC_WEB,INTRADAY_PUBLIC_WEB,PERCENT,2.762,2.837,-7.5,BASIS_POINTS,2026-10-14,2026-10-15T02:46:00Z,2026-10-15T02:46:18.596323959Z,RECENT_SOURCE_QUOTE,RECENT_PROVIDER_DATED_QUOTE; LATENCY_NOT_SLA,,,,,-0.1,-0.9\nUS_NOMINAL_10Y,US_TREASURY,DAILY,PERCENT,5.19,5.21,-2,BASIS_POINTS,2026-10-14,,2026-10-14T20:27:50.921154713Z,BACKGROUND,DAILY_BACKGROUND,,,,,,\nUS_NOMINAL_2Y,US_TREASURY,DAILY,PERCENT,4.82,4.79,3,BASIS_POINTS,2026-10-14,,2026-10-14T20:27:50.921154713Z,BACKGROUND,DAILY_BACKGROUND,,,,,,\nUS_REAL_10Y,US_TREASURY,DAILY,PERCENT,2.84,2.88,-4,BASIS_POINTS,2026-10-14,,2026-10-14T20:27:55.840053170Z,BACKGROUND,DAILY_BACKGROUND,,,,,,"
+      },
+      "driverTimeMeaning": "Gate timestamp是响应时刻，tick未知；Treasury日频；CNBC responseAt是带日期/偏移的提供方报价时刻，bp窗口仅用已观察样本；USIDX基准未核实。",
+      "metricColumns": [
+        "id",
+        "unit",
+        "actual",
+        "previous",
+        "forecast",
+        "surprise",
+        "expectationSource",
+        "expectationReceivedAt",
+        "revisionCount"
+      ],
+      "releaseSources": {
+        "columns": [
+          "id",
+          "source",
+          "period",
+          "publishedAt",
+          "receivedAt",
+          "extractedAt",
+          "precision"
+        ],
+        "csv": "s1,BLS_CPI,2026-09,2026-10-14T12:30:00Z,2026-10-14T12:30:37.514105368Z,2026-10-14T12:30:38.755146995Z,OFFICIAL_STATEMENT\ns2,BLS_EMPLOYMENT,2026-09,2026-10-02T12:30:00Z,2026-10-08T14:52:56.798475336Z,2026-10-09T14:09:51.729289131Z,OFFICIAL_STATEMENT\ns3,BEA_NEWS,2026-Q2,2026-09-30T12:30:00Z,2026-10-08T14:53:02.837394432Z,2026-10-09T14:09:51.729289131Z,OFFICIAL_STATEMENT\ns4,BEA_NEWS,2026-08,2026-09-30T12:30:00Z,2026-10-08T14:52:59.811566063Z,2026-10-09T14:09:51.729289131Z,OFFICIAL_STATEMENT\ns5,BLS_JOLTS,2026-08,2026-09-29T14:00:00Z,2026-10-08T14:52:53.940996667Z,2026-10-09T14:09:51.729289131Z,OFFICIAL_TABLE_THOUSANDS\ns6,BLS_PPI,2026-08,2026-09-10T12:30:00Z,2026-10-08T14:53:02.837826194Z,2026-10-09T14:09:51.729289131Z,OFFICIAL_STATEMENT",
+        "common": {
+          "extractionVersion": "OFFICIAL_METRICS_V1"
+        }
+      },
+      "releases": [
+        {
+          "sourceId": "s1",
+          "csv": "econ:CORE_CPI_YOY,PERCENT_YOY_NSA,2.6,,2.5,0.1,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-11T04:46:06.783908890Z,0\necon:CPI_YOY,PERCENT_YOY_NSA,3.7,,3.6,0.1,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-11T04:46:06.794467596Z,0\necon:CORE_CPI_MOM,PERCENT_MOM_SA,0.3,,0.2,0.1,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-11T04:46:06.779511343Z,0\necon:CPI_MOM,PERCENT_MOM_SA,0.6,0.4,0.6,0,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-11T04:46:06.790026488Z,0"
+        },
+        {
+          "sourceId": "s2",
+          "csv": "econ:WAGES_MOM,PERCENT_MOM_SA,0.1,,,,,,0\necon:UNEMPLOYMENT,PERCENT_LEVEL,4.2,,,,,,0\necon:NFP,COUNT,29000,,,,,,2"
+        },
+        {
+          "sourceId": "s3",
+          "csv": "econ:GDP_THIRD,PERCENT_QOQ_ANNUALIZED_SA,2.2,,,,,,0"
+        },
+        {
+          "sourceId": "s4",
+          "csv": "econ:CORE_PCE_YOY,PERCENT_YOY,3,,,,,,0\necon:PCE_YOY,PERCENT_YOY,3.4,,,,,,0\necon:CORE_PCE_MOM,PERCENT_MOM_SA,0.2,,,,,,0\necon:PCE_MOM,PERCENT_MOM_SA,0.3,,,,,,0"
+        },
+        {
+          "sourceId": "s5",
+          "csv": "econ:JOLTS,COUNT,7079000,7335000,,,,,0"
+        },
+        {
+          "sourceId": "s6",
+          "csv": "econ:PPI_MOM,PERCENT_MOM_SA,0.4,,,,,,0"
+        }
+      ],
+      "revisions": {
+        "columns": [
+          "metricId",
+          "period",
+          "before",
+          "after",
+          "delta",
+          "unit"
+        ],
+        "csv": "econ:NFP,July,21000,-10000,-31000,COUNT\necon:NFP,August,162000,133000,-29000,COUNT"
+      },
+      "releaseMeaning": "sourceId关联releaseSources元数据；forecast空=无发布前预期；原文/hash/id映射归档。",
+      "expectations": {
+        "columns": [
+          "id",
+          "indicator",
+          "title",
+          "source",
+          "scheduledAt",
+          "timingPrecision",
+          "impact",
+          "unit",
+          "forecast",
+          "previous",
+          "rawForecast",
+          "rawPrevious",
+          "rawProviderForecast",
+          "referencePeriod",
+          "receivedAt",
+          "version"
+        ],
+        "csv": "ff:1,UNMAPPED:a7b966b0f2a68cf0,FOMC Member Bowman Speaks,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-15T02:55:00Z,PROVIDER_TIME_APPROXIMATE,Low,UNMAPPED,,,\"\",\"\",,,2026-10-11T04:46:06.812730269Z,1\nff:2,UNMAPPED:9e2117e56ae0d9d2,Empire State Manufacturing Index,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-15T12:30:00Z,PROVIDER_TIME_APPROXIMATE,Low,UNMAPPED,,,12.1,7.6,,,2026-10-12T21:48:06.044645403Z,2\nff:3,UNMAPPED:69727a33209d74c8,Unemployment Claims,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-15T12:30:00Z,PROVIDER_TIME_APPROXIMATE,Medium,UNMAPPED,,,199K,197K,,,2026-10-12T21:48:06.040229174Z,2\nff:4,UNMAPPED:8b835c9d4de7b29f,Philly Fed Manufacturing Index,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-15T12:30:00Z,PROVIDER_TIME_APPROXIMATE,Medium,UNMAPPED,,,28.2,37.8,,,2026-10-12T21:48:06.035107221Z,2\nff:5,PPI_MOM,PPI m/m,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-15T12:30:00Z,PROVIDER_TIME_APPROXIMATE,High,PERCENT_MOM_SA,0.6,0.4,0.6%,0.4%,,,2026-10-12T21:48:06.029983589Z,2\nff:6,UNMAPPED:38598a63a774c40a,Core Retail Sales m/m,FOREX_FACTORY_PROVIDER_FORECAST,2026-10-15T12:30:00Z,PROVIDER_TIME_APPROXIMATE,High,UNMAPPED,,,0.6%,1.4%,,,2026-10-12T21:48:06.025483520Z,2"
+      },
+      "expectationMeaning": "TE forecast列是调查一致预期；rawProviderForecast是TE自有预测，不能混用。仅使用发布前实际收到的版本，不回填历史预期。多来源分别保存，不把重复提供方当独立样本。",
+      "expectationSource": {
+        "source": "FOREX_FACTORY_PROVIDER_FORECAST",
+        "url": "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+      },
+      "precision": "价格/金额/时刻原精度，派生百分比舍入8位；全精度归档。",
+      "expectationSelection": "本周未来48h最多6项USD；UNMAPPED仅原文、不算差值；无实际值。",
+      "publicFacts": {
+        "columns": [
+          "id",
+          "source",
+          "period",
+          "field",
+          "unit",
+          "value",
+          "publishedAt",
+          "receivedAt"
+        ],
+        "csv": "pub:1,GLD_HOLDINGS,2026-10-14,tonnes,TONNES,1054.20000000000005,,2026-10-15T02:13:30.947512955Z\npub:2,IAU_HOLDINGS,2026-10-14,tonnes,TONNES,463.05,,2026-10-14T23:28:34.764345901Z\npub:3,TREASURY_AUCTIONS,2026-10-08,bid_to_cover_ratio,RATIO,2.540000,,2026-10-09T15:31:24.563684216Z\npub:4,CFTC_GOLD,2026-10-06,managedNet,CONTRACTS,110987,,2026-10-09T19:30:37.816305174Z\npub:5,DOL_CLAIMS,2026-10-03,actual,COUNT,197000,2026-10-08T12:30:00Z,2026-10-09T15:31:22.688820386Z\npub:6,CENSUS_ECON,2026-08,reportedChangePct,PERCENT_REPORTED_CHANGE,+1.2,2026-09-16T12:30:00Z,2026-10-09T15:31:27.696788319Z"
+      },
+      "publicScope": "每类1值、全量封存；COT周度，Census按field，拍卖倍数非收益率，GLD/IAU日频持仓非资金流；盘口/逐笔连续性未知。",
+      "gaps": [
+        "公开盘中美债/TIPS报价已实现60秒检查；未验证开市连续性和端到端延迟，利率期货/FedWatch仍未接入",
+        "公开商业媒体RSS已接入；授权低延迟新闻线、全球ETF流量与期权仍缺失，GLD/IAU为日频持仓",
+        "当前美元指数 CFD 观察不可用或已过期",
+        "盘口为20档REST快照；逐笔为近期100条样本，完整连续性尚未验证；CFD没有L2/逐笔接口",
+        "CFTC是周度统计背景；拍卖收益率不是盘中现金国债收益率；IAU持仓不是盘中申赎资金流"
+      ]
+    },
+    "evidenceIds": [
+      "market:quote",
+      "market:rules",
+      "account",
+      "indicators",
+      "analysis:drivers",
+      "analysis:releases",
+      "analysis:gaps"
+    ]
+  },
+  "phase": 3,
+  "role": "独立裁决",
+  "actorId": "J3",
+  "peers": [
+    {
+      "id": "3292aa4d-4a6a-42b0-b8b5-72f8f39dbeec-2-A-1",
+      "actor": "A",
+      "output": {
+        "title": "盘中反弹动能未破日线空头结构,事件窗与成本未知前继续等待",
+        "shortDirection": "MIXED",
+        "longDirection": "BEARISH",
+        "evidenceRefs": [
+          "market:quote",
+          "market:rules",
+          "account",
+          "indicators",
+          "analysis:drivers",
+          "analysis:releases",
+          "analysis:gaps",
+          "US_INTRADAY_NOMINAL_10Y",
+          "US_INTRADAY_REAL_10Y",
+          "econ:CPI_YOY",
+          "econ:PPI_MOM",
+          "ff:5",
+          "333a42d4ebb9bef8547b732861f733e4b18cd01d3305ee813a670ee33e474c08",
+          "42089984bbed185e350b05a5d9c9047bc1415edeec4ee1893c806c1821ee4c89"
+        ],
+        "impacts": [
+          {
+            "newsId": "42089984bbed185e350b05a5d9c9047bc1415edeec4ee1893c806c1821ee4c89",
+            "horizon": "SHORT",
+            "direction": "UNKNOWN",
+            "reason": "印度Jio股权IPO属区域企业融资,无黄金供需、央行购金或实际利率传导路径,不足以判定金价方向",
+            "counter": "若出现主权相关发行或区域资金流转向传闻需重估; 在12:30Z PPI前该事件对金价无实质影响的反证更强"
+          }
+        ],
+        "plan": {
+          "action": "WAIT",
+          "riskAssessment": "决策窗02:50:30Z在02:49:49Z仅余约41秒; quote无mark、swap与执行约定未核实,强平价与隔夜成本不可算且未知成本非0; 短多空信号冲突、PPI高影响未决,缺乏可靠执行依据",
+          "invalidate": "15分钟收盘破4137.37166406或站上4160.23888511并与PPI方向一致则等待判断失效"
+        },
+        "output": "依据: 1分钟close4146.65贴上轨4147.76272473、15分钟rsi14 68.26871024与macdHistogram 1.3839484转正,盘中反弹真实。反证: 60分钟close4139.58低于ema20 4145.91222113、macdHistogram -7.01201283; 日线close4105.11低于ema20 4202.12904802与ema60 4273.04011562、rsi14 38.91996386,大周期下跌结构未破; 实际10Y 2.762降7.5bp与名义10Y 5.106降8.4bp同向下行利多金价,构成方向冲突。缺口: quote无mark、无tick时间与深度,swapConvention与executionConvention为UNVERIFIED,强平价与隔夜成本不可算且未知成本不得按0处理; 决策窗02:50 [摘录，全文已归档]",
+        "changes": "采纳B-1的日线偏空与PPI未决判断; 拒绝A-1以15分钟rsi偏高单独否定做多,rsi高位不构成反向入场依据"
+      }
+    },
+    {
+      "id": "3292aa4d-4a6a-42b0-b8b5-72f8f39dbeec-2-C-1",
+      "actor": "C",
+      "output": {
+        "title": "期货PPI与实际利率回落，短期缺乏新催化剂",
+        "shortDirection": "UNKNOWN",
+        "longDirection": "BEARISH",
+        "evidenceRefs": [
+          "42089984bbed185e350b05a5d9c9047bc1415edeec4ee1893c806c1821ee4c89",
+          "GATE_EURUSD",
+          "GATE_USDJPY",
+          "US_INTRADAY_REAL_10Y",
+          "US_INTRADAY_NOMINAL_10Y",
+          "bb80740f75cdaaa810a3fece2593121541340d23cac9f13399ae488ce6fdb105",
+          "333a42d4ebb9bef8547b732861f733e4b18cd01d3305ee813a670ee33e474c08",
+          "account",
+          "analysis:drivers",
+          "analysis:releases",
+          "analysis:gaps",
+          "pub:1"
+        ],
+        "impacts": [],
+        "plan": {
+          "action": "WAIT",
+          "riskAssessment": "当前缺乏可靠的执行依据",
+          "invalidate": null
+        },
+        "output": "最新PPI/MOM高影响事件12:30Z未决，实际利率回落利多与日线偏空矛盾；报价无Mark、swap未核实、无可靠成本信号，等待失效",
+        "changes": ""
+      }
+    },
+    {
+      "id": "3292aa4d-4a6a-42b0-b8b5-72f8f39dbeec-2-B-1",
+      "actor": "B",
+      "output": {
+        "title": "PPI前观察：日线偏空与实际利率回落矛盾，维持等待",
+        "shortDirection": "MIXED",
+        "longDirection": "BEARISH",
+        "evidenceRefs": [
+          "market:quote",
+          "market:rules",
+          "indicators",
+          "account",
+          "analysis:drivers",
+          "analysis:gaps",
+          "analysis:releases",
+          "econ:CPI_YOY",
+          "econ:PPI_MOM",
+          "ff:5",
+          "US_INTRADAY_REAL_10Y",
+          "US_INTRADAY_NOMINAL_10Y",
+          "333a42d4ebb9bef8547b732861f733e4b18cd01d3305ee813a670ee33e474c08"
+        ],
+        "impacts": [
+          {
+            "newsId": "42089984bbed185e350b05a5d9c9047bc1415edeec4ee1893c806c1821ee4c89",
+            "horizon": "SHORT",
+            "direction": "UNKNOWN",
+            "reason": "印度企业IPO融资与黄金供需及实际利率的传导路径间接，证据不足以判定方向",
+            "counter": "12:30Z PPI高影响事件可能主导波动，该新闻无实质影响"
+          }
+        ],
+        "plan": {
+          "action": "WAIT",
+          "riskAssessment": "日线偏空与实际利率回落矛盾，PPI高影响事件12:30Z未决，swap与执行成本未核实，缺可靠执行依据",
+          "invalidate": "PPI后日线收复4202.13或跌破4033.61使方向一致则本判断失效"
+        },
+        "output": "日线close 4105.11低于EMA20 4202.13，RSI14 38.90、MACD -53.50962909，日线动能偏空；15分钟RSI14 68.26871024、1分钟close 4146.65贴近BB上轨4147.76272473，盘中反弹接近压力。10Y实际利率盘中2.762(-7.5bp)、名义5.106(-8.4bp)回落构成利多反证，与日线偏空矛盾。PPI等高影响事件12:30Z未决，swap与执行成本未核实，维持等待。",
+        "changes": "采纳A的事件窗前等待、15分钟RSI贴高位与实际利率回落压制做空的判断；采纳B轮实际利率回落利多与日线偏空并存的矛盾结论；拒绝在到期前建仓，因swap/执行成本未核实且PPI未决"
+      }
+    }
+  ],
+  "submissionIds": {
+    "news": [
+      "42089984bbed185e350b05a5d9c9047bc1415edeec4ee1893c806c1821ee4c89"
+    ],
+    "peers": [
+      "3292aa4d-4a6a-42b0-b8b5-72f8f39dbeec-2-A-1",
+      "3292aa4d-4a6a-42b0-b8b5-72f8f39dbeec-2-C-1",
+      "3292aa4d-4a6a-42b0-b8b5-72f8f39dbeec-2-B-1"
+    ],
+    "evidenceRefs": [
+      "333a42d4ebb9bef8547b732861f733e4b18cd01d3305ee813a670ee33e474c08",
+      "42089984bbed185e350b05a5d9c9047bc1415edeec4ee1893c806c1821ee4c89",
+      "GATE_EURUSD",
+      "GATE_USDJPY",
+      "US_INTRADAY_NOMINAL_10Y",
+      "US_INTRADAY_NOMINAL_2Y",
+      "US_INTRADAY_REAL_10Y",
+      "US_NOMINAL_10Y",
+      "US_NOMINAL_2Y",
+      "US_REAL_10Y",
+      "account",
+      "analysis:drivers",
+      "analysis:gaps",
+      "analysis:releases",
+      "bb80740f75cdaaa810a3fece2593121541340d23cac9f13399ae488ce6fdb105",
+      "econ:CORE_CPI_MOM",
+      "econ:CORE_CPI_YOY",
+      "econ:CORE_PCE_MOM",
+      "econ:CORE_PCE_YOY",
+      "econ:CPI_MOM",
+      "econ:CPI_YOY",
+      "econ:GDP_THIRD",
+      "econ:JOLTS",
+      "econ:NFP",
+      "econ:PCE_MOM",
+      "econ:PCE_YOY",
+      "econ:PPI_MOM",
+      "econ:UNEMPLOYMENT",
+      "econ:WAGES_MOM",
+      "ff:1",
+      "ff:2",
+      "ff:3",
+      "ff:4",
+      "ff:5",
+      "ff:6",
+      "indicators",
+      "market:quote",
+      "market:rules",
+      "pub:1",
+      "pub:2",
+      "pub:3",
+      "pub:4",
+      "pub:5",
+      "pub:6",
+      "s1",
+      "s2",
+      "s3",
+      "s4",
+      "s5",
+      "s6"
+    ]
+  },
+  "execution": {
+    "at": "2026-10-15T02:51:12.488308367Z",
+    "clientTraceId": "3292aa4d-4a6a-42b0-b8b5-72f8f39dbeec-3-J3-1",
+    "attempt": 1,
+    "maxAttempts": 3,
+    "decisionExpired": false,
+    "missingPreviousActors": []
+  }
+}

@@ -25,4 +25,17 @@ class EvidenceWireTest {
         var encoded=EvidenceWire.encode(f.mapper,input);Object parsed=encoded.startsWith("---")?new Yaml(new SafeConstructor(new LoaderOptions())).load(encoded):f.mapper.readValue(encoded,Object.class);
         tools.jackson.databind.JsonNode decoded=f.mapper.valueToTree(parsed);assertThat(decoded).isEqualTo(input);assertThat(encoded).contains("4096.123456789012345678","0001.0000");
     }
+    @Test void compactFlowKeepsPunctuationWhitespaceQuotesAndMultilineExternalTextExactly(){
+        var f=new TestSupport();var input=f.mapper.createObjectNode();var rows=input.putArray("rows");
+        var fragments=java.util.List.of("don't","a\"b","'quoted,  text'","[a,  b]","{a: x,  b: y}","# comment","&id001 *id001",": ","\n  indented\n", "\\\"", "😀", "2026-10-15", "0.00000000000001");
+        for(int i=0;i<fragments.size();i++)for(int j=0;j<fragments.size();j++) {
+            var row=rows.addObject();row.put("plain",fragments.get(i));row.put("combined",fragments.get(i)+",  "+fragments.get(j));
+            row.putArray("numericStrings").add("0").add("0001.0000");
+        }
+        var encoded=EvidenceWire.encode(f.mapper,input);
+        var loader=new LoaderOptions();loader.setMaxAliasesForCollections(1000);
+        Object parsed=encoded.startsWith("---")?new Yaml(new SafeConstructor(loader)).load(encoded):f.mapper.readValue(encoded,Object.class);
+        tools.jackson.databind.JsonNode restored=f.mapper.valueToTree(parsed);assertThat(restored).isEqualTo(input);
+        assertThat(encoded).startsWith("---").contains(",combined:");
+    }
 }

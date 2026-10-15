@@ -15,7 +15,7 @@ public class EventHub {
         var emitter=new SseEmitter(300_000L);
         clients.add(emitter);
         emitter.onCompletion(()->clients.remove(emitter));
-        emitter.onTimeout(()->{clients.remove(emitter);emitter.complete();});
+        emitter.onTimeout(()->clients.remove(emitter));
         emitter.onError(error->clients.remove(emitter));
         send(emitter,"resync");
         return emitter;
@@ -26,6 +26,7 @@ public class EventHub {
     private void send(SseEmitter client,String event) {
         try { client.send(SseEmitter.event().name(event).id(Long.toString(revision.get()))
             .data(Map.of("revision",revision.get(),"snapshotRequired",event.equals("resync")))); }
-        catch(Exception error) { clients.remove(client);client.complete(); }
+        // The container completes failed sends. A second dispatch here races AsyncListener.onError.
+        catch(Exception error) { clients.remove(client); }
     }
 }
