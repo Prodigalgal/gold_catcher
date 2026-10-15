@@ -46,6 +46,9 @@ public class SecurityConfiguration {
     @Bean
     SecurityFilterChain security(HttpSecurity http, HttpSessionSecurityContextRepository contexts, HttpSessionCsrfTokenRepository csrf) throws Exception {
         return http.authorizeHttpRequests(auth -> auth
+                // Initial SSE requests are authenticated below. Only finish an already admitted stream after logout/disconnect.
+                .requestMatchers(request -> request.getDispatcherType()==jakarta.servlet.DispatcherType.ASYNC
+                    &&request.getMethod().equals("GET")&&request.getRequestURI().equals(request.getContextPath()+"/api/events")).permitAll()
                 .requestMatchers("/actuator/health/liveness", "/actuator/health/readiness", "/api/auth/challenge", "/api/auth/login").permitAll()
                 .anyRequest().authenticated())
             .httpBasic(AbstractHttpConfigurer::disable).formLogin(AbstractHttpConfigurer::disable)

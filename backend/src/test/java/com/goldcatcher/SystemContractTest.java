@@ -8,8 +8,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -19,6 +23,7 @@ import tools.jackson.databind.json.JsonMapper;
 })
 class SystemContractTest {
     @LocalServerPort int port;
+    @Autowired EventHub events;
     private final JsonMapper mapper=JsonMapper.builder().build();
     private HttpClient client(){return HttpClient.newBuilder().cookieHandler(new CookieManager()).build();}
     private HttpResponse<String> get(HttpClient client,String path) throws Exception {
@@ -77,5 +82,17 @@ class SystemContractTest {
     @Test void probeDoesNotExposeCredentialsOrStatus() throws Exception {
         var response=get(client(),"/actuator/health/readiness");assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).doesNotContain("sourceCommit","password","contract-only");
+    }
+    @Test @ExtendWith(OutputCaptureExtension.class)
+    void closingTheEventStreamAfterLogoutDoesNotAuthorizeAnAsyncCleanupAgain(CapturedOutput output)throws Exception {
+        var client=client();assertThat(get(client,"/api/events").statusCode()).isEqualTo(401);var token=login(client);
+        var response=client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/api/events")).build(),HttpResponse.BodyHandlers.ofInputStream());
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(new java.io.BufferedReader(new java.io.InputStreamReader(response.body(),StandardCharsets.UTF_8)).readLine()).isEqualTo("event:resync");
+        assertThat(post(client,"/api/auth/logout",Map.of(),token).statusCode()).isEqualTo(200);response.body().close();
+        org.awaitility.Awaitility.await().during(java.time.Duration.ofMillis(500)).atMost(java.time.Duration.ofSeconds(3)).untilAsserted(()->{
+            events.publish();assertThat(output.getAll()).doesNotContain("Unable to handle the Spring Security Exception","AuthorizationDeniedException");
+        });
+        assertThat(get(client,"/api/events").statusCode()).isEqualTo(401);
     }
 }

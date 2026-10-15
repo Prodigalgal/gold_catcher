@@ -64,8 +64,8 @@ expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
                      'PUBLIC_INTRADAY_TREASURY_TIPS', 'PUBLIC_FINANCIAL_MEDIA_RSS',
-                     'DIVERSE_NEWS_CANDIDATE_POOL', 'PREEMPTIBLE_MIMO_COMPRESSION', 'ANY2API_CIRCUIT_RECOVERY', 'IMMEDIATE_SOURCE_PREPROCESSING',
-                     'SUMMARY_ONLY_NEWS_ADMISSION', 'CONFIGURABLE_COMPRESSION_REPROCESSING', 'BOUNDED_PRE_RESEARCH_PREPARATION'}
+                     'DIVERSE_NEWS_CANDIDATE_POOL', 'INDEPENDENT_COMPRESSION_LANE', 'ANY2API_CIRCUIT_RECOVERY', 'IMMEDIATE_SOURCE_PREPROCESSING',
+                     'SUMMARY_ONLY_NEWS_ADMISSION', 'CONFIGURABLE_COMPRESSION_REPROCESSING', 'NONBLOCKING_RESEARCH_ADMISSION'}
 expected_version = json.loads(Path('web/package.json').read_text())['version']
 if api.get('version') != expected_version or not expected_features <= set(api.get('features', [])):
     raise SystemExit('runtime version or completion feature contract mismatch')

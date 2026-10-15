@@ -97,6 +97,12 @@ public class Any2ApiClient {
         if(!settings.genericAiEndpoint(route)&&catalog.path("cataloged").asBoolean(false)
             &&runtime.path("circuit_state").asText().equals("OPEN")&&runtime.path("available_account_count").asInt()>0
             &&runtime.path("probe_status").asText().equals("READY"))return "MODEL_RECOVERY_READY";
+        // Current Any2API catalogs describe models, not account health. Missing availability is unknown, not false.
+        // Admit only the exact cataloged identity; inference/SSE validation and lane cooldowns remain authoritative.
+        String localId=route.model().startsWith(route.provider()+"/")?route.model().substring(route.provider().length()+1):route.model();
+        if(!settings.genericAiEndpoint(route)&&!catalog.has("available")&&catalog.path("cataloged").asBoolean(false)
+            &&catalog.path("object").asText().equals("model")&&List.of(route.model(),localId).contains(catalog.path("id").asText())
+            &&!runtime.has("circuit_state")&&!runtime.has("available_account_count")&&!runtime.has("probe_status"))return "CATALOG_ADMISSION_READY";
         return "MODEL_NOT_AVAILABLE";
     }
     @org.springframework.scheduling.annotation.Scheduled(fixedDelay=300000,initialDelay=5000) public void warmCatalogs(){
@@ -141,7 +147,7 @@ public class Any2ApiClient {
                 else state=catalogReadiness(route,cached.catalog());
             }
             checks.add(new RouteCheck(route.id(),route.provider(),route.model(),route.judge(),state,cached==null?null:cached.at(),retryAt,fallbackParents.get(route.id())));
-            if(state.equals("READY")||state.equals("MODEL_RECOVERY_READY"))ready.add(route.id());
+            if(state.equals("READY")||state.equals("MODEL_RECOVERY_READY")||state.equals("CATALOG_ADMISSION_READY"))ready.add(route.id());
         }
         for(var route:pool)if(route.fallback()!=null&&ready.contains(route.fallback().id()))ready.add(route.id());
         var selected=new ArrayList<AiRoute>();
@@ -331,7 +337,7 @@ public class Any2ApiClient {
         if(!settings.aiProviderEnabled(route))throw new IllegalArgumentException("AI_PROVIDER_DISABLED");
         if(settings.secret(route).isBlank())throw new IllegalStateException("CREDENTIAL_NOT_CONFIGURED");
         var cached=currentCatalog(route);
-        if(cached!=null&&cached.at().isAfter(clock.instant().minusSeconds(cached.catalog().path("available").asBoolean(false)?300:60)))return cached.catalog();
+        if(cached!=null&&cached.at().isAfter(clock.instant().minusSeconds(catalogReadiness(route,cached.catalog()).equals("MODEL_NOT_AVAILABLE")?60:300)))return cached.catalog();
         if(settings.genericAiEndpoint(route)) {
             var body=mapper.createObjectNode();body.put("id",route.model());body.put("available",true);body.putObject("capabilities");
             body.put("availabilityBasis",settings.manualAiCatalog(route)?"MANUAL_CONFIGURATION; NOT_INFERENCE_ACCEPTANCE":"ADVERTISED_MODEL_ONLY; NOT_INFERENCE_ACCEPTANCE");

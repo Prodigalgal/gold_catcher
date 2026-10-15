@@ -5,6 +5,38 @@ import com.goldcatcher.*;
 import com.goldcatcher.RuntimeSettings.AiRoute;
 import org.junit.jupiter.api.Test;
 class Any2ApiClientTest {
+    @Test void currentAny2apiCatalogWithoutAvailabilityAdmitsResearchJudgingAndCompression()throws Exception{
+        var f=new TestSupport();f.environment.setProperty("GOLD_AI_ROUTES_JSON",java.nio.file.Files.readString(java.nio.file.Path.of("../config/ai-routes.fast.example.json")));
+        for(var route:f.settings.allRoutes())f.environment.setProperty(route.apiKeyEnv(),"test-only");var remote=mock(RemoteHttp.class);
+        when(remote.send(any(),eq(500_000))).thenAnswer(call->{var request=(java.net.http.HttpRequest)call.getArgument(0);String path=request.uri().getPath();
+            return response(200,f.mapper.writeValueAsString(java.util.Map.of("id",path.substring(path.indexOf("/models/")+8),"object","model","cataloged",true,"runtime",java.util.Map.of("concurrent",0,"queue_depth",0,"bulkhead_rejections",0))));});
+        var client=new Any2ApiClient(f.settings,remote,f.mapper,f.clock);
+        assertThat(client.selectRoutes(f.settings.routes("SHORT"),java.util.List.of(),"SHORT")).hasSize(6);
+        var readiness=f.mapper.valueToTree(client.routeReadiness("SHORT"));assertThat(readiness.path("state").asText()).isEqualTo("READY");
+        for(var check:readiness.path("checks"))assertThat(check.path("state").asText()).isEqualTo("CATALOG_ADMISSION_READY");
+        assertThat(client.states().getFirst().catalog().has("available")).isFalse();
+        String research="protocol=GOLD_RESEARCH_V1\ntitle=等待\noutput=观察\nshortDirection=UNKNOWN\nlongDirection=UNKNOWN\nplan.action=WAIT\n";
+        var researchResponse=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",research))))));
+        when(remote.sendInference(any(),eq(8_000_000),any())).thenReturn(researchResponse);
+        var route=f.settings.routes("SHORT").stream().filter(r->!r.judge()).findFirst().orElseThrow();
+        assertThat(client.complete(route,"观察",java.util.Map.of("phase",0,"lane","fast_lane"),f.clock.instant().plusSeconds(2)).output().path("plan").path("action").asText()).isEqualTo("WAIT");
+        var compressor=new AiRoute("compressor-mimo","mimo","mimo/compression","https://localhost/mimo/v1",route.apiKeyEnv(),10000,16000,30000,2,1000,2,false);
+        String summary="protocol=GOLD_COMPRESSION_V1\nsummary=官方事实摘要\n";
+        var compressionResponse=response(200,f.mapper.writeValueAsString(java.util.Map.of("choices",java.util.List.of(java.util.Map.of("finish_reason","stop","message",java.util.Map.of("content",summary))))));
+        when(remote.sendInference(any(),eq(8_000_000),any())).thenReturn(compressionResponse);
+        assertThat(client.compress(compressor,"压缩",java.util.Map.of("source","官方事实" )).output().path("summary").asText()).isEqualTo("官方事实摘要");
+        verify(remote,times(2)).sendInference(any(),eq(8_000_000),any());
+    }
+    @Test void missingAvailabilityNeverAdmitsWrongUnknownOrExplicitlyBlockedCatalogs()throws Exception{
+        for(String blocked:java.util.List.of("{}","{\"id\":\"test\",\"object\":\"model\",\"cataloged\":false}",
+            "{\"id\":\"another\",\"object\":\"model\",\"cataloged\":true}","{\"id\":\"test\",\"object\":\"model\",\"cataloged\":true,\"available\":false}",
+            "{\"id\":\"test\",\"object\":\"model\",\"cataloged\":true,\"runtime\":{\"circuit_state\":\"FORCED_OPEN\"}}")){
+            var f=new TestSupport();f.environment.setProperty("TEST","test-only");var remote=mock(RemoteHttp.class);var blockedResponse=response(200,blocked);when(remote.send(any(),eq(500_000))).thenReturn(blockedResponse);
+            var route=new AiRoute("blocked","mimo","mimo/test","https://localhost/mimo/v1","TEST",10000,16000,30000,2,1000,2,false);
+            assertThatThrownBy(()->new Any2ApiClient(f.settings,remote,f.mapper,f.clock).complete(route,"观察",java.util.Map.of("phase",0),f.clock.instant().plusSeconds(2))).hasMessage("MODEL_NOT_AVAILABLE");
+            verify(remote,never()).sendInference(any(),anyInt(),any());
+        }
+    }
     @Test void deepFailureDoesNotCoolDownTheSameModelsInTheFastLane()throws Exception{
         var f=new TestSupport();f.environment.setProperty("TEST","test-only");var routes=new java.util.ArrayList<AiRoute>();
         for(String provider:java.util.List.of("pa","pb","pc"))for(boolean judge:java.util.List.of(false,true))routes.add(new AiRoute(provider+(judge?"-judge":"-research"),provider,provider+"/"+provider+"-model","https://localhost/"+provider+"/v1","TEST",10000,16000,30000,2,1000,2,judge));
