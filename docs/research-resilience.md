@@ -97,3 +97,5 @@ POST /api/compression/news/{id}/reprocess 在 Session/CSRF 防护下为当前来
 0.7.2按真实MiniMax回复补充文本封装兼容：在显式protocol行之前允许最多2048字符的纯说明文字，原文仍完整归档；前缀中出现结构字段、JSON或代码围栏时拒绝，协议后的字段与尾文仍完整校验。财务数值、方向与引用不猜补，真实失败样本作为固定回归资料。
 
 研究请求的execution携带冻结的maxAttempts。格式错误先返回研究重试层，按具体错误修正原模型输出；最后一次仍有格式错误时才进入配置的Arena兜底。网络故障仍可即时兜底，压缩流程保持独立。
+
+每次请求的submissionIds同时给出news、peers与evidenceRefs三个可选列表；evidenceRefs从封存证据与本轮已归档事实映射生成，禁止把YAML锚点当成来源ID。原值校验保持不变，不将非法引用映射为猜测的来源。

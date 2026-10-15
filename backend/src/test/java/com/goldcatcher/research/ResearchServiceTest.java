@@ -242,6 +242,21 @@ class ResearchServiceTest {
         verify(ai,never()).completeFallback(any(),anyString(),any(),any(Instant.class),anyString());
         assertThat(saved.messages.stream().filter(m->m.error()!=null)).anyMatch(m->m.answer()!=null&&m.answer().output().path("quotedMessages").path(0).asText().equals("invented-reference"));
     }
+    @Test void yamlAnchorNamesAreRejectedAndTheRetryReceivesTheExactEvidenceAllowlist()throws Exception{
+        f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","5");f.environment.setProperty("GOLD_RESEARCH_RETRY_BASE_SECONDS","1");var attempts=new java.util.concurrent.atomic.AtomicInteger();
+        when(ai.complete(any(),anyString(),any(),any(Instant.class))).thenAnswer(call->{
+            var route=(RuntimeSettings.AiRoute)call.getArgument(0);var packet=f.mapper.valueToTree(call.getArgument(2));var answer=waiting(route,packet);
+            assertThat(packet.path("execution").path("maxAttempts").asInt()).isEqualTo(3);
+            var ids=new java.util.HashSet<String>();packet.path("submissionIds").path("evidenceRefs").forEach(id->ids.add(id.asText()));
+            assertThat(ids).contains("market:quote","market:rules","account","indicators").doesNotContain("id002");
+            if(route.id().equals("q")&&packet.path("phase").asInt()==0){
+                int attempt=attempts.incrementAndGet();var refs=(tools.jackson.databind.node.ArrayNode)answer.output().path("evidenceRefs");refs.add(attempt==1?"id002":"market:quote");
+                if(attempt>1)assertThat(packet.path("formatCorrection").path("error").asText()).isEqualTo("INVALID_EVIDENCE_REFERENCE");
+            }return answer;
+        });
+        var saved=await(research.start("XAU_USDT","SHORT").id);assertThat(saved.status).isEqualTo("COMPLETED");assertThat(attempts.get()).isEqualTo(2);
+        assertThat(saved.messages).anyMatch(m->"INVALID_EVIDENCE_REFERENCE".equals(m.error()));
+    }
     @Test void expiredTradingEvidenceStillCompletesAllFourStagesAndThreeJudgeVotes()throws Exception{
         f.environment.setProperty("GOLD_LONG_DECISION_SECONDS","240");var advanced=new java.util.concurrent.atomic.AtomicBoolean();var phases=ConcurrentHashMap.<Integer>newKeySet();
         when(ai.complete(any(),anyString(),any(),any(java.time.Instant.class))).thenAnswer(call->{

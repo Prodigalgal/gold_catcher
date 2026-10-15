@@ -140,7 +140,7 @@ final class ResearchProtocol {
         else if(error.startsWith("INVALID_DIRECTION"))detail="两方向只用BULLISH/BEARISH/UNKNOWN/MIXED。";
         else if(error.equals("INVALID_EVIDENCE_ARRAY"))detail="quotedMessages最多6个原id，evidenceRefs最多14个原id，impact最多4组；只选相关引用，无项留空。";
         else if(error.equals("INVALID_IMPACT"))detail="impact每组完整提交newsId/horizon/direction/reason/counter；newsId只抄news.id，horizon=SHORT/LONG，direction按协议；无判断省略整组。";
-        else if(error.equals("INVALID_EVIDENCE_REFERENCE")||error.equals("INVALID_NEWS_REFERENCE")||error.equals("INVALID_PREVIOUS_STAGE_REFERENCE"))detail="引用逐字抄冻结证据或上轮peers的原id，无项留空。";
+        else if(error.equals("INVALID_EVIDENCE_REFERENCE")||error.equals("INVALID_NEWS_REFERENCE")||error.equals("INVALID_PREVIOUS_STAGE_REFERENCE"))detail="引用只选submissionIds中对应列表的完整原id，不用YAML锚点id001等，不确定留空。";
         else if(error.equals("INVALID_JUDGE_CANDIDATE")||error.equals("MISSING_JUDGE_VOTE"))detail="selectedCandidateId=WAIT或修订peers.id，禁止plan。";
         else if(error.startsWith("INVALID_STRUCTURED_OUTPUT"))detail="只用协议列出的key=value，不回显输入，同字段不可冲突。";
         else detail="按协议完整重交，方向、数值/id不猜补。";
