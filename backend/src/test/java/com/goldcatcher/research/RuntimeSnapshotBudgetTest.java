@@ -18,11 +18,22 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 import tools.jackson.databind.JsonNode;
 class RuntimeSnapshotBudgetTest {
+ private void routes(TestSupport f,Path snapshot,String horizon)throws Exception{
+  String configured=System.getenv("GOLD_TEST_AI_CONFIGURATION");Path path=configured==null?snapshot.resolveSibling("ai-configuration.json"):Path.of(configured);
+  if(!Files.exists(path)){f.environment.setProperty("GOLD_AI_ROUTES_JSON",Files.readString(Path.of("../config/ai-routes.balanced.example.json")));return;}
+  var config=f.mapper.readTree(Files.readString(path));var providers=new HashMap<String,String>();for(var p:config.path("providers"))providers.put(p.path("id").asText(),p.path("baseUrl").asText());
+  var all=new ArrayList<RuntimeSettings.AiRoute>();var selected=config.path(horizon.equals("SHORT")?"shortRoutes":"longRoutes");
+  for(String role:List.of("researchers","judges"))for(var row:selected.path(role)){
+   String provider=row.path("provider").asText();all.add(new RuntimeSettings.AiRoute("snapshot-"+role+"-"+all.size(),provider,row.path("model").asText(),providers.get(provider),"TEST",
+    row.path("inputEstimateLimit").asInt(),row.path("characterLimit").asInt(),row.path("byteLimit").asInt(),row.path("messageLimit").asInt(),row.path("outputReserve").asInt(),row.path("timeoutSeconds").asInt(),role.equals("judges")));
+  }
+  f.environment.setProperty("GOLD_AI_ROUTES_JSON",f.mapper.writeValueAsString(all));
+ }
  @ParameterizedTest @ValueSource(strings={"WAIT","CREATE","ACTIVE_CREATE","CFD_WAIT"}) void currentPublicSnapshotFitsEveryFrozenDiscussionStageWithoutModelHttpCalls(String scenario) throws Exception {
   boolean cfd=scenario.equals("CFD_WAIT");String symbol=cfd?"GATE:XAUUSD":"XAU_USDT",horizon=cfd?"LONG":"SHORT";String path=System.getenv(cfd?"GOLD_TEST_CFD_SNAPSHOT":"GOLD_TEST_SNAPSHOT");org.junit.jupiter.api.Assumptions.assumeTrue(path!=null&&!path.isBlank(),"Optional frozen public runtime snapshot");
   var f=new TestSupport();var dashboard=f.mapper.readTree(Files.readString(Path.of(path)));
   f.clock.now=Instant.parse(dashboard.path("analysis").path("calculatedAt").asText());
-  f.environment.setProperty("GOLD_AI_ROUTES_JSON",Files.readString(Path.of("../config/ai-routes.balanced.example.json")));
+  routes(f,Path.of(path),horizon);
   f.environment.setProperty("GOLD_SHORT_STAGE_SECONDS","1");f.environment.setProperty("GOLD_LONG_STAGE_SECONDS","1");f.environment.setProperty("GOLD_JUDGE_STAGE_SECONDS","1");
   var events=new EventHub();var market=mock(MarketFeed.class);var ledger=mock(SimulationLedger.class);var ai=mock(Any2ApiClient.class);
   var snapshot=f.mapper.treeToValue(dashboard.path("market"),Snapshot.class);
@@ -89,7 +100,7 @@ class RuntimeSnapshotBudgetTest {
  @Test void actualPreviouslyBlockedCfdPeerRepliesFitTheNewProtocolAndCorrectionBudget()throws Exception{
   String path=System.getenv("GOLD_TEST_CFD_RUN");org.junit.jupiter.api.Assumptions.assumeTrue(path!=null&&!path.isBlank(),"Optional archived actual CFD research");
   var f=new TestSupport();var run=f.mapper.readValue(Files.readString(Path.of(path)),ResearchService.Run.class);
-  f.environment.setProperty("GOLD_AI_ROUTES_JSON",Files.readString(Path.of("../config/ai-routes.balanced.example.json")));
+  routes(f,Path.of(path),run.horizon);
   var service=new ResearchService(f.settings,f.store,mock(MarketFeed.class),new NewsService(f.settings,new RemoteHttp(),f.store,new EventHub(),f.clock),mock(SimulationLedger.class),mock(Any2ApiClient.class),f.mapper,new EventHub(),f.clock);
   try{
    String instruction=(String)ReflectionTestUtils.getField(ResearchService.class,"INSTRUCTION");
