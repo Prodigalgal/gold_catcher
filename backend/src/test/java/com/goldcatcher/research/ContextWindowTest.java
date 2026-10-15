@@ -63,4 +63,31 @@ class ContextWindowTest {
         assertThat(ContextWindow.fits(new ContextWindow.Size(4020,4000,1340,2),limits,true)).isFalse();
         assertThat(ContextWindow.fits(new ContextWindow.Size(4020,4000,1340,2),limits,false)).isTrue();
     }
+    @Test void archivedShortJudgePacketFitsWithoutDroppingFactsOrChangingTheSafetyMargin() throws Exception {
+        var packet=f.mapper.readTree(getClass().getResourceAsStream("/research/short-judge-budget-regression.json"));
+        String instruction=(String)org.springframework.test.util.ReflectionTestUtils.getField(ResearchService.class,"JUDGE_INSTRUCTION");
+        instruction+="\n快速研究：说明合计尽量控制在180个汉字内，保留完整订单参数；引用仅选必要项，新闻判断可省略。只输出关键依据与反证，不复述整份输入；保持完整提交格式，成本或信号不可靠时WAIT。";
+        var route=new AiRoute("replay","minmax","minmax/MiniMax-M3.1-Flash-Preview","https://localhost/v1","TEST",10000,20000,30000,2,4096,120,true);
+        var request=new LinkedHashMap<String,Object>();request.put("model",route.model());request.put("stream",true);request.put("stream_options",Map.of("include_usage",true));
+        request.put("messages",List.of(Map.of("role","system","content",instruction+ResearchProtocol.instruction(true,false,false)),Map.of("role","user","content","")));
+        var limits=ContextWindow.limits(route,f.mapper.createObjectNode());
+        for(String correction:List.of("","INVALID_EVIDENCE_ARRAY","INVALID_PREVIOUS_STAGE_REFERENCE")) {
+            var selected=packet.deepCopy();
+            if(!correction.isBlank())((tools.jackson.databind.node.ObjectNode)selected).putObject("formatCorrection").put("error",correction).put("instruction",ResearchProtocol.repairInstruction(correction));
+            var result=ContextWindow.prepare(f.mapper,request,selected,limits);
+            assertThat(ContextWindow.fits(result.sent(),limits,true)).as(correction+" chars="+result.sent().characters()).isTrue();
+            var wire=f.mapper.readTree(result.body()).path("messages").path(1).path("content").asText();
+            var parsed=new org.yaml.snakeyaml.Yaml(new org.yaml.snakeyaml.constructor.SafeConstructor(new org.yaml.snakeyaml.LoaderOptions())).load(wire);
+            tools.jackson.databind.JsonNode restored=f.mapper.valueToTree(parsed);assertThat(restored).isEqualTo(result.packet());
+            assertThat(limits.targetPercent()).isEqualTo(90);
+            for(String field:List.of("quote","indicators","account","rules","analysis","calendar","costConfiguration","evidenceIds"))
+                assertThat(result.packet().path("evidence").path(field)).isEqualTo(packet.path("evidence").path(field));
+            assertThat(result.packet().path("submissionIds")).isEqualTo(packet.path("submissionIds"));
+            for(int i=0;i<packet.path("peers").size();i++){
+                assertThat(result.packet().path("peers").path(i).path("id")).isEqualTo(packet.path("peers").path(i).path("id"));
+                assertThat(result.packet().path("peers").path(i).path("output").path("plan")).isEqualTo(packet.path("peers").path(i).path("output").path("plan"));
+            }
+            System.out.println("ACTUAL_SHORT_JUDGE correction="+correction+" chars="+result.sent().characters()+" utilization="+ContextWindow.utilization(result.sent(),limits));
+        }
+    }
 }
