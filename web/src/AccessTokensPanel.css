@@ -52,6 +52,6 @@
 .gc-oauth-card .gc-oauth-boundary { margin: 0; font-size: 14px; }
 .gc-oauth-actions { display: flex; gap: 12px; justify-content: flex-end; }
 .gc-oauth-actions button { flex: 1; min-height: 48px; }
-.gc-oauth-page .gc-oauth-actions .gc-live-primary { color: var(--gc-bg); }
+.gc-oauth-page .gc-oauth-actions .gc-live-primary { color: var(--gc-bg) !important; }
 .gc-oauth-home { justify-self: center; color: var(--gc-text-secondary); font-size: 14px; padding: 10px; }
 @media (max-width: 600px) { .gc-app.gc-oauth-page { padding: 20px 12px 40px; } .gc-oauth-brand { margin-bottom: 22px; } }
