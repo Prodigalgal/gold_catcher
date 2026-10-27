@@ -111,6 +111,8 @@ curl --fail-with-body https://gold.mnnu.eu.org/api/mcp \
 
 反向代理必须透传 `Authorization`、`Origin`、`MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name`；现有 `/api` HTTPRoute 已覆盖。带 `Origin` 的 MCP 请求须在 `GOLD_EXTERNAL_ALLOWED_ORIGINS` 列表中（逗号分隔；默认生产域名和本地 5173 开发源）；不根据请求的 Host/转发头自动信任 Origin。服务器对服务器请求通常不带 Origin。没有配置跨域浏览器 CORS 授权。
 
+生产 Cloudflare 对普通 Python/MCP 客户端曾返回 403/1010。已按 [deploy/cloudflare-programmatic-api.json](../deploy/cloudflare-programmatic-api.json) 对本域名的 16 个明确机器接口关闭 BIC 浏览器头检查；全局 BIC 仍开启，其他规则保持原样。接口继续强制 Bearer PAT、范围、有效期、Origin 和限流。Owner 管理、登录和普通页面未加入例外。配置变更使用限于本 zone 的一小时临时令牌，读回后已撤销。后续增加 REST 工具路径须同步这份清单；MCP 入口固定无需增加路径。
+
 ## 工具目录
 
 `tools/list` 只列出令牌权限内的工具；直接调用未授权工具仍返回 403。所有工具 `readOnlyHint=true`，查询结果既提供文本 JSON 也提供 `structuredContent`。
@@ -161,5 +163,7 @@ GET /api/external/v1/get_news?id=<record-id>&representation=original&offset=0
 Java 测试涵盖真实 PoW/Session/CSRF、PAT 隔离、撤销和过期、持久化摘要、限流、现代/旧版 MCP、错误消息与 Origin、精确价格、Unicode 分页、稀疏游标及研究私有字段排除。发布后可使用 `scripts/verify_external_access.py` 创建临时验收令牌，验证全部工具和撤销，再在 finally 中清理。该脚本不调用模型或启动研究。
 
 CI 还安装 `scripts/requirements-mcp-test.txt` 中固定版本的官方 Python SDK，通过 `scripts/verify_mcp_sdk.py --stdio` 实测初始化版 HTTP、现代 HTTP 和 stdio 适配器。验收服务器关闭行情、新闻、压缩和自动研究；生产发布后另用真实已有新闻、K 线和研究记录验收，不将本地空库当成真实数据验证。
+
+官方发布/正文验收按来源在数据库中分页取样，独立于首页最新 300 条展示窗口，并继续验证 BEA 有日期、BLS 正文声明时刻/长度/版本一致性和日历。样本可为历史资料，仅证明采集与解析链路曾得到可读取资料，不表示刚刚发布；当前各源的连接/延迟健康检查仍单独保留。冷门历史正文详情在内存未命中时读取持久化记录，不发网络请求、不重做压缩、不修改研究证据缓存。
 
 协议依据：[Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)、[版本兼容](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)、[工具](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)。

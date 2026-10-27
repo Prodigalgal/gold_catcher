@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from auth_client import SessionClient, USER_AGENT
 from http_snapshot import get_snapshot
+from source_acceptance import publication_samples
 
 commit = os.environ["SOURCE_COMMIT"]
 token = os.environ["ARGOCD_READ_TOKEN"]
@@ -182,15 +183,17 @@ for product in ('XAU_USDT', 'GATE:XAUUSD'):
 source_selection = snapshot('/api/sources/configuration')
 expected_sources = {item['id'] for item in source_selection['channels'] if item['enabled'] and item['family'] == 'NEWS'}
 assert expected_sources.isdisjoint(source_selection['configuration']['disabledSourceIds'])
+publication_evidence = publication_samples(client, expected_sources)
+if not publication_evidence['bea'] or not publication_evidence['bls']:
+    raise SystemExit('Stored official publication or declared-time BLS body acceptance failed')
+print('Verified stored official publication/body samples (not a live publication SLA): ' + json.dumps(publication_evidence))
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     sources = snapshot('/api/dashboard?symbol=XAU_USDT')
     states = {source['id']: source for source in sources['sources']}
     if (set(states) == expected_sources
             and all(states[key]['state'] == 'CURRENT' and states[key].get('quality') for key in expected_sources)
-            and ('BEA_NEWS' not in expected_sources or any(item['source'] == 'BEA_NEWS' and item.get('publishedAt') and not item.get('archived') for item in sources['news']))
-            and (not expected_sources.intersection({'BLS_CPI', 'BLS_PPI', 'BLS_JOLTS', 'BLS_EMPLOYMENT'}) or any(item['source'].startswith('BLS_') and item.get('publishedPrecision') == 'DECLARED_RELEASE_TIME'
-                    and item.get('contentCharacters', 0) > 80 for item in sources['news']))
+            and publication_evidence['bea'] and publication_evidence['bls']
             and ('BLS_CALENDAR' not in expected_sources or any(event['source'] == 'BLS_CALENDAR' for event in sources['calendar']))
             and ('FOMC_CALENDAR' not in expected_sources or any(event['source'] == 'FOMC_CALENDAR' and event['scheduledAt'] is None
                     and event.get('timePrecision') == 'DATE_RANGE' for event in sources['calendar']))):

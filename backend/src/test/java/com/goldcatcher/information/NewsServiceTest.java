@@ -8,6 +8,19 @@ import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 class NewsServiceTest {
+    @Test void detailReadsColdStoredBodiesWithoutFetchingOrMutatingEvidenceCache(){
+        var f=new TestSupport();var remote=mock(RemoteHttp.class);var news=new NewsService(f.settings,remote,f.store,new EventHub(),f.clock);
+        var article=new NewsService.News("cold","BLS_CPI","Stored release","Feed text","https://example.test/cpi",f.clock.instant().minusSeconds(3600),f.clock.instant().minusSeconds(3600),"OFFICIAL",1,"feed");
+        var body=new NewsService.ArticleBody("cold","BLS_CPI",article.link(),"Exact stored text", "AVAILABLE","body-hash",f.clock.instant().minusSeconds(1800),f.clock.instant(),null,1,null,false,"feed",f.clock.instant().minusSeconds(3000),"HTML");
+        f.store.save("news",article.id(),article);f.store.save("news-body",article.id(),body);
+        String revision=f.store.revision("news-body");var detail=news.detail("cold");
+        assertThat(detail.get("body")).isEqualTo(body);
+        var displayed=(NewsService.News)detail.get("news");assertThat(displayed.publishedPrecision()).isEqualTo("DECLARED_RELEASE_TIME");
+        assertThat(displayed.publishedAt()).isEqualTo(body.releaseAt());assertThat(displayed.contentCharacters()).isEqualTo(body.text().length());
+        assertThat(news.bodyForEvidence("cold",f.clock.instant())).isNull();assertThat(f.store.revision("news-body")).isEqualTo(revision);verifyNoInteractions(remote);
+        var revised=new NewsService.News("cold","BLS_CPI",article.title(),article.excerpt(),article.link(),article.publishedAt(),article.receivedAt(),"OFFICIAL",2,"changed-feed");
+        f.store.save("news","cold",revised);assertThat(((NewsService.News)news.detail("cold").get("news")).contentCharacters()).isZero();
+    }
     @Test void textArrivalQueuesImmediatelyButFuturePublicationsRemainOutsideResearch()throws Exception{
         var f=new TestSupport();var remote=mock(RemoteHttp.class);var news=new NewsService(f.settings,remote,f.store,new EventHub(),f.clock);
         var queued=new ArrayList<String>();news.onText(id->{assertThat(f.store.find("news",id,NewsService.News.class)).isPresent();queued.add(id);});
