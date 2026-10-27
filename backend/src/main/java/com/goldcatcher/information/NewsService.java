@@ -208,12 +208,17 @@ public class NewsService {
         return text.isBlank()?null:new SourceText(text,hash(text),original.excerpt()==null||original.excerpt().isBlank()?"HEADLINE_ONLY":"FEED_SUMMARY",original.receivedAt(),null,false);
     }
     private ArticleBody knownBody(News news,Instant cutoff) {
-        var body=bodies.get(news.id());
+        return knownBody(news,bodies.get(news.id()),cutoff);
+    }
+    private ArticleBody knownBody(News news,ArticleBody body,Instant cutoff) {
         return body!=null&&body.receivedAt()!=null&&!body.receivedAt().isAfter(cutoff)&&Objects.equals(body.feedHash(),news.contentHash())?body:null;
     }
     private News decorate(News news) {return decorate(news,clock.instant());}
     private News decorate(News news,Instant cutoff) {
-        var body=knownBody(news,cutoff);boolean archive=news.source().equals("BEA_NEWS")&&news.publishedAt()==null;
+        return decorate(news,cutoff,bodies.get(news.id()));
+    }
+    private News decorate(News news,Instant cutoff,ArticleBody pending) {
+        var body=knownBody(news,pending,cutoff);boolean archive=news.source().equals("BEA_NEWS")&&news.publishedAt()==null;
         Instant published=body!=null&&body.releaseAt()!=null?body.releaseAt():news.publishedAt();
         String precision=body!=null&&body.releaseAt()!=null?"DECLARED_RELEASE_TIME":
             news.publishedPrecision()==null?(published==null?"UNKNOWN":"EXACT"):news.publishedPrecision();
@@ -222,7 +227,7 @@ public class NewsService {
         String content=body==null?(mediaSource(news.source())?"PUBLIC_FEED_SUMMARY":"PENDING"):body.state();
         if(body==null&&news.publishedAt()!=null&&news.publishedAt().isBefore(cutoff.minus(Duration.ofDays(90))))content="BACKGROUND_FEED_ONLY";
         if(archive)content="QUARANTINED";
-        var pending=bodies.get(news.id());if(body==null&&pending!=null&&Objects.equals(pending.feedHash(),news.contentHash()))content=pending.state();
+        if(body==null&&pending!=null&&Objects.equals(pending.feedHash(),news.contentHash()))content=pending.state();
         return new News(news.id(),news.source(),news.title(),body!=null&&!body.text().isBlank()?OfficialArticle.excerpt(body.text(),1000):news.excerpt(),
             news.link(),published,news.receivedAt(),news.verification(),news.version(),news.contentHash(),precision,content,
             body==null?0:body.text().codePointCount(0,body.text().length()),body==null?null:body.receivedAt(),body==null?null:body.hash(),freshness,archive,news.publishedAt());
@@ -242,7 +247,8 @@ public class NewsService {
     }
     public Map<String,Object> detail(String id) {
         var article=store.find("news",id,News.class).orElseThrow(()->new IllegalArgumentException("NEWS_NOT_FOUND"));
-        Map<String,Object> result=new LinkedHashMap<>();result.put("news",decorate(article));result.put("body",bodies.get(id));return result;
+        var body=bodies.get(id);if(body==null)body=store.find("news-body",id,ArticleBody.class).orElse(null);
+        Map<String,Object> result=new LinkedHashMap<>();result.put("news",decorate(article,clock.instant(),body));result.put("body",body);return result;
     }
     public List<News> selectedEvidence(Instant cutoff,int limit) {
         var candidates=evidence(cutoff);var selected=new ArrayList<News>();var families=new HashSet<String>();var links=new HashSet<String>();

@@ -86,6 +86,7 @@ jobs:
             https://api.github.com/meta -o "$RUNNER_TEMP/github-meta.json"
           python3 -c 'import json,sys; keys=json.load(open(sys.argv[1]))["ssh_keys"]; assert keys, "GitHub host keys missing"; print("\n".join("github.com " + key for key in keys))' "$RUNNER_TEMP/github-meta.json" > ~/.ssh/known_hosts
       - name: Promote both digests in one GitOps commit
+        id: promote_release
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMIT: ${{ github.sha }}
@@ -116,6 +117,10 @@ jobs:
           ARGOCD_READ_TOKEN: ${{ secrets.ARGOCD_READ_TOKEN }}
           GOLD_SMOKE_USERNAME: ${{ secrets.GOLD_SMOKE_USERNAME }}
           GOLD_SMOKE_PASSWORD: ${{ secrets.GOLD_SMOKE_PASSWORD }}
-        run: |
-          python3 scripts/verify_deployment.py
-          python3 scripts/verify_external_access.py
+        run: python3 scripts/verify_deployment.py
+      - name: Verify PAT, MCP and OpenAI data access independently
+        if: ${{ !cancelled() && steps.promote_release.outcome == 'success' }}
+        env:
+          GOLD_SMOKE_USERNAME: ${{ secrets.GOLD_SMOKE_USERNAME }}
+          GOLD_SMOKE_PASSWORD: ${{ secrets.GOLD_SMOKE_PASSWORD }}
+        run: python3 scripts/verify_external_access.py
