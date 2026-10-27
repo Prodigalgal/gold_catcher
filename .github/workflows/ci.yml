@@ -44,6 +44,7 @@ jobs:
           test -n "$jar_path"
           java -jar "$jar_path" --server.address=127.0.0.1 --server.port=18084 \
             --gold.auth.username="$GOLD_SMOKE_USERNAME" --gold.auth.password="$GOLD_SMOKE_PASSWORD" --gold.auth.pow-bits=8 \
+            --gold.oauth.issuer=http://127.0.0.1:18084 \
             '--spring.datasource.url=jdbc:h2:mem:pat-ci;MODE=PostgreSQL;DB_CLOSE_DELAY=-1' > "$RUNNER_TEMP/gold-mcp-server.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -56,6 +57,7 @@ jobs:
           test "$ready" = true
           python3 scripts/verify_external_access.py --base-url http://127.0.0.1:18084
           "$RUNNER_TEMP/gold-mcp-sdk/bin/python" scripts/verify_mcp_sdk.py --base-url http://127.0.0.1:18084 --stdio
+          "$RUNNER_TEMP/gold-mcp-sdk/bin/python" scripts/verify_oauth_sdk.py --base-url http://127.0.0.1:18084
   web:
     runs-on: ubuntu-24.04
     steps:

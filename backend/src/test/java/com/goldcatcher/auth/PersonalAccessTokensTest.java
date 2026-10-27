@@ -41,8 +41,32 @@ class PersonalAccessTokensTest {
         for (var scopes : List.of(List.<String>of(), List.of("market:write"), List.of("market:read", "market:read")))
             assertThatThrownBy(() -> tokens.create("admin", new PersonalAccessTokens.Create("client", scopes, 90, 120))).hasMessage("INVALID_TOKEN_SCOPES");
         assertThatThrownBy(() -> tokens.create("admin", new PersonalAccessTokens.Create("\n", List.of("market:read"), 90, 120))).hasMessage("INVALID_TOKEN_NAME");
-        assertThatThrownBy(() -> tokens.create("admin", new PersonalAccessTokens.Create("client", List.of("market:read"), 0, 120))).hasMessage("INVALID_TOKEN_LIMITS");
+        assertThatThrownBy(() -> tokens.create("admin", new PersonalAccessTokens.Create("client", List.of("market:read"), -1, 120))).hasMessage("INVALID_TOKEN_LIMITS");
         assertThatThrownBy(() -> tokens.create("admin", new PersonalAccessTokens.Create("client", List.of("market:read"), 90, 601))).hasMessage("INVALID_TOKEN_LIMITS");
         assertThat(tokens.list("admin")).isEmpty(); assertThat(create().secret()).isNotEqualTo(create().secret());
+    }
+    @Test void permanentTokensHaveNoExpirySurviveYearsAndRemainRevocable() {
+        var created = tokens.create("admin", new PersonalAccessTokens.Create("Permanent", List.of("market:read"), 0, 120));
+        assertThat(created.token().expiresAt()).isNull();
+        f.clock.advance(Duration.ofDays(3650).toMillis());
+        var restarted = new PersonalAccessTokens(f.jdbc, f.clock, f.store);
+        var identity = restarted.authenticate(created.secret()); restarted.used(identity);
+        assertThat(restarted.list("admin").getFirst().state()).isEqualTo("ACTIVE");
+        assertThat(restarted.list("admin").getFirst().expiresAt()).isNull();
+        assertThat(restarted.list("admin").getFirst().useCount()).isEqualTo(1);
+        restarted.revoke("admin", created.token().id());
+        assertThatThrownBy(() -> restarted.authenticate(created.secret())).hasMessage("INVALID_ACCESS_TOKEN");
+    }
+    @Test void activeExistingTokensCanBecomePermanentWithoutChangingSecretOrRevivingDeadTokens() {
+        var created = create();
+        assertThatThrownBy(() -> tokens.permanent("other", created.token().id())).hasMessage("TOKEN_NOT_FOUND");
+        assertThat(tokens.permanent("admin", created.token().id()).expiresAt()).isNull();
+        assertThat(tokens.permanent("admin", created.token().id()).expiresAt()).isNull();
+        f.clock.advance(Duration.ofDays(730).toMillis());
+        assertThat(tokens.authenticate(created.secret())).isNotNull();
+        var expired = create(); f.clock.advance(Duration.ofDays(2).toMillis());
+        assertThatThrownBy(() -> tokens.permanent("admin", expired.token().id())).hasMessage("TOKEN_NOT_ACTIVE");
+        tokens.revoke("admin", created.token().id());
+        assertThatThrownBy(() -> tokens.permanent("admin", created.token().id())).hasMessage("TOKEN_NOT_ACTIVE");
     }
 }

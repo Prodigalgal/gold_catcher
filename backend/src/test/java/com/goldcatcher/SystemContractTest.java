@@ -60,7 +60,7 @@ class SystemContractTest {
         var credentials=solve(packet);var other=client();var otherToken=mapper.readTree(get(other,"/api/auth/challenge").body());
         assertThat(post(other,"/api/auth/login",credentials,otherToken).statusCode()).isEqualTo(400);
         var logged=post(client,"/api/auth/login",credentials,packet);assertThat(logged.statusCode()).isEqualTo(200);
-        assertThat(response.headers().firstValue("set-cookie").orElseThrow()).contains("HttpOnly","SameSite=Strict");
+        assertThat(response.headers().firstValue("set-cookie").orElseThrow()).contains("HttpOnly","SameSite=Lax");
         assertThat(logged.headers().firstValue("set-cookie").orElseThrow()).isNotEqualTo(response.headers().firstValue("set-cookie").orElseThrow());
         var session=mapper.readTree(get(client,"/api/session").body());
         assertThat(post(client,"/api/auth/login",credentials,session).statusCode()).isEqualTo(400);

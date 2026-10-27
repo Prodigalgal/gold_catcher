@@ -70,6 +70,8 @@ def verify(base, username, password):
         full = client.request('/api/access/tokens', {'name': 'Temporary MCP acceptance', 'scopes': ['market:read', 'information:read', 'research:read'], 'expiresInDays': 1, 'requestsPerMinute': 600})
         created.append(full['token']['id'])
         secret = full['secret']
+        permanent = client.request('/api/access/tokens/' + full['token']['id'] + '/permanent', {})
+        assert permanent['expiresAt'] is None and permanent['state'] == 'ACTIVE'
         inventory = client.request('/api/access/tokens')
         assert secret not in json.dumps(inventory)
         status, packet = rpc(secret, 'initialize', {'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': {'name': 'acceptance', 'version': '1'}})
@@ -128,8 +130,9 @@ def verify(base, username, password):
         response_call = {'type': 'function_call', 'call_id': 'call_response_acceptance', 'name': 'list_products', 'arguments': '{}'}
         status, converted = request('/api/external/v1/openai/tool', secret, {'tool_call': response_call})
         assert status == 200 and converted['responseOutput']['call_id'] == 'call_response_acceptance'
-        limited = client.request('/api/access/tokens', {'name': 'Temporary scope acceptance', 'scopes': ['market:read'], 'expiresInDays': 1, 'requestsPerMinute': 120})
+        limited = client.request('/api/access/tokens', {'name': 'Temporary scope acceptance', 'scopes': ['market:read'], 'expiresInDays': 0, 'requestsPerMinute': 120})
         created.append(limited['token']['id'])
+        assert limited['token']['expiresAt'] is None
         status, packet = rpc(limited['secret'], 'tools/list')
         assert status == 200 and len(packet['result']['tools']) == 5
         assert rpc(limited['secret'], 'tools/call', {'name': 'search_news'})[0] == 403
@@ -141,7 +144,7 @@ def verify(base, username, password):
         assert request('/api/external/v1/list_products', secret)[0] == 401
         return {'state': 'PASSED', 'toolsDiscovered': 12, 'successfulToolCalls': len(checks), 'uniqueSuccessfulTools': sorted(set(checks)),
                 'realArticleChecked': article_checked, 'realResearchChecked': research_checked, 'marketStates': market_states,
-                'modernAndLegacy': True, 'openAiChatAndResponsesAdapters': True, 'scopeAndOwnerIsolation': True, 'revocationVerified': True}
+                'modernAndLegacy': True, 'openAiChatAndResponsesAdapters': True, 'scopeAndOwnerIsolation': True, 'revocationVerified': True, 'permanentPatVerified': True}
     finally:
         failures = []
         for token_id in created:

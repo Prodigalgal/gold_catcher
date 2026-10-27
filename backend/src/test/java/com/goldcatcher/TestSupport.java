@@ -28,6 +28,8 @@ public final class TestSupport {
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V3__account_samples.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V4__market_archive_statistics.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V5__personal_access_tokens.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V6__oauth_mcp.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V7__permanent_personal_access_tokens.sql")).execute(ds);
         jdbc=new JdbcTemplate(ds);
         store=new DocumentStore(jdbc,mapper,new TransactionTemplate(new DataSourceTransactionManager(ds)),clock);
     }

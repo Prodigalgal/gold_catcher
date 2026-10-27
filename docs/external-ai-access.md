@@ -1,8 +1,36 @@
-# PAT 与只读 MCP 服务
+# OAuth、Bearer PAT 与只读 MCP 服务
 
 入口：运行与配置 → **PAT 令牌与 MCP**。创建令牌后，完整令牌只在本次响应中显示；页面关闭后不能恢复，可撤销并重新创建。
 
 远程 MCP 地址：`https://gold.mnnu.eu.org/api/mcp`。与 Java 服务一同部署，沿用现有 `/api` 网关、数据库、TLS 和 CI/CD，无需另开端口。MCP 和配套 REST 查询均不刷新信源、不调用模型、不启动研究、不写入订单。
+
+## ChatGPT 网页端：OAuth 接入
+
+在 ChatGPT 的自定义 MCP 设置中填写 `https://gold.mnnu.eu.org/api/mcp`，认证选择 **OAuth**；客户端 ID 和客户端密钥留空，由客户端通过 DCR 自动注册。随后跳转到 Gold Catcher，使用现有账号完成 PoW 登录，在独立授权页核对应用名称、回调域名与读取权限，点击允许后返回 ChatGPT。
+
+已有 Bearer PAT 继续有效，适用于支持自定义 Authorization 请求头的 MCP 客户端、REST 和下文的 OpenAI API 调用。OAuth 不把 PAT 交给客户端，撤销 OAuth 连接也不会撤销 PAT。ChatGPT 网页端的连接方式与 Responses API 直接提供 Bearer 凭据属于两种接入方式。[OpenAI 自定义 MCP 文档](https://developers.openai.com/api/docs/guides/custom-mcp-server)、[OAuth 认证要求](https://developers.openai.com/plugins/build/auth)。
+
+OAuth 连接可在 **运行与配置 → PAT 令牌与 MCP → OAuth 已授权连接** 查看和撤销。该页面显示应用、回调域名、授权范围、期限、最近使用和请求计数，不显示访问令牌、刷新令牌或授权码。
+
+### OAuth 协议与边界
+
+- 资源标识：`https://gold.mnnu.eu.org/api/mcp`；授权服务器 issuer：`https://gold.mnnu.eu.org`，精确匹配，不根据 Host 或代理头生成。
+- 资源发现：`GET /.well-known/oauth-protected-resource/api/mcp`，根路径 `/.well-known/oauth-protected-resource` 也返回同一份资源文档。未认证 MCP 请求返回 401，并通过 `WWW-Authenticate: Bearer resource_metadata="..."` 指向文档。
+- 授权服务器发现：`GET /.well-known/oauth-authorization-server`，公布注册、授权、兑换、撤销地址，`S256`、授权码/刷新 grant 和三个只读 scope。
+- 注册：`POST /api/oauth/register`，仅支持 public client 的 `token_endpoint_auth_method=none`，无需客户端密钥。支持 DCR，当前不声明 CIMD、OIDC、client_credentials 或 private_key_jwt 能力。注册不授予数据权限，不访问客户端提供的任何 URL。
+- 回调 URI 必须与注册值逐字匹配；只接受 HTTPS 或本机回环 HTTP，不接受用户信息段、fragment、普通 HTTP 或通配符。客户端名称未经身份认证，授权页同时显示完整回调地址供用户核对。
+- 授权：`GET /api/oauth/authorize` 必须携带 `response_type=code`、`client_id`、`redirect_uri`、`resource`、`scope`、`code_challenge`、`code_challenge_method=S256`。`state` 原样返回。授权请求保存在对应浏览器 Session 中，10 分钟失效；登录轮换 Session ID 后继续保留。GET 不创建授权或令牌；Owner + CSRF 的 POST 才能批准。
+- 访问授权仅 30 天，授权码 120 秒且只能使用一次，访问令牌最长 3600 秒。刷新令牌继承授权的绝对到期时间，每次刷新都轮换；重用已消费的刷新令牌会提交整组授权撤销。刷新可缩小权限，不能扩大。
+- 兑换：`POST /api/oauth/token`，表单格式，`grant_type=authorization_code` 或 `refresh_token`；均须提供 `client_id` 和精确的 `resource`。授权码还须提供原始 `redirect_uri` 和 `code_verifier`。拒绝重复表单参数、错误客户端、资源、回调和校验值。
+- 协议撤销：`POST /api/oauth/revoke`，表单 `client_id` 和 `token`，接受该客户端的访问/刷新令牌，撤销对应整组授权；未知令牌不泄漏存在性。
+- 全部授权回调均带精确 `iss`，成功和拒绝均回传 `state`，支持 ChatGPT 的稳定回调模式。OAuth 令牌为 256 位随机 opaque Bearer，数据库仅保存 SHA-256 摘要；资源、Owner、范围、期限和撤销状态在服务端逐次校验。不同于 JWT，本服务没有向外提供签名公钥或 ID token。
+- Session Cookie 为 HttpOnly、SameSite=Lax，允许跨站顶层 OAuth 导航；生产仍使用 Secure。所有 Owner 状态修改与授权确认继续强制 CSRF，登录继续强制 PoW。授权页禁止 iframe 嵌入，禁止向外站发送完整 referrer。
+- OAuth 与 PAT 使用相同只读工具、权限检查、每分钟限流和并发控制。每个 OAuth 授权默认 120 请求/分钟、2 个同时进行的请求，所有外部读取合计 6 个并发；OAuth 只增加认证方式。
+- DCR 每进程每分钟最多 20 次，最多保留 10000 个客户端；每个 Owner 最多 100 个有效授权，后台最多列出最近 500 条。已注册客户端不会随访问令牌轮换而删除。
+
+### OAuth 验收
+
+`scripts/verify_oauth_sdk.py` 使用官方 MCP Python SDK 2.3.0、原生请求头，执行发现 → DCR → PoW/CSRF 授权 → S256 兑换 → 新旧 MCP 协议工具调用 → 实际刷新 → 重放撤销，最后撤销全部临时授权。不执行模型推理，也不替用户在 ChatGPT 账户中创建连接。Java 合同测试另行覆盖跨 Session 请求、缺失 CSRF、拒绝授权、回调/客户端/resource 替换、权限扩大、过期和重启后的持久凭据读取。
 
 ## 权限与认证
 
@@ -12,15 +40,17 @@
 | `information:read` | 信息库检索、原文、压缩摘要、经济日历、宏观驱动、经济数据与预期、信源状态 |
 | `research:read` | 研究历史、模型观点、三方裁决与有效期 |
 
-每个调用方分别创建令牌，填写 1–365 天有效期和每分钟 10–600 次请求上限（默认 90 天、120 次）。每个账户最多 100 枚有效令牌。每枚令牌最多 2 个同时进行的读取请求，进程总共最多 6 个；超限返回 `429` 和 `Retry-After`。计数窗口为进程内每个 UTC 分钟；当前单服务器副本，若扩多副本需将限流迁移到共享存储。
+每个调用方分别创建令牌，选择永久有效或填写 1–365 天有效期，并设置每分钟 10–600 次请求上限（默认 90 天、120 次）。每个账户最多 100 枚有效令牌，永久令牌也计入上限。每枚令牌最多 2 个同时进行的读取请求，进程总共最多 6 个；超限返回 `429` 和 `Retry-After`。计数窗口为进程内每个 UTC 分钟；当前单服务器副本，若扩多副本需将限流迁移到共享存储。
 
-调用使用 `Authorization: Bearer <YOUR_PAT>`。不要将令牌放进 URL、查询参数、日志、提示词或 Git。数据库持久保存随机令牌的 SHA-256 摘要、范围、有效期、撤销状态、最近使用时间和已认证请求数。每次请求从数据库核验撤销和过期状态；重启后仍有效，撤销后新请求立即拒绝。已在执行的只读请求可正常结束。使用计数包含认证后的业务错误，不代表查询成功数。
+调用使用 `Authorization: Bearer <YOUR_PAT>`。不要将令牌放进 URL、查询参数、日志、提示词或 Git。数据库持久保存随机令牌的 SHA-256 摘要、范围、有效期、撤销状态、最近使用时间和已认证请求数。永久令牌的 expiresAt 为 null，持续有效至撤销。每次请求从数据库核验撤销和过期状态；重启后仍有效，撤销后新请求立即拒绝。已在执行的只读请求可正常结束。使用计数包含认证后的业务错误，不代表查询成功数。
 
 令牌管理接口沿用 **Owner Session + PoW 登录 + CSRF**：
 
 - `GET /api/access/tokens`：列表及范围，无密钥。
 - `POST /api/access/tokens`：`{"name":"AI client","scopes":["market:read","information:read"],"expiresInDays":90,"requestsPerMinute":120}`。
 - `POST /api/access/tokens/{id}/revoke`：撤销，重复调用结果一致。
+- 创建时 `expiresInDays=0` 表示永久有效；省略仍默认 90 天。UI 提供“永久有效”选项。
+- `POST /api/access/tokens/{id}/permanent`：将自己现有的有效 PAT 设为永久，不改变完整令牌；不能恢复已过期或已撤销的令牌。UI 在有效的有限期令牌旁提供“设为永久”。
 
 PAT 无法调用内部 Session、模型配置、调度或订单接口；Owner Cookie 也不替代外部接口的 Bearer 令牌。
 
@@ -42,7 +72,7 @@ PAT 无法调用内部 Session、模型配置、调度或订单接口；Owner Co
 }
 ```
 
-只接受 OAuth 的客户端不能直接使用此 PAT 服务；当前不提供 OAuth 授权流程。仅支持本地 stdio 的客户端可使用标准库适配器：
+只接受 OAuth 的客户端使用上文授权流程。支持本地 stdio 的客户端仍可使用标准库 PAT 适配器：
 
 ```json
 {
@@ -111,7 +141,7 @@ curl --fail-with-body https://gold.mnnu.eu.org/api/mcp \
 
 反向代理必须透传 `Authorization`、`Origin`、`MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name`；现有 `/api` HTTPRoute 已覆盖。带 `Origin` 的 MCP 请求须在 `GOLD_EXTERNAL_ALLOWED_ORIGINS` 列表中（逗号分隔；默认生产域名和本地 5173 开发源）；不根据请求的 Host/转发头自动信任 Origin。服务器对服务器请求通常不带 Origin。没有配置跨域浏览器 CORS 授权。
 
-生产 Cloudflare 对普通 Python/MCP 客户端曾返回 403/1010。已按 [deploy/cloudflare-programmatic-api.json](../deploy/cloudflare-programmatic-api.json) 对本域名的 16 个明确机器接口关闭 BIC 浏览器头检查；全局 BIC 仍开启，其他规则保持原样。接口继续强制 Bearer PAT、范围、有效期、Origin 和限流。Owner 管理、登录和普通页面未加入例外。配置变更使用限于本 zone 的一小时临时令牌，读回后已撤销。后续增加 REST 工具路径须同步这份清单；MCP 入口固定无需增加路径。
+生产 Cloudflare 对普通 Python/MCP 客户端曾返回 403/1010。按 [deploy/cloudflare-programmatic-api.json](../deploy/cloudflare-programmatic-api.json) 对本域名的明确机器接口及 OAuth 发现/注册/兑换/撤销路径关闭 BIC 浏览器头检查；全局 BIC 仍开启，其他规则保持原样。数据接口继续强制 Bearer PAT 或 OAuth 令牌、范围、有效期、Origin 和限流。Owner 管理、登录、授权确认和普通页面未加入例外。配置变更使用限于本 zone 的一小时临时令牌，读回后撤销。后续增加 REST 工具路径须同步清单；MCP 入口固定无需增加路径。
 
 ## 工具目录
 

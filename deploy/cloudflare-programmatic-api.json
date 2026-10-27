@@ -1,8 +1,10 @@
 {
   "ref": "gold_catcher_programmatic_api_bic",
-  "description": "Gold Catcher PAT-authenticated MCP and read-only data clients; BIC only",
-  "expression": "(http.host eq \"gold.mnnu.eu.org\" and http.request.uri.path in {\"/api/mcp\" \"/api/external/v1\" \"/api/external/v1/list_products\" \"/api/external/v1/get_quote\" \"/api/external/v1/get_candles\" \"/api/external/v1/get_indicators\" \"/api/external/v1/get_market_depth\" \"/api/external/v1/search_news\" \"/api/external/v1/get_news\" \"/api/external/v1/get_calendar\" \"/api/external/v1/get_drivers\" \"/api/external/v1/get_source_status\" \"/api/external/v1/list_research\" \"/api/external/v1/get_research\" \"/api/external/v1/openai/tools\" \"/api/external/v1/openai/tool\"})",
+  "description": "Gold Catcher PAT/OAuth MCP clients and OAuth machine endpoints; BIC only",
+  "expression": "(http.host eq \"gold.mnnu.eu.org\" and http.request.uri.path in {\"/api/mcp\" \"/api/external/v1\" \"/api/external/v1/list_products\" \"/api/external/v1/get_quote\" \"/api/external/v1/get_candles\" \"/api/external/v1/get_indicators\" \"/api/external/v1/get_market_depth\" \"/api/external/v1/search_news\" \"/api/external/v1/get_news\" \"/api/external/v1/get_calendar\" \"/api/external/v1/get_drivers\" \"/api/external/v1/get_source_status\" \"/api/external/v1/list_research\" \"/api/external/v1/get_research\" \"/api/external/v1/openai/tools\" \"/api/external/v1/openai/tool\" \"/.well-known/oauth-protected-resource\" \"/.well-known/oauth-protected-resource/api/mcp\" \"/.well-known/oauth-authorization-server\" \"/api/oauth/register\" \"/api/oauth/token\" \"/api/oauth/revoke\"})",
   "action": "set_config",
-  "action_parameters": { "bic": false },
+  "action_parameters": {
+    "bic": false
+  },
   "enabled": true
 }

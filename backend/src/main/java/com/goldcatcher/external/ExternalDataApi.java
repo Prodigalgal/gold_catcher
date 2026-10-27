@@ -2,6 +2,7 @@ package com.goldcatcher.external;
 
 import com.goldcatcher.auth.PersonalAccessTokens;
 import com.goldcatcher.auth.PersonalAccessTokens.Identity;
+import com.goldcatcher.auth.OAuthService;
 import java.util.Map;
 import org.springframework.http.*;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -14,7 +15,8 @@ import tools.jackson.databind.ObjectMapper;
 public class ExternalDataApi {
     private final ExternalTools tools;
     private final ObjectMapper mapper;
-    public ExternalDataApi(ExternalTools tools, ObjectMapper mapper) { this.tools = tools; this.mapper = mapper; }
+    private final OAuthService oauth;
+    public ExternalDataApi(ExternalTools tools, ObjectMapper mapper, OAuthService oauth) { this.tools = tools; this.mapper = mapper; this.oauth = oauth; }
     @GetMapping public Object catalog(@AuthenticationPrincipal Identity identity) {
         return Map.of("readOnly", true, "tools", tools.available(identity).stream().map(ExternalTools.Tool::definition).toList(), "endpointPattern", "/api/external/v1/{toolName}");
     }
@@ -33,6 +35,8 @@ public class ExternalDataApi {
         return tools.call(identity, name, args);
     }
     @ExceptionHandler(PersonalAccessTokens.Rejected.class) public ResponseEntity<?> rejected(PersonalAccessTokens.Rejected failure) {
-        return ResponseEntity.status(failure.status).body(Map.of("error", failure.getMessage()));
+        var builder = ResponseEntity.status(failure.status);
+        if (failure.requiredScope != null) builder.header("WWW-Authenticate", oauth.insufficientScope(failure.requiredScope));
+        return builder.body(Map.of("error", failure.getMessage()));
     }
 }

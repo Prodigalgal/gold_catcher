@@ -12,7 +12,7 @@ server:
       cookie:
         http-only: true
         secure: ${GOLD_AUTH_COOKIE_SECURE:false}
-        same-site: strict
+        same-site: lax
         path: /
 spring:
   application:
@@ -52,6 +52,8 @@ management:
         enabled: true
       show-details: never
 gold:
+  oauth:
+    issuer: ${GOLD_OAUTH_ISSUER:https://gold.mnnu.eu.org}
   source-commit: ${GOLD_SOURCE_COMMIT:development}
   auth:
     username: ${GOLD_AUTH_USERNAME:}

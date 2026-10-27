@@ -12,7 +12,9 @@ public class ExternalTools {
     public record Tool(String name, String title, String description, String scope, Map<String,Object> inputSchema) {
         public Map<String,Object> definition() {
             return Map.of("name", name, "title", title, "description", description, "inputSchema", inputSchema,
-                "annotations", Map.of("readOnlyHint", true, "destructiveHint", false, "idempotentHint", true, "openWorldHint", false));
+                "annotations", Map.of("readOnlyHint", true, "destructiveHint", false, "idempotentHint", true, "openWorldHint", false),
+                "securitySchemes", List.of(Map.of("type", "oauth2", "scopes", List.of(scope))),
+                "_meta", Map.of("securitySchemes", List.of(Map.of("type", "oauth2", "scopes", List.of(scope)))));
         }
     }
     private final ExternalData data;

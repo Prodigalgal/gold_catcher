@@ -20,6 +20,9 @@ public class AccessTokenApi {
     @PostMapping("/{id}/revoke") public ResponseEntity<?> revoke(Principal user, @PathVariable String id) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(tokens.revoke(user.getName(), id));
     }
+    @PostMapping("/{id}/permanent") public ResponseEntity<?> permanent(Principal user, @PathVariable String id) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(tokens.permanent(user.getName(), id));
+    }
     @ExceptionHandler(PersonalAccessTokens.Rejected.class) public ResponseEntity<?> rejected(PersonalAccessTokens.Rejected failure) {
         return ResponseEntity.status(failure.status).cacheControl(CacheControl.noStore()).body(Map.of("error", failure.getMessage()));
     }

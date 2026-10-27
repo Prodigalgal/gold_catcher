@@ -2,6 +2,7 @@ package com.goldcatcher.external;
 
 import com.goldcatcher.auth.PersonalAccessTokens;
 import com.goldcatcher.auth.PersonalAccessTokens.Identity;
+import com.goldcatcher.auth.OAuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.*;
@@ -16,7 +17,8 @@ import tools.jackson.databind.*;
 public class OpenAiToolsApi {
     private final ExternalTools tools;
     private final ObjectMapper mapper;
-    public OpenAiToolsApi(ExternalTools tools, ObjectMapper mapper) { this.tools = tools; this.mapper = mapper; }
+    private final OAuthService oauth;
+    public OpenAiToolsApi(ExternalTools tools, ObjectMapper mapper, OAuthService oauth) { this.tools = tools; this.mapper = mapper; this.oauth = oauth; }
     @GetMapping("/tools") public Object definitions(@AuthenticationPrincipal Identity identity, @RequestParam(defaultValue="chat") String format) {
         if (!List.of("chat", "responses").contains(format)) throw new IllegalArgumentException("INVALID_OPENAI_FORMAT");
         return Map.of("format", format, "tools", tools.available(identity).stream().map(tool -> {
@@ -54,6 +56,8 @@ public class OpenAiToolsApi {
     }
     private ResponseEntity<?> rejected(int status, String code) { return ResponseEntity.status(status).body(Map.of("error", code)); }
     @ExceptionHandler(PersonalAccessTokens.Rejected.class) public ResponseEntity<?> rejected(PersonalAccessTokens.Rejected failure) {
-        return rejected(failure.status, failure.getMessage());
+        var builder = ResponseEntity.status(failure.status);
+        if (failure.requiredScope != null) builder.header("WWW-Authenticate", oauth.insufficientScope(failure.requiredScope));
+        return builder.body(Map.of("error", failure.getMessage()));
     }
 }
