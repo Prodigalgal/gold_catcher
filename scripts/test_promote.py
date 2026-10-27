@@ -13,6 +13,12 @@ class PromotionContractTest(unittest.TestCase):
         self.root = Path(self.temp.name) / "gitops"
         self.target = self.root / "gold-catcher/oracle"
         self.target.mkdir(parents=True)
+        (self.target / "routes.yaml").write_text(yaml.safe_dump_all([
+            {"kind": "HTTPRoute", "metadata": {"name": "gold-catcher-https"}, "spec": {
+                "hostnames": ["gold.mnnu.eu.org"], "parentRefs": [{"name": "keep-gateway"}], "rules": [
+                    {"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}], "backendRefs": [{"name": "gold-catcher-server", "port": 8080}]},
+                    {"matches": [{"path": {"type": "PathPrefix", "value": "/"}}], "backendRefs": [{"name": "gold-catcher-web", "port": 8080}]}]}},
+            {"kind": "HTTPRoute", "metadata": {"name": "gold-catcher-http-redirect"}, "sentinel": "preserve"}]), encoding="utf-8")
         base = self.root / "gold-catcher/base"
         base.mkdir()
         (base / "kustomization.yaml").write_text(yaml.safe_dump({"resources":["configmap.yaml","deployments.yaml"]}),encoding="utf-8")
@@ -88,3 +94,23 @@ class PromotionContractTest(unittest.TestCase):
         file.write_text(yaml.safe_dump(config), encoding="utf-8")
         promote(self.root, self.inputs, self.commit)
         self.assertEqual(yaml.safe_load(file.read_text())["data"]["GOLD_AI_DISABLED_PROVIDERS"], "arena,qwen")
+
+    def test_oauth_discovery_is_added_idempotently_without_changing_other_routes(self):
+        promote(self.root, self.inputs, self.commit)
+        path = self.target / "routes.yaml"
+        first = path.read_bytes()
+        promote(self.root, self.inputs, self.commit)
+        self.assertEqual(first, path.read_bytes())
+        https, redirect = yaml.safe_load_all(first)
+        self.assertEqual(https["spec"]["parentRefs"], [{"name": "keep-gateway"}])
+        self.assertEqual(redirect["sentinel"], "preserve")
+        self.assertEqual(len(https["spec"]["rules"][0]["matches"]), 4)
+        self.assertEqual(https["spec"]["rules"][1]["backendRefs"][0]["name"], "gold-catcher-web")
+
+    def test_unexpected_oauth_route_changes_no_files(self):
+        before = self.file.read_bytes()
+        (self.target / "routes.yaml").write_text("kind: Secret\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            promote(self.root, self.inputs, self.commit)
+        self.assertEqual(before, self.file.read_bytes())
+        self.assertFalse((self.target / "release.json").exists())

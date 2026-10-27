@@ -7,5 +7,5 @@ export default defineConfig({
     transformIndexHtml: { order: 'pre', handler: html => html.replace('%VITE_SOURCE_COMMIT%', process.env.VITE_SOURCE_COMMIT ?? 'development') },
   }],
   build: { modulePreload: false, cssCodeSplit: false },
-  server: { proxy: { '/api': { target: process.env.GOLD_DEV_API_URL ?? 'http://127.0.0.1:8080', changeOrigin: true } } },
+  server: { headers: { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'", 'Referrer-Policy': 'same-origin' }, proxy: { '/api': { target: process.env.GOLD_DEV_API_URL ?? 'http://127.0.0.1:8080', changeOrigin: true }, '/.well-known': { target: process.env.GOLD_DEV_API_URL ?? 'http://127.0.0.1:8080', changeOrigin: true } } },
 });

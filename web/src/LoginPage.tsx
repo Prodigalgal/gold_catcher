@@ -8,7 +8,7 @@ const errors: Record<string,string> = {
   POW_BUSY: '验证服务暂忙，请稍后重试。', POW_EXPIRED: '安全验证已过期，请重新登录。',
   POW_INVALID: '安全验证未通过，请重新登录。', CSRF_OR_ACCESS_DENIED: '登录验证已失效，请重新登录。',
 };
-export default function LoginPage({ onLogin, restoring }: { onLogin: (session: Session) => void; restoring: boolean }) {
+export default function LoginPage({ onLogin, restoring, preservePath = false }: { onLogin: (session: Session) => void; restoring: boolean; preservePath?: boolean }) {
   const [username,setUsername] = useState('admin'); const [password,setPassword] = useState('');
   const [busy,setBusy] = useState(false); const [progress,setProgress] = useState(''); const [error,setError] = useState('');
   const worker = useRef<Worker | null>(null); const controller = useRef<AbortController | null>(null);
@@ -31,7 +31,7 @@ export default function LoginPage({ onLogin, restoring }: { onLogin: (session: S
       setProgress('验证完成，正在登录…');
       await call('auth/login',packet,{username,password,challengeId:packet.challenge.id,solution},attempt.signal);
       setPassword(''); const session = await call<Session>('session',{},undefined,attempt.signal);
-      history.replaceState(null,'','/'); onLogin(session);
+      if (!preservePath) history.replaceState(null,'','/'); onLogin(session);
     } catch (failure) {
       if (!attempt.signal.aborted) { const code=(failure as Error).message;setError(errors[code] ?? code); }
     } finally { if (!attempt.signal.aborted) { setBusy(false);setProgress(''); } }

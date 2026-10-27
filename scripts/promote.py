@@ -44,6 +44,27 @@ def runtime_changes(root: Path) -> list[tuple[Path, str]]:
         (target/"cache.yaml",yaml.safe_dump_all(cache,sort_keys=False)),(kustomization_path,yaml.safe_dump(kustomization,sort_keys=False))]
 
 
+def oauth_route_changes(root: Path) -> list[tuple[Path, str]]:
+    """Add only the three OAuth discovery paths; preserve all live gateway and host settings."""
+    path = (root / "gold-catcher/oracle/routes.yaml").resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ValueError("route target escaped repository")
+    routes = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+    selected = [item for item in routes if item.get("kind") == "HTTPRoute" and item.get("metadata", {}).get("name") == "gold-catcher-https"]
+    if len(selected) != 1 or selected[0].get("spec", {}).get("hostnames") != ["gold.mnnu.eu.org"]:
+        raise ValueError("unexpected OAuth gateway target")
+    rules = selected[0]["spec"]["rules"]
+    servers = [rule for rule in rules if any(ref.get("name") == "gold-catcher-server" and ref.get("port") == 8080 for ref in rule.get("backendRefs", []))]
+    if len(servers) != 1:
+        raise ValueError("expected one Gold Catcher server route")
+    matches = servers[0].setdefault("matches", [])
+    for value in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/api/mcp", "/.well-known/oauth-authorization-server"):
+        match = {"path": {"type": "Exact", "value": value}}
+        if match not in matches:
+            matches.append(match)
+    return [(path, yaml.safe_dump_all(routes, sort_keys=False))]
+
+
 def promote(root: Path, inputs: Path, commit: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("expected full source commit")
@@ -69,7 +90,7 @@ def promote(root: Path, inputs: Path, commit: str) -> None:
         entries[0]["digest"] = record["digest"]
         records.append(record)
     # Validate images and every scoped runtime mutation before writing any file.
-    updates = runtime_changes(root)
+    updates = runtime_changes(root) + oauth_route_changes(root)
     release = {"sourceCommit": commit, "components": records}
     file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     (target / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")

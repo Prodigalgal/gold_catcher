@@ -22,11 +22,13 @@ public class PersonalAccessTokens {
     public record Created(View token, String secret) { @Override public String toString() { return "Created[token=" + token.id() + ",secret=REDACTED]"; } }
     public record Identity(String id, String owner, Set<String> scopes, int requestsPerMinute) implements Principal {
         public String getName() { return owner; }
-        public void require(String scope) { if (!scopes.contains(scope)) throw new Rejected(403, "INSUFFICIENT_SCOPE"); }
+        public void require(String scope) { if (!scopes.contains(scope)) throw new Rejected(403, "INSUFFICIENT_SCOPE", scope); }
     }
     public static final class Rejected extends RuntimeException {
         public final int status;
-        public Rejected(int status, String code) { super(code); this.status = status; }
+        public final String requiredScope;
+        public Rejected(int status, String code) { this(status, code, null); }
+        public Rejected(int status, String code, String requiredScope) { super(code); this.status = status; this.requiredScope = requiredScope; }
     }
     private record Stored(View view, String owner, String hash) {}
     private static final String COLUMNS = "id,owner_name,token_name,token_hash,scopes,requests_per_minute,created_at,expires_at,revoked_at,last_used_at,use_count";
@@ -50,19 +52,19 @@ public class PersonalAccessTokens {
             throw new IllegalArgumentException("INVALID_TOKEN_SCOPES");
         int days = input.expiresInDays() == null ? 90 : input.expiresInDays();
         int rate = input.requestsPerMinute() == null ? 120 : input.requestsPerMinute();
-        if (days < 1 || days > 365 || rate < 10 || rate > 600) throw new IllegalArgumentException("INVALID_TOKEN_LIMITS");
+        if (days < 0 || days > 365 || rate < 10 || rate > 600) throw new IllegalArgumentException("INVALID_TOKEN_LIMITS");
         var scopes = SCOPES.stream().filter(input.scopes()::contains).toList();
         String id = UUID.randomUUID().toString().replace("-", "");
         byte[] bytes = new byte[32]; random.nextBytes(bytes);
         String secret = "gc_pat_" + id + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        Instant now = clock.instant(), expires = now.plus(Duration.ofDays(days));
+        Instant now = clock.instant(), expires = days == 0 ? null : now.plus(Duration.ofDays(days));
         var view = new View(id, input.name().strip(), prefix(id), scopes, rate, now, expires, null, null, 0, "ACTIVE");
         documents.transaction(() -> {
-            Long count = jdbc.queryForObject("SELECT COUNT(*) FROM gc_access_token WHERE owner_name=? AND revoked_at IS NULL AND expires_at>?", Long.class, owner, timestamp(now));
+            Long count = jdbc.queryForObject("SELECT COUNT(*) FROM gc_access_token WHERE owner_name=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)", Long.class, owner, timestamp(now));
             if (count != null && count >= 100) throw new IllegalStateException("ACTIVE_TOKEN_LIMIT_REACHED");
             jdbc.update("INSERT INTO gc_access_token(id,owner_name,token_name,token_hash,scopes,requests_per_minute,created_at,expires_at,use_count) VALUES(?,?,?,?,?,?,?,?,0)",
                 id, owner, view.name(), hash(secret), String.join(" ", scopes), rate, timestamp(now), timestamp(expires));
-            documents.event(id, "ACCESS_TOKEN_CREATED", Map.of("owner", owner, "name", view.name(), "scopes", scopes, "expiresAt", expires));
+            documents.event(id, "ACCESS_TOKEN_CREATED", Map.of("owner", owner, "name", view.name(), "scopes", scopes, "expiresAt", expires == null ? "NEVER" : expires));
             return null;
         });
         return new Created(view, secret);
@@ -77,6 +79,19 @@ public class PersonalAccessTokens {
             return jdbc.queryForObject("SELECT " + COLUMNS + " FROM gc_access_token WHERE id=?", (rs, n) -> stored(rs).view(), id);
         });
     }
+    public View permanent(String owner, String id) {
+        validId(id);
+        return documents.transaction(() -> {
+            var row = jdbc.query("SELECT " + COLUMNS + " FROM gc_access_token WHERE owner_name=? AND id=? FOR UPDATE", (rs,n) -> stored(rs), owner, id)
+                .stream().findFirst().orElseThrow(() -> new Rejected(404, "TOKEN_NOT_FOUND"));
+            if (!row.view().state().equals("ACTIVE")) throw new Rejected(409, "TOKEN_NOT_ACTIVE");
+            if (row.view().expiresAt() != null) {
+                jdbc.update("UPDATE gc_access_token SET expires_at=NULL WHERE id=? AND owner_name=?", id, owner);
+                documents.event(id, "ACCESS_TOKEN_EXPIRY_UPDATED", Map.of("owner", owner, "expiresAt", "NEVER"));
+            }
+            return jdbc.queryForObject("SELECT " + COLUMNS + " FROM gc_access_token WHERE id=?", (rs,n) -> stored(rs).view(), id);
+        });
+    }
     public Identity authenticate(String secret) {
         if (secret == null || !secret.matches("gc_pat_[a-f0-9]{32}\\.[A-Za-z0-9_-]{43}")) throw new Rejected(401, "INVALID_ACCESS_TOKEN");
         String id = secret.substring(7, 39);
@@ -87,7 +102,7 @@ public class PersonalAccessTokens {
     }
     public void used(Identity identity) {
         var now = timestamp(clock.instant());
-        if (jdbc.update("UPDATE gc_access_token SET last_used_at=?,use_count=use_count+1 WHERE id=? AND revoked_at IS NULL AND expires_at>?", now, identity.id(), now) != 1)
+        if (jdbc.update("UPDATE gc_access_token SET last_used_at=?,use_count=use_count+1 WHERE id=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)", now, identity.id(), now) != 1)
             throw new Rejected(401, "INVALID_ACCESS_TOKEN");
     }
     private Stored stored(ResultSet rs) throws SQLException {
@@ -95,11 +110,11 @@ public class PersonalAccessTokens {
         String id = rs.getString("id");
         var view = new View(id, rs.getString("token_name"), prefix(id), List.of(rs.getString("scopes").split(" ")),
             rs.getInt("requests_per_minute"), instant(rs, "created_at"), expires, revoked, instant(rs, "last_used_at"), rs.getLong("use_count"),
-            revoked != null ? "REVOKED" : !expires.isAfter(clock.instant()) ? "EXPIRED" : "ACTIVE");
+            revoked != null ? "REVOKED" : expires != null && !expires.isAfter(clock.instant()) ? "EXPIRED" : "ACTIVE");
         return new Stored(view, rs.getString("owner_name"), rs.getString("token_hash"));
     }
     private static String prefix(String id) { return "gc_pat_" + id.substring(0, 8) + "…"; }
-    private static Timestamp timestamp(Instant at) { return Timestamp.from(at); }
+    private static Timestamp timestamp(Instant at) { return at == null ? null : Timestamp.from(at); }
     private static Instant instant(ResultSet rs, String field) throws SQLException { var t = rs.getTimestamp(field); return t == null ? null : t.toInstant(); }
     private static void validId(String id) { if (id == null || !id.matches("[a-f0-9]{32}")) throw new Rejected(404, "TOKEN_NOT_FOUND"); }
     private static String hash(String value) {

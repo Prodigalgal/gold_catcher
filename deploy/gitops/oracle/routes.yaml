@@ -7,7 +7,11 @@ spec:
   parentRefs:
     - {group: gateway.networking.k8s.io, kind: Gateway, name: mnnu-gateway, namespace: gateway-system, sectionName: https}
   rules:
-    - matches: [{path: {type: PathPrefix, value: /api}}]
+    - matches:
+        - {path: {type: PathPrefix, value: /api}}
+        - {path: {type: Exact, value: /.well-known/oauth-protected-resource}}
+        - {path: {type: Exact, value: /.well-known/oauth-protected-resource/api/mcp}}
+        - {path: {type: Exact, value: /.well-known/oauth-authorization-server}}
       backendRefs: [{group: '', kind: Service, name: gold-catcher-server, port: 8080, weight: 1}]
     - matches: [{path: {type: PathPrefix, value: /}}]
       backendRefs: [{group: '', kind: Service, name: gold-catcher-web, port: 8080, weight: 1}]
