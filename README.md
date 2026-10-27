@@ -74,3 +74,5 @@ CI 验证 Java、React、清单及发布变更；Release 构建 ARM64 镜像，�
 源码中的部署模板保持零副本。生产激活记录与实时验证分开记录，不能把 CI 通过当作已经部署。
 
 研究协议与超时恢复规则见 [docs/research-resilience.md](docs/research-resilience.md)。
+
+外部 AI 可通过只读 MCP 和 REST 查询信息库、压缩摘要、报价、K 线、指标及研究结果。在“运行与配置 → PAT 令牌与 MCP”创建分权限、可过期与撤销的令牌；接入说明和数据边界见 [docs/external-ai-access.md](docs/external-ai-access.md)。

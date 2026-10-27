@@ -36,6 +36,9 @@ if (!$env:GOLD_DB_URL) { $env:GOLD_DB_URL = 'jdbc:h2:file:' + ($goldData -replac
 Push-Location (Join-Path $goldRoot 'backend')
 try {
     if (!$NoBuild) { & .\gradlew.bat bootJar; if ($LASTEXITCODE -ne 0) { throw 'Backend build failed.' } }
-    & java -jar build/libs/gold-catcher-server-0.4.5.jar
+    $goldBootJar = Get-ChildItem -LiteralPath (Join-Path $goldRoot 'backend/build/libs') -Filter 'gold-catcher-server-*.jar' |
+        Where-Object { $_.Name -notlike '*-plain.jar' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (!$goldBootJar) { throw 'Backend bootJar is missing; run without -NoBuild first.' }
+    & java -jar $goldBootJar.FullName
     if ($LASTEXITCODE -ne 0) { throw 'Backend process failed.' }
 } finally { Pop-Location }

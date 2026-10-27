@@ -16,6 +16,7 @@ import MarketChart from './MarketChart';
 import { SchedulerPanel, MarketJournal, routeStateLabel } from './RuntimeControls';
 import SourceControls from './SourceControls';
 import ApiPerformancePanel from './ApiPerformancePanel';
+import AccessTokensPanel from './AccessTokensPanel';
 
 const pages = [
   ['overview', '市场总览', '实时报价、技术指标与 AI 置顶裁决'],
@@ -792,7 +793,7 @@ function Operations({
   session: Session;
   changed: () => void;
 }) {
-  const [opTab, setOpTab] = useState<'ai' | 'scheduler' | 'system'>('ai');
+  const [opTab, setOpTab] = useState<'ai' | 'scheduler' | 'system' | 'access'>('ai');
 
   return (
     <>
@@ -824,7 +825,7 @@ function Operations({
       </div>
 
       {/* Navigation Sub-Tabs */}
-      <div className="gc-tabs" role="tablist" style={{ marginTop: '4px' }}>
+      <div className="gc-tabs" role="group" aria-label="运行配置分类" style={{ marginTop: '4px', flexWrap: 'wrap' }}>
         <button
           type="button"
           aria-pressed={opTab === 'ai'}
@@ -846,7 +847,12 @@ function Operations({
         >
           行情归档、信源与系统监控
         </button>
+        <button type="button" aria-pressed={opTab === 'access'} onClick={() => setOpTab('access')}>
+          PAT 令牌与 MCP
+        </button>
       </div>
+
+      {opTab === 'access' && <AccessTokensPanel session={session} />}
 
       {/* TAB 1: AI Configuration & Compression */}
       {opTab === 'ai' && (

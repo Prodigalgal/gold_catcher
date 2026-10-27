@@ -116,4 +116,6 @@ jobs:
           ARGOCD_READ_TOKEN: ${{ secrets.ARGOCD_READ_TOKEN }}
           GOLD_SMOKE_USERNAME: ${{ secrets.GOLD_SMOKE_USERNAME }}
           GOLD_SMOKE_PASSWORD: ${{ secrets.GOLD_SMOKE_PASSWORD }}
-        run: python3 scripts/verify_deployment.py
+        run: |
+          python3 scripts/verify_deployment.py
+          python3 scripts/verify_external_access.py
