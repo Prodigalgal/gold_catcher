@@ -137,7 +137,7 @@ public class ExternalData {
                 project(n, "id", "symbol", "horizon", "status", "startedAt", "completedAt", "stage", "error") : null);
         return page(page, "startedAt", "RECORDED_RESEARCH; LOW_QUORUM_OR_TIMEOUT_IS_NOT_A_VALID_DECISION");
     }
-    public Map<String,Object> researchDetail(String id, int messageOffset, int limit) {
+    public JsonNode researchDetail(String id, int messageOffset, int limit) {
         id(id); if (messageOffset < 0 || limit < 1 || limit > 12) throw new IllegalArgumentException("INVALID_MESSAGE_WINDOW");
         var run = store.findExact("research", id, JsonNode.class).orElseThrow(() -> new IllegalArgumentException("RESEARCH_NOT_FOUND"));
         var result = project(run, "id", "symbol", "horizon", "status", "stage", "error", "startedAt", "completedAt", "evidenceCutoff", "decisionExpiresAt");
@@ -166,7 +166,7 @@ public class ExternalData {
         result.set("messages", selected); result.put("messageOffset", messageOffset); result.put("totalMessages", size);
         if (end < size) result.put("nextMessageOffset", end); else result.putNull("nextMessageOffset");
         result.put("coverage", "PROJECTED_RESEARCH_ONLY; CONFIGURATION_CREDENTIALS_RAW_PROMPTS_AND_ACCOUNT_STATE_EXCLUDED; TEXT_FIELDS_CAPPED_8000_CODE_POINTS; PLANS_UNMODIFIED");
-        return mapper.convertValue(result, new tools.jackson.core.type.TypeReference<Map<String,Object>>() {});
+        return result;
     }
     private JsonNode answer(JsonNode answer) {
         if (!answer.isObject()) return mapper.nullNode();

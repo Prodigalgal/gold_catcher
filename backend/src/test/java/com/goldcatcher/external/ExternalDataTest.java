@@ -68,10 +68,12 @@ class ExternalDataTest {
              "decisionExpiresAt":"2026-01-01T00:00:00Z","verdict":{"output":"partial","plan":{"entryPrice":"4000.00000000000001"}},
              "messages":[{"actorId":"A","stage":0,"state":"SUBMITTED","readingOrder":["private"],"answer":{"analysis":"thinking","output":{"output":"view","plan":{"margin":"100.123456789"}},"budget":{"prompt":"secret"}}}]}
             """);
+        ((tools.jackson.databind.node.ObjectNode)run.path("verdict").path("plan")).put("legacyDecimal",new BigDecimal("4000.1234567890123456789"));
         f.store.save("research", "run", run);
         String response = f.mapper.writeValueAsString(data.researchDetail("run", 0, 6));
         assertThat(response).doesNotContain("secret", "private", "apiKey", "readingOrder", "budget", "routeConfiguration");
         assertThat(response).contains("4000.00000000000001", "100.123456789", "LOW_QUORUM", "\"decisionExpired\":true");
+        assertThat(response).contains("4000.1234567890123456789");
     }
     @Test void toolCatalogIsScopeFilteredAndArgumentsAreStrict() {
         var tools = new ExternalTools(data); var identity = new Identity("id", "admin", Set.of("market:read"), 120);
