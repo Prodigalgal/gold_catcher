@@ -20,12 +20,15 @@ public final class TestSupport {
     public final TestClock clock=new TestClock();public final ObjectMapper mapper=JsonMapper.builder().build();
     public final MockEnvironment environment=new MockEnvironment();public final RuntimeSettings settings=new RuntimeSettings(environment,mapper);
     public final DocumentStore store;
+    public final JdbcTemplate jdbc;
     public TestSupport() {
         var ds=new DriverManagerDataSource("jdbc:h2:mem:"+UUID.randomUUID()+";MODE=PostgreSQL;DB_CLOSE_DELAY=-1","sa","");
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V1__durable_runtime.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V2__market_archive.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V3__account_samples.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V4__market_archive_statistics.sql")).execute(ds);
-        store=new DocumentStore(new JdbcTemplate(ds),mapper,new TransactionTemplate(new DataSourceTransactionManager(ds)),clock);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V5__personal_access_tokens.sql")).execute(ds);
+        jdbc=new JdbcTemplate(ds);
+        store=new DocumentStore(jdbc,mapper,new TransactionTemplate(new DataSourceTransactionManager(ds)),clock);
     }
 }

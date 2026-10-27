@@ -19,6 +19,12 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.NullRequestCache;
+import com.goldcatcher.auth.AccessTokenFilter;
+import com.goldcatcher.auth.PersonalAccessTokens;
+import java.time.Clock;
+import org.springframework.core.annotation.Order;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
 
 @Configuration
 public class SecurityConfiguration {
@@ -43,13 +49,26 @@ public class SecurityConfiguration {
     @Bean HttpSessionSecurityContextRepository contextRepository() { return new HttpSessionSecurityContextRepository(); }
     @Bean HttpSessionCsrfTokenRepository csrfRepository() { return new HttpSessionCsrfTokenRepository(); }
 
-    @Bean
+    @Bean @Order(1)
+    SecurityFilterChain externalSecurity(HttpSecurity http, PersonalAccessTokens tokens, Clock clock, UserDetailsService users) throws Exception {
+        return http.securityMatcher("/api/mcp", "/api/mcp/**", "/api/external/**")
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .securityContext(context -> context.securityContextRepository(new org.springframework.security.web.context.NullSecurityContextRepository()))
+            .csrf(AbstractHttpConfigurer::disable).httpBasic(AbstractHttpConfigurer::disable).formLogin(AbstractHttpConfigurer::disable)
+            .logout(AbstractHttpConfigurer::disable).requestCache(cache -> cache.requestCache(new NullRequestCache()))
+            .addFilterBefore(new AccessTokenFilter(tokens, clock, users), AnonymousAuthenticationFilter.class)
+            .authorizeHttpRequests(auth -> auth.anyRequest().hasRole("EXTERNAL_READER"))
+            .build();
+    }
+
+    @Bean @Order(2)
     SecurityFilterChain security(HttpSecurity http, HttpSessionSecurityContextRepository contexts, HttpSessionCsrfTokenRepository csrf) throws Exception {
         return http.authorizeHttpRequests(auth -> auth
                 // Initial SSE requests are authenticated below. Only finish an already admitted stream after logout/disconnect.
                 .requestMatchers(request -> request.getDispatcherType()==jakarta.servlet.DispatcherType.ASYNC
                     &&request.getMethod().equals("GET")&&request.getRequestURI().equals(request.getContextPath()+"/api/events")).permitAll()
                 .requestMatchers("/actuator/health/liveness", "/actuator/health/readiness", "/api/auth/challenge", "/api/auth/login").permitAll()
+                .requestMatchers("/api/access/**").hasRole("OWNER")
                 .anyRequest().authenticated())
             .httpBasic(AbstractHttpConfigurer::disable).formLogin(AbstractHttpConfigurer::disable)
             .securityContext(context -> context.securityContextRepository(contexts).requireExplicitSave(true))
