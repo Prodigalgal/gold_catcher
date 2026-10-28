@@ -39,7 +39,7 @@ public final class AccessTokenFilter extends OncePerRequestFilter {
                 if (!owner.isEnabled() || !owner.isAccountNonLocked() || !owner.isAccountNonExpired()
                     || owner.getAuthorities().stream().noneMatch(role -> role.getAuthority().equals("ROLE_OWNER"))) throw new PersonalAccessTokens.Rejected(401, "INVALID_ACCESS_TOKEN");
             } catch (UsernameNotFoundException missing) { throw new PersonalAccessTokens.Rejected(401, "INVALID_ACCESS_TOKEN"); }
-            window = windows.get(identity.id(), key -> new Window());
+            window = windows.get(identity.rateLimitId(), key -> new Window());
             long minute = clock.instant().getEpochSecond() / 60;
             synchronized (window) {
                 if (window.minute != minute) { window.minute = minute; window.count = 0; }

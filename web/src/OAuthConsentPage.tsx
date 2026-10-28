@@ -1,8 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { call } from './api';
-import type { Session } from './api';
-import LoginPage from './LoginPage';
-import './AccessTokensPanel.css';
 
 export const scopeLabels: Record<string, [string, string]> = {
   'market:read': ['行情与指标', '报价、K 线、市场深度和 Java 计算的技术指标'],
@@ -19,55 +16,69 @@ export const scopeLabels: Record<string, [string, string]> = {
 };
 export const defaultScopes = ['market:read', 'information:read', 'research:read'];
 export const isWriteScope = (scope: string) => scope.endsWith(':write') || scope === 'access:manage';
-type Consent = { clientName: string; redirectUri: string; scopes: string[]; resource: string; expiresAt: string; authorizationDays: number; authenticated: boolean };
+type Consent = { clientName: string; redirectUri: string; resource: string; expiresAt: string; authorizationDays: number; authenticationMethod: 'PAT'; csrfHeader: string; csrfToken: string };
+type Preview = { tokenName: string; tokenPrefix: string; tokenExpiresAt: string | null; scopes: string[]; tools: { name: string; title: string; scope: string; readOnly: boolean }[] };
 const errors: Record<string, string> = {
-  authorization_expired: '授权请求已失效。请回到 AI 客户端，重新发起连接。',
-  authorization_limit_reached: '有效授权已达上限，请先在运行与配置中撤销不再使用的连接。',
-  invalid_scope: '请选择至少一种请求的权限。',
-  AUTH_REQUIRED: '登录已失效，请返回 AI 客户端重新连接。',
+  authorization_expired: '授权请求已失效，请返回 AI 客户端重新连接。',
+  authorization_limit_reached: '有效连接已达上限，请先撤销不再使用的连接。',
+  invalid_personal_access_token: 'PAT 无效、已过期或已撤销，请检查后重试。',
+  personal_access_token_scope_mismatch: '该 PAT 没有客户端请求的权限，请在令牌管理页调整或更换 PAT。',
+  consent_rate_limited: '验证失败次数过多，请返回 AI 客户端重新发起连接。',
+  CSRF_OR_ACCESS_DENIED: '页面验证已失效，请返回 AI 客户端重新连接。',
 };
 export default function OAuthConsentPage() {
   const request = new URLSearchParams(window.location.search).get('request') ?? '';
-  const [session, setSession] = useState<Session | null>(null), [restoring, setRestoring] = useState(true);
-  const [consent, setConsent] = useState<Consent | null>(null), [scopes, setScopes] = useState<string[]>([]);
+  const [consent, setConsent] = useState<Consent | null>(null), [preview, setPreview] = useState<Preview | null>(null);
+  const [token, setToken] = useState(''), [showToken, setShowToken] = useState(false);
   const [error, setError] = useState(''), [busy, setBusy] = useState('');
+  const previewHeading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     const controller = new AbortController();
-    void call<Consent>(`oauth/consent?request=${encodeURIComponent(request)}`, {}, undefined, controller.signal)
-      .then(value => { setConsent(value); setScopes(value.scopes.filter(scope => !isWriteScope(scope))); })
-      .catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
-    void call<Session>('session', {}, undefined, controller.signal).then(setSession).catch(() => {})
-      .finally(() => { if (!controller.signal.aborted) setRestoring(false); });
+    void call<Consent>('oauth/consent?request=' + encodeURIComponent(request), {}, undefined, controller.signal)
+      .then(setConsent).catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
     return () => controller.abort();
   }, [request]);
+  useEffect(() => { if (preview) previewHeading.current?.focus(); }, [preview]);
+  const inspectToken = async () => {
+    if (!consent || !token.trim()) return;
+    setBusy('inspect'); setError(''); setPreview(null);
+    try { setPreview(await call<Preview>('oauth/consent', consent, { request, decision: 'inspect', token })); }
+    catch (failure) { setError((failure as Error).message); } finally { setBusy(''); }
+  };
   const finish = async (decision: 'approve' | 'deny') => {
-    if (!session) return;
+    if (!consent || decision === 'approve' && (!preview || !token.trim())) return;
     setBusy(decision); setError('');
     try {
-      const result = await call<{ redirectUrl: string }>('oauth/consent', session, { request, decision, scopes });
-      const target = new URL(result.redirectUrl);
-      // Only the exact callback already validated and displayed by the server can be used.
-      if (!consent || target.origin !== new URL(consent.redirectUri).origin || target.pathname !== new URL(consent.redirectUri).pathname) throw new Error('回调地址不匹配，请重新发起连接。');
-      window.location.assign(result.redirectUrl);
+      const result = await call<{ redirectUrl: string }>('oauth/consent', consent, { request, decision, ...(decision === 'approve' ? { token } : {}) });
+      const target = new URL(result.redirectUrl), expected = new URL(consent.redirectUri);
+      if (target.origin !== expected.origin || target.pathname !== expected.pathname) throw new Error('回调地址不匹配，请重新连接。');
+      setToken(''); window.location.assign(result.redirectUrl);
     } catch (failure) { setError((failure as Error).message); setBusy(''); }
   };
-  if (!error && !session && consent) return <LoginPage restoring={restoring} preservePath onLogin={setSession} />;
-  return <div className="gc-app gc-oauth-page" style={{ colorScheme: 'dark' }}>
-    <header className="gc-oauth-brand"><div className="gc-brand-mark">Au</div><div><strong>GOLD CATCHER</strong><span>黄金研究 · 数据授权</span></div></header>
-    <main className="gc-access gc-oauth-card gc-panel" aria-labelledby="gc-oauth-heading">
-      <span className="gc-access-eyebrow">CONNECT YOUR AI</span>
-      <h1 id="gc-oauth-heading">授权连接 Gold Catcher？</h1>
-      {error && <p className="gc-live-error" role="alert">{errors[error] ?? error}</p>}
+  return <div className="gc-app gc-auth-page gc-oauth-page" style={{ colorScheme: 'dark' }}>
+    <header className="gc-oauth-brand"><div className="gc-brand-mark">Au</div><div><strong>GOLD CATCHER</strong><span>黄金研究 · Token 授权</span></div></header>
+    <main className="gc-oauth-card" aria-labelledby="gc-oauth-heading">
+      <span className="gc-access-eyebrow">CONNECT YOUR AI</span><h1 id="gc-oauth-heading">使用 PAT 授权连接</h1>
+      {error && <p className="gc-auth-error" role="alert">{errors[error] ?? error}</p>}
       {!consent ? <p role="status">{error ? '尚未建立连接。' : '正在核对授权请求…'}</p> : <>
-        <div className="gc-oauth-client"><span className="gc-small">请求连接的应用</span><strong>{consent.clientName}</strong><span>将以 {session?.username ?? '你的账号'} 的身份使用所选功能</span></div>
-        <div className="gc-oauth-callback"><span>授权后返回</span><strong>{new URL(consent.redirectUri).host}</strong><code>{consent.redirectUri}</code><p>应用名称由客户端提供，请核对返回地址是否属于你要连接的 AI 服务。</p></div>
-        {consent.scopes.some(isWriteScope) && <div className="gc-access-client-tabs"><button type="button" className="gc-live-button" disabled={!!busy} onClick={() => setScopes(consent.scopes)}>选择全部操作权限</button><button type="button" className="gc-live-button" disabled={!!busy} onClick={() => setScopes(consent.scopes.filter(scope => !isWriteScope(scope)))}>仅保留读取权限</button></div>}
-        <fieldset className="gc-access-scopes"><legend>允许使用的功能</legend>{consent.scopes.map(scope => <label className="gc-access-scope" key={scope}><input type="checkbox" checked={scopes.includes(scope)} disabled={!!busy} onChange={event => setScopes(current => event.target.checked ? [...current, scope] : current.filter(value => value !== scope))} /><span><strong>{scopeLabels[scope]?.[0] ?? scope}{isWriteScope(scope) ? ' · 操作权限' : ''}</strong><span>{scopeLabels[scope]?.[1]}</span></span></label>)}</fieldset>
-        <p className="gc-oauth-boundary">{scopes.some(isWriteScope) ? '已选择操作权限，连接的 AI 可以修改对应状态。模拟订单只在系统内部记账，研究和压缩可能消耗上游模型额度。' : '当前只允许读取。勾选操作权限后，AI 才能执行对应操作。'}</p>
-        <p className="gc-small">授权有效期 {consent.authorizationDays} 天。可随时在“运行与配置 → PAT 令牌与 MCP”撤销连接。访问令牌由客户端自动更新。</p>
-        <div className="gc-oauth-actions"><button className="gc-live-button" disabled={!session || !!busy} onClick={() => void finish('deny')}>{busy === 'deny' ? '正在返回…' : '拒绝'}</button><button className="gc-live-button gc-live-primary" disabled={!session || !!busy || !scopes.length || error === 'authorization_expired'} onClick={() => void finish('approve')}>{busy === 'approve' ? '正在连接…' : '允许连接'}</button></div>
+        <div className="gc-oauth-client"><span className="gc-auth-hint">请求连接的应用</span><strong>{consent.clientName}</strong><span>填写已创建的 PAT，连接仅获得该令牌允许的工具。</span></div>
+        <div className="gc-oauth-callback"><span>授权后返回</span><strong>{new URL(consent.redirectUri).host}</strong><code>{consent.redirectUri}</code><p className="gc-auth-hint">应用名称由客户端提供，请核对返回地址是否属于你要连接的 AI 服务。</p></div>
+        <form onSubmit={event => { event.preventDefault(); void inspectToken(); }}>
+          <label htmlFor="gc-oauth-pat">个人访问令牌（PAT）</label>
+          <div className="gc-auth-token-input"><input id="gc-oauth-pat" name="pat" type={showToken ? 'text' : 'password'} value={token} maxLength={256} autoComplete="off" spellCheck={false} required disabled={!!busy} aria-describedby="gc-oauth-pat-hint" placeholder="gc_pat_…" onChange={event => { setToken(event.target.value); setPreview(null); setError(''); }} /><button className="gc-auth-button" type="button" aria-pressed={showToken} onClick={() => setShowToken(!showToken)}>{showToken ? '隐藏' : '显示'}</button></div>
+          <p id="gc-oauth-pat-hint" className="gc-auth-hint">在“运行与配置 → PAT 令牌与 MCP”创建和管理令牌。这里核对已有授权，不修改令牌权限。</p>
+          <button className="gc-auth-button" type="submit" disabled={!!busy || !token.trim()}>{busy === 'inspect' ? '正在核对…' : preview ? '重新核对 Token' : '核对 Token 权限'}</button>
+        </form>
+        {preview && <section className="gc-auth-preview" aria-labelledby="gc-token-preview-title">
+          <h2 id="gc-token-preview-title" ref={previewHeading} tabIndex={-1}>将使用此 Token 的授权范围</h2>
+          <dl><div><dt>令牌名称</dt><dd>{preview.tokenName}</dd></div><div><dt>令牌标识</dt><dd>{preview.tokenPrefix}</dd></div><div><dt>当前可用工具</dt><dd>{preview.tools.length} 项 · {preview.tools.filter(tool => !tool.readOnly).length} 项操作工具</dd></div><div><dt>令牌有效期</dt><dd>{preview.tokenExpiresAt ? new Date(preview.tokenExpiresAt).toLocaleString('zh-CN') : '永久有效，直到撤销'}</dd></div></dl>
+          <p className="gc-auth-hint">{preview.scopes.map(scope => scopeLabels[scope]?.[0] ?? scope).join(' · ')}</p>
+          <details><summary>查看可用工具</summary><ul className="gc-auth-tools">{preview.tools.map(tool => <li key={tool.name}>{tool.title}{tool.readOnly ? '' : ' · 操作'}<code>{tool.name}</code></li>)}</ul>{!preview.tools.length && <p>此令牌当前没有启用工具，可在后台调整工具范围。</p>}</details>
+        </section>}
+        <p className="gc-auth-hint">连接权限随该 PAT 的配置更新；撤销或过期后连接立即失效。OAuth 授权最长 {consent.authorizationDays} 天。PAT 仅由本站验证，ChatGPT 使用另行签发的 OAuth 凭据。</p>
+        <div className="gc-oauth-actions"><button className="gc-auth-button" disabled={!!busy} onClick={() => void finish('deny')}>{busy === 'deny' ? '正在返回…' : '取消连接'}</button><button className="gc-auth-button gc-auth-button--primary" disabled={!!busy || !preview || error === 'authorization_expired'} onClick={() => void finish('approve')}>{busy === 'approve' ? '正在连接…' : '确认授权并返回'}</button></div>
       </>}
-      <a className="gc-oauth-home" href="/">返回工作台</a>
+      <a className="gc-oauth-home" href="/">返回工作台管理令牌</a>
     </main>
   </div>;
 }

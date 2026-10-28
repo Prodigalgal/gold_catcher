@@ -81,7 +81,8 @@ public class SecurityConfiguration {
                     &&request.getMethod().equals("GET")&&request.getRequestURI().equals(request.getContextPath()+"/api/events")).permitAll()
                 .requestMatchers("/actuator/health/liveness", "/actuator/health/readiness", "/api/auth/challenge", "/api/auth/login").permitAll()
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/oauth/authorize", "/api/oauth/consent").permitAll()
-                .requestMatchers("/api/oauth/consent").hasRole("OWNER")
+                // Browser-session CSRF remains mandatory; only a valid PAT can approve a grant.
+                .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/oauth/consent").permitAll()
                 .requestMatchers("/api/access/**").hasRole("OWNER")
                 .anyRequest().authenticated())
             .httpBasic(AbstractHttpConfigurer::disable).formLogin(AbstractHttpConfigurer::disable)

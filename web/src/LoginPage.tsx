@@ -36,7 +36,7 @@ export default function LoginPage({ onLogin, restoring, preservePath = false }: 
       if (!attempt.signal.aborted) { const code=(failure as Error).message;setError(errors[code] ?? code); }
     } finally { if (!attempt.signal.aborted) { setBusy(false);setProgress(''); } }
   };
-  return <div className="gc-app gc-login-page" style={{colorScheme:'dark'}}>
+  return <div className="gc-app gc-auth-page gc-login-page" style={{colorScheme:'dark'}}>
     <div className="gc-login-brand"><div className="gc-brand-mark">Au</div><strong>GOLD CATCHER</strong><span>黄金研究工作台</span></div>
     <main className="gc-login-layout"><section className="gc-login-intro"><div className="gc-eyebrow">SEE THE SIGNAL. UNDERSTAND THE MARKET.</div>
       <h1>从信息到判断，<br/><em>看清每一次机会。</em></h1><p>汇集市场变化与官方信息，让不同 AI 独立研究、交叉质疑。用持续的内部模拟，检验每一个判断。</p>
@@ -45,8 +45,8 @@ export default function LoginPage({ onLogin, restoring, preservePath = false }: 
     </section><section className="gc-panel gc-login-card"><div className="gc-eyebrow">YOUR PRIVATE WORKSPACE</div><h2>登录工作台</h2><p>进入你的黄金市场研究空间</p>
       <form onSubmit={login}><label>账号<input name="username" autoComplete="username" required maxLength={120} disabled={busy || restoring} value={username} onChange={event=>setUsername(event.target.value)}/></label>
       <label>密码<input name="password" type="password" autoComplete="current-password" required maxLength={256} disabled={busy || restoring} value={password} onChange={event=>setPassword(event.target.value)}/></label>
-      {error && <div className="gc-live-error" role="alert">{error}</div>}
-      <button className="gc-live-button gc-live-primary" disabled={busy || restoring}>{restoring ? '正在确认登录状态…' : busy ? '正在验证…' : '登录工作台'}<span aria-hidden="true">→</span></button></form>
+      {error && <div className="gc-auth-error" role="alert">{error}</div>}
+      <button className="gc-auth-button gc-auth-button--primary" disabled={busy || restoring}>{restoring ? '正在确认登录状态…' : busy ? '正在验证…' : '登录工作台'}<span aria-hidden="true">→</span></button></form>
       <div className="gc-login-security" role="status"><span aria-hidden="true">◇</span>{progress || 'PoW 安全防护 · 登录时自动完成验证'}</div>
     </section></main><footer className="gc-login-footer"><span>GOLD CATCHER</span><span>黄金研究 · 仅内部模拟</span></footer>
   </div>;

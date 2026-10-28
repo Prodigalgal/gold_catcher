@@ -53,12 +53,19 @@ class OAuthHttpContractTest {
         var response=get(browser,"/api/oauth/authorize?"+encode(Map.of("client_id",client,"response_type","code","redirect_uri",CALLBACK,"resource",RESOURCE,"scope","market:read information:read","state","state /?& +","code_challenge",challenge,"code_challenge_method","S256")));
         assertThat(response.statusCode()).isEqualTo(303); return query(response.headers().firstValue("location").orElseThrow()).get("request");
     }
-    @Test void realPoWSessionConsentCodeExchangeAndScopedMcpWorkEndToEnd() throws Exception {
+    @Test void anonymousPatConsentCodeExchangeAndScopedMcpWorkEndToEnd() throws Exception {
         var browser=browser();String client=client(browser),ticket=authorize(browser,client);
-        var anonymous=mapper.readTree(get(browser,"/api/oauth/consent?request="+ticket).body()); assertThat(anonymous.path("authenticated").asBoolean()).isFalse();
+        var anonymous=mapper.readTree(get(browser,"/api/oauth/consent?request="+ticket).body()); assertThat(anonymous.path("authenticationMethod").asText()).isEqualTo("PAT");
         assertThat(get(browser(),"/api/oauth/consent?request="+ticket).statusCode()).isEqualTo(400);
-        var csrf=login(browser); // Session rotation must preserve the pending, browser-bound request.
-        var consent=Map.of("request",ticket,"decision","approve","scopes",List.of("market:read"));
+        var admin=browser();var ownerCsrf=login(admin);
+        var pat=mapper.readTree(json(admin,"/api/access/tokens",Map.of("name","OAuth HTTP backing PAT","scopes",List.of("market:read")),ownerCsrf).body());
+        var csrf=anonymous;
+        var consent=Map.of("request",ticket,"decision","approve","token",pat.path("secret").asText());
+        assertThat(json(browser,"/api/oauth/consent",Map.of("request",ticket,"decision","approve"),csrf).statusCode()).isEqualTo(401);
+        var preview=json(browser,"/api/oauth/consent",Map.of("request",ticket,"decision","inspect","token",pat.path("secret").asText()),csrf);
+        assertThat(preview.statusCode()).isEqualTo(200);assertThat(mapper.readTree(preview.body()).path("tools")).hasSize(5);
+        assertThat(preview.body()).doesNotContain(pat.path("secret").asText());
+        assertThat(get(browser,"/api/session").statusCode()).isEqualTo(401);
         assertThat(json(browser,"/api/oauth/consent",consent,null).statusCode()).isEqualTo(403);
         var approved=json(browser,"/api/oauth/consent",consent,csrf);assertThat(approved.statusCode()).isEqualTo(200);
         var callback=query(mapper.readTree(approved.body()).path("redirectUrl").asText());
@@ -76,10 +83,10 @@ class OAuthHttpContractTest {
         var denied=send(browser(),"GET","/api/external/v1/search_news",null,null,headers);
         assertThat(denied.statusCode()).isEqualTo(403);assertThat(denied.headers().firstValue("www-authenticate").orElseThrow()).contains("insufficient_scope", "scope=\"information:read\"");
         assertThat(send(browser(),"GET","/api/session",null,null,headers).statusCode()).isEqualTo(401);
-        var grants=mapper.readTree(get(browser,"/api/access/oauth").body()).path("authorizations");assertThat(grants.toString()).doesNotContain(access,callback.get("code"));
+        var grants=mapper.readTree(get(admin,"/api/access/oauth").body()).path("authorizations");assertThat(grants.toString()).doesNotContain(access,callback.get("code"));
         var grant=grants.get(0).path("id").asText();
-        assertThat(json(browser,"/api/access/oauth/"+grant+"/revoke",Map.of(),null).statusCode()).isEqualTo(403);
-        assertThat(json(browser,"/api/access/oauth/"+grant+"/revoke",Map.of(),csrf).statusCode()).isEqualTo(200);
+        assertThat(json(admin,"/api/access/oauth/"+grant+"/revoke",Map.of(),null).statusCode()).isEqualTo(403);
+        assertThat(json(admin,"/api/access/oauth/"+grant+"/revoke",Map.of(),ownerCsrf).statusCode()).isEqualTo(200);
         assertThat(send(browser(),"GET","/api/external/v1/list_products",null,null,headers).statusCode()).isEqualTo(401);
     }
     @Test void discoveryChallengeAndDenialAreStandardsCompatibleAndDoNotIssueTokens() throws Exception {
@@ -90,7 +97,7 @@ class OAuthHttpContractTest {
         assertThat(server.path("authorization_response_iss_parameter_supported").asBoolean()).isTrue();
         var unauthorized=get(browser(),"/api/mcp");assertThat(unauthorized.statusCode()).isEqualTo(401);
         assertThat(unauthorized.headers().firstValue("www-authenticate").orElseThrow()).contains("resource_metadata=\"https://gold.example/.well-known/oauth-protected-resource/api/mcp\"");
-        String ticket=authorize(browser,client(browser));var csrf=login(browser);
+        String ticket=authorize(browser,client(browser));var csrf=mapper.readTree(get(browser,"/api/oauth/consent?request="+ticket).body());
         var denied=json(browser,"/api/oauth/consent",Map.of("request",ticket,"decision","deny"),csrf);
         var callback=query(mapper.readTree(denied.body()).path("redirectUrl").asText());assertThat(callback).containsEntry("error","access_denied").containsEntry("iss","https://gold.example");assertThat(callback).doesNotContainKey("code");
         assertThat(json(browser(),"/api/oauth/register",Map.of("redirect_uris",List.of("http://evil.example/callback")),null).statusCode()).isEqualTo(400);
@@ -126,4 +133,12 @@ class OAuthHttpContractTest {
         var read=send(browser(),"GET","/api/external/v1/list_products",null,null,Map.of("Authorization","Bearer "+finite.path("secret").asText()));assertThat(read.statusCode()).isEqualTo(200);
         var inventory=get(owner,"/api/access/tokens");assertThat(inventory.body()).doesNotContain(packet.path("secret").asText(),finite.path("secret").asText());
     }
+    @Test void anOwnerLoginAloneCannotAuthorizeAndInvalidPatAttemptsAreBoundedPerRequest()throws Exception{
+        var browser=browser();login(browser);String ticket=authorize(browser,client(browser));var csrf=mapper.readTree(get(browser,"/api/oauth/consent?request="+ticket).body());
+        var missing=Map.of("request",ticket,"decision","approve");assertThat(json(browser,"/api/oauth/consent",missing,csrf).statusCode()).isEqualTo(401);
+        for(int i=0;i<4;i++)assertThat(json(browser,"/api/oauth/consent",Map.of("request",ticket,"decision","inspect","token","invalid-token"),csrf).statusCode()).isEqualTo(401);
+        assertThat(json(browser,"/api/oauth/consent",missing,csrf).statusCode()).isEqualTo(429);
+        assertThat(json(browser,"/api/oauth/consent",Map.of("request",ticket,"decision","deny"),csrf).statusCode()).isEqualTo(200);
+    }
+
 }

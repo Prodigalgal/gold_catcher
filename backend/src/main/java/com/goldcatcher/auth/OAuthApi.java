@@ -10,13 +10,15 @@ import java.time.Clock;
 import java.util.*;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.web.csrf.CsrfToken;
 import tools.jackson.databind.*;
 import static com.goldcatcher.auth.OAuthPolicy.*;
 
-/** Public protocol endpoints are separate from the Session + CSRF consent and management endpoints. */
+/** OAuth consent uses an anonymous browser session + CSRF + PAT; it never signs in as Owner. */
 @RestController
 public class OAuthApi {
     private static final String PENDING = OAuthApi.class.getName() + ".pending";
+    private static final String FAILURES = PENDING + ".failures";
     private final OAuthService oauth;
     private final ObjectMapper mapper;
     private final Clock clock;
@@ -56,24 +58,36 @@ public class OAuthApi {
         return ResponseEntity.status(303).cacheControl(CacheControl.noStore()).header("Referrer-Policy", "no-referrer")
             .location(URI.create("/oauth/consent?request=" + ticket)).build();
     }
-    @GetMapping("/api/oauth/consent") public ResponseEntity<?> consent(@RequestParam String request, HttpServletRequest servlet) {
+    @GetMapping("/api/oauth/consent") public ResponseEntity<?> consent(@RequestParam String request, HttpServletRequest servlet,CsrfToken csrf) {
         var pending = pending(servlet, request);
         return ok(Map.of("clientName", pending.clientName(), "redirectUri", pending.redirectUri(), "scopes", pending.scopes(),
             "resource", oauth.resource(), "expiresAt", pending.expiresAt(), "authorizationDays", 30,
-            "authenticated", servlet.isUserInRole("OWNER")));
+            "authenticationMethod","PAT","csrfHeader",csrf.getHeaderName(),"csrfToken",csrf.getToken()));
     }
-    public record Consent(String request, String decision, List<String> scopes) {}
-    @PostMapping("/api/oauth/consent") public ResponseEntity<?> consent(@RequestBody Consent consent, HttpServletRequest servlet, Principal user) {
-        if (consent == null || consent.decision() == null || !Set.of("approve", "deny").contains(consent.decision())) throw new Failure(400, "invalid_request");
+    public record Consent(String request, String decision, String token) {@Override public String toString(){return "Consent[request="+request+",decision="+decision+",token=REDACTED]";}}
+    @PostMapping(value="/api/oauth/consent",consumes=MediaType.APPLICATION_JSON_VALUE) public ResponseEntity<?> consent(HttpServletRequest servlet)throws IOException {
+        Consent consent;
+        try{var node=mapper.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(body(servlet));
+            if(node==null||!node.isObject()||node.propertyNames().stream().anyMatch(k->!Set.of("request","decision","token").contains(k)))throw new IllegalArgumentException();
+            consent=mapper.treeToValue(node,Consent.class);
+        }catch(Failure rejected){throw rejected;}catch(RuntimeException invalid){throw new Failure(400,"invalid_request");}
+        if (consent == null || consent.decision() == null || !Set.of("inspect", "approve", "deny").contains(consent.decision())) throw new Failure(400, "invalid_request");
         var session = servlet.getSession(false);
-        if (session == null || user == null) throw new Failure(401, "authentication_required");
+        if (session == null) throw new Failure(400, "authorization_expired");
         synchronized (session) {
             var pending = pending(servlet, consent.request());
+            var failures=failures(session);if(failures.getOrDefault(consent.request(),0)>=5&&!consent.decision().equals("deny"))throw new Failure(429,"consent_rate_limited");
             var result = new LinkedHashMap<String,String>(); result.put("iss", oauth.issuer());
             if (pending.state() != null) result.put("state", pending.state());
-            if (consent.decision().equals("approve")) result.put("code", oauth.approve(user.getName(), pending, consent.scopes()).code());
-            else result.put("error", "access_denied");
+            if(!consent.decision().equals("deny")){
+                try{
+                    if(consent.token()==null||consent.token().length()>256)throw new Failure(401,"invalid_personal_access_token");
+                    if(consent.decision().equals("inspect"))return ok(oauth.inspect(consent.token(),pending));
+                    result.put("code", oauth.approve(consent.token(),pending).code());
+                }catch(Failure rejected){if(rejected.status==401)failures.merge(consent.request(),1,Integer::sum);throw rejected;}
+            }else result.put("error", "access_denied");
             requests(session).remove(consent.request());
+            failures.remove(consent.request());
             String separator = pending.redirectUri().contains("?") ? "&" : "?";
             return ok(Map.of("redirectUrl", pending.redirectUri() + separator + encoded(result)));
         }
@@ -122,6 +136,7 @@ public class OAuthApi {
         if (value == null) { value = new LinkedHashMap<>(); session.setAttribute(PENDING, value); }
         return value;
     }
+    @SuppressWarnings("unchecked") private Map<String,Integer> failures(HttpSession session){var value=(Map<String,Integer>)session.getAttribute(FAILURES);if(value==null){value=new LinkedHashMap<>();session.setAttribute(FAILURES,value);}value.keySet().retainAll(requests(session).keySet());return value;}
     private static Map<String,String> parameters(String text) {
         var result = new LinkedHashMap<String,String>();
         try {

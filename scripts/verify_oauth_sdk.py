@@ -1,7 +1,7 @@
 """Official MCP SDK OAuth discovery -> DCR -> PoW/consent -> PKCE -> refresh -> revoke.
 
-Uses only disposable OAuth grants, revokes them in finally, and never calls a model.
-The interactive browser approval is exercised by the same authenticated consent API.
+Uses disposable backing PATs and OAuth grants, always revokes them, and never calls a model.
+Consent runs in a separate anonymous browser session and can only use the submitted PAT.
 """
 import argparse
 import asyncio
@@ -47,7 +47,10 @@ async def verify(base, owner, scopes=None, inspector=inspect):
     name = 'Temporary OAuth SDK acceptance ' + secrets.token_hex(4)
     callback = None
     grants = set()
-    browser = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPCookieProcessor(owner.cookies))
+    backing = owner.request('/api/access/tokens', {'name': 'Temporary OAuth backing PAT ' + secrets.token_hex(4),
+        'scopes': requested_scopes, 'expiresInDays': 1, 'requestsPerMinute': 600})
+    anonymous = SessionClient(base)
+    browser = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPCookieProcessor(anonymous.cookies))
 
     async def redirect(url):
         nonlocal callback
@@ -64,11 +67,20 @@ async def verify(base, owner, scopes=None, inspector=inspect):
                 location = response.headers['Location']
         assert location.startswith('/oauth/consent?')
         ticket = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)['request'][0]
-        pending = owner.request('/api/oauth/consent?request=' + urllib.parse.quote(ticket))
-        assert pending['clientName'] == name and pending['authenticated'] is True
-        # Discovery may advertise more rights than this client/user elects to grant.
+        pending = anonymous.request('/api/oauth/consent?request=' + urllib.parse.quote(ticket))
+        assert pending['clientName'] == name and pending['authenticationMethod'] == 'PAT'
+        anonymous.csrf = {'csrfHeader': pending['csrfHeader'], 'csrfToken': pending['csrfToken']}
+        # The source PAT determines authority; no account sign-in or scope picker is used.
         assert set(requested_scopes) <= set(pending['scopes'])
-        result = owner.request('/api/oauth/consent', {'request': ticket, 'decision': 'approve', 'scopes': requested_scopes})
+        preview = anonymous.request('/api/oauth/consent', {'request': ticket, 'decision': 'inspect', 'token': backing['secret']})
+        assert set(preview['scopes']) == set(requested_scopes) and backing['secret'] not in json.dumps(preview)
+        result = anonymous.request('/api/oauth/consent', {'request': ticket, 'decision': 'approve', 'token': backing['secret']})
+        try:
+            anonymous.request('/api/session')
+            raise AssertionError('PAT consent must never create an Owner login')
+        except urllib.error.HTTPError as rejected:
+            with rejected:
+                assert rejected.code == 401
         for item in owner.request('/api/access/oauth')['authorizations']:
             if item['clientName'] == name:
                 grants.add(item['id'])
@@ -93,6 +105,13 @@ async def verify(base, owner, scopes=None, inspector=inspect):
                 async with streamable_http_client(base + '/api/mcp', http_client=http) as (read, write):
                     async with ClientSession(read, write, read_timeout_seconds=30) as session:
                         results.append(await inspector(session, modern))
+                        if not modern:
+                            path = '/api/access/tokens/' + backing['token']['id'] + '/scopes'
+                            owner.request(path, {'scopes': requested_scopes, 'allowedTools': ['list_products']})
+                            assert [tool.name for tool in (await session.list_tools()).tools] == ['list_products']
+                            owner.request(path, {'scopes': requested_scopes, 'allowedTools': []})
+                            assert not (await session.list_tools()).tools
+                            owner.request(path, {'scopes': requested_scopes, 'allowedTools': None})
         assert storage.tokens and storage.tokens.refresh_token and storage.client
         first_refresh = storage.tokens.refresh_token
         # Advance the SDK's own expiry clock, then perform a real refresh over HTTP.
@@ -109,9 +128,27 @@ async def verify(base, owner, scopes=None, inspector=inspect):
             assert replay.status_code == 400 and replay.json()['error'] == 'invalid_grant'
             rejected = await http.get(base + '/api/external/v1/list_products', headers={'Authorization': 'Bearer ' + storage.tokens.access_token})
             assert rejected.status_code == 401
+        # A fresh grant from the same PAT also dies when its backing PAT is revoked.
+        followup_storage = MemoryStorage()
+        followup = OAuthClientProvider(server_url=base + '/api/mcp', storage=followup_storage,
+            client_metadata=OAuthClientMetadata(client_name=name, redirect_uris=['http://127.0.0.1:18919/callback'],
+                token_endpoint_auth_method='none', grant_types=['authorization_code', 'refresh_token'], response_types=['code'],
+                scope=' '.join(requested_scopes)), redirect_handler=redirect, callback_handler=receive)
+        async with httpx2.AsyncClient(auth=followup, timeout=30) as http:
+            async with streamable_http_client(base + '/api/mcp', http_client=http) as (read, write):
+                async with ClientSession(read, write, read_timeout_seconds=30) as session:
+                    await session.initialize()
+                    assert (await session.list_tools()).tools
+        owner.request('/api/access/tokens/' + backing['token']['id'] + '/revoke', {})
+        async with httpx2.AsyncClient(timeout=30) as http:
+            denied = await http.get(base + '/api/external/v1', headers={'Authorization': 'Bearer ' + followup_storage.tokens.access_token})
+            assert denied.status_code == 401
+            rejected = await http.post(base + '/api/oauth/token', data={'grant_type': 'refresh_token', 'client_id': followup_storage.client.client_id,
+                'resource': base + '/api/mcp', 'refresh_token': followup_storage.tokens.refresh_token})
+            assert rejected.status_code == 400 and rejected.json()['error'] == 'invalid_grant'
         return {'state': 'PASSED', 'sdk': 'mcp-python', 'version': importlib.metadata.version('mcp'),
-            'discovery': True, 'dynamicRegistration': True, 'powAndCsrfConsent': True, 'pkceS256': True,
-            'rotatingRefresh': True, 'replayRevocation': True, 'results': results}
+            'discovery': True, 'dynamicRegistration': True, 'anonymousPatAndCsrfConsent': True, 'ownerSessionNotCreated': True, 'pkceS256': True,
+            'dynamicPatToolPermissions': True, 'parentPatRevocation': True, 'rotatingRefresh': True, 'replayRevocation': True, 'results': results}
     finally:
         # Recover a just-created grant even if a later network assertion failed.
         for item in owner.request('/api/access/oauth')['authorizations']:
@@ -119,6 +156,7 @@ async def verify(base, owner, scopes=None, inspector=inspect):
                 grants.add(item['id'])
         for grant in grants:
             owner.request('/api/access/oauth/' + grant + '/revoke', {})
+        owner.request('/api/access/tokens/' + backing['token']['id'] + '/revoke', {})
         storage.tokens = None
 
 
