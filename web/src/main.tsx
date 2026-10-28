@@ -4,5 +4,6 @@ import App from './App';
 import OAuthConsentPage from './OAuthConsentPage';
 import './styles.css';
 import './live.css';
+import './AuthPages.css';
 
 createRoot(document.getElementById('gold-catcher-app')!).render(<React.StrictMode>{window.location.pathname === '/oauth/consent' ? <OAuthConsentPage /> : <App />}</React.StrictMode>);

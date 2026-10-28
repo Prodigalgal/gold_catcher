@@ -1,6 +1,7 @@
 package com.goldcatcher.auth;
 
 import com.goldcatcher.persistence.DocumentStore;
+import com.goldcatcher.external.ExternalTools;
 import java.security.SecureRandom;
 import java.sql.*;
 import java.time.*;
@@ -21,22 +22,23 @@ public class OAuthService {
                                 String challenge, String state, Instant expiresAt) {}
     public record Issued(String code, String grantId) { @Override public String toString() { return "Issued[REDACTED]"; } }
     public record GrantView(String id, String clientName, String redirectUri, List<String> scopes, Instant createdAt,
-                            Instant expiresAt, Instant revokedAt, Instant lastUsedAt, long useCount, String state) {}
+                            Instant expiresAt, Instant revokedAt, Instant lastUsedAt, long useCount, String state,String sourceTokenId,String sourceTokenName,List<String> allowedTools) {}
     private record Grant(String id, String owner, String clientId, String redirectUri, String resource, List<String> scopes,
-                         Instant createdAt, Instant expiresAt, Instant revokedAt, Instant lastUsedAt, long useCount) {}
+                         Instant createdAt, Instant expiresAt, Instant revokedAt, Instant lastUsedAt, long useCount,String sourcePatId) {}
     private record Rotation(Map<String,Object> tokens, boolean rejected) {}
     private final JdbcTemplate jdbc;
     private final DocumentStore documents;
     private final ObjectMapper mapper;
     private final Clock clock;
     private final UserDetailsService users;
+    private final PersonalAccessTokens pats;
     private final SecureRandom random = new SecureRandom();
     private final String issuer;
     private long registrationMinute = -1;
     private int registrations;
-    public OAuthService(JdbcTemplate jdbc, DocumentStore documents, ObjectMapper mapper, Clock clock, UserDetailsService users,
+    public OAuthService(JdbcTemplate jdbc, DocumentStore documents, ObjectMapper mapper, Clock clock, UserDetailsService users,PersonalAccessTokens pats,
                         @Value("${gold.oauth.issuer:https://gold.mnnu.eu.org}") String issuer) {
-        this.jdbc = jdbc; this.documents = documents; this.mapper = mapper; this.clock = clock; this.users = users;
+        this.jdbc = jdbc; this.documents = documents; this.mapper = mapper; this.clock = clock; this.users = users;this.pats=pats;
         this.issuer = OAuthPolicy.issuer(issuer);
     }
     public String issuer() { return issuer; }
@@ -94,20 +96,34 @@ public class OAuthService {
         return new Authorization(client.id(), client.name(), redirect, scopes(parameters.get("scope"), client.scopes()),
             parameters.get("code_challenge"), state, clock.instant().plusSeconds(600));
     }
-    public synchronized Issued approve(String owner, Authorization request, List<String> selected) {
-        requireOwner(owner);
+    private PersonalAccessTokens.View verifyPat(String secret){
+        try{var identity=pats.authenticate(secret==null?null:secret.strip());requireOwner(identity.owner());return pats.active(identity.owner(),identity.id());}
+        catch(PersonalAccessTokens.Rejected|Failure rejected){throw new Failure(401,"invalid_personal_access_token");}
+    }
+    public Map<String,Object> inspect(String token,Authorization request){
+        if(!request.expiresAt().isAfter(clock.instant()))throw new Failure(400,"authorization_expired");
+        var source=verifyPat(token);var effective=effectiveScopes(request.scopes(),source);
+        if(effective.isEmpty())throw new Failure(403,"personal_access_token_scope_mismatch");
+        var tools=ExternalTools.definitions().stream().filter(t->effective.contains(t.scope())&&(source.allowedTools()==null||source.allowedTools().contains(t.name())))
+            .map(t->Map.of("name",t.name(),"title",t.title(),"scope",t.scope(),"readOnly",t.readOnly())).toList();
+        var out=new LinkedHashMap<String,Object>();out.put("tokenName",source.name());out.put("tokenPrefix",source.prefix());out.put("tokenExpiresAt",source.expiresAt());out.put("scopes",effective);out.put("tools",tools);out.put("dynamicPermissions",true);return out;
+    }
+    public synchronized Issued approve(String token, Authorization request) {
+        var source=verifyPat(token);String owner=pats.authenticate(token.strip()).owner();
         if (!request.expiresAt().isAfter(clock.instant())) throw new Failure(400, "authorization_expired");
-        var scopes = scopes(selected == null ? null : String.join(" ", selected), request.scopes());
+        if(effectiveScopes(request.scopes(),source).isEmpty())throw new Failure(403,"personal_access_token_scope_mismatch");
+        // Request scope is the client's ceiling; current PAT grants are checked again on every use.
+        var scopes = request.scopes();
         client(request.clientId());
         return documents.transaction(() -> {
-            Long count = jdbc.queryForObject("SELECT COUNT(*) FROM gc_oauth_grant WHERE owner_name=? AND revoked_at IS NULL AND expires_at>?", Long.class, owner, timestamp(clock.instant()));
+            Long count = jdbc.queryForObject("SELECT COUNT(*) FROM gc_oauth_grant g JOIN gc_access_token p ON p.id=g.source_pat_id WHERE g.owner_name=? AND g.revoked_at IS NULL AND g.expires_at>? AND p.revoked_at IS NULL AND (p.expires_at IS NULL OR p.expires_at>?)", Long.class, owner, timestamp(clock.instant()),timestamp(clock.instant()));
             if (count != null && count >= 100) throw new Failure(400, "authorization_limit_reached");
             String id = UUID.randomUUID().toString().replace("-", ""), code = secret("gc_oac_", random);
             Instant now = clock.instant(), expires = now.plus(Duration.ofDays(30));
-            jdbc.update("INSERT INTO gc_oauth_grant(id,owner_name,client_id,redirect_uri,resource_uri,scopes,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
-                id, owner, request.clientId(), request.redirectUri(), resource(), String.join(" ", scopes), timestamp(now), timestamp(expires));
+            jdbc.update("INSERT INTO gc_oauth_grant(id,owner_name,client_id,redirect_uri,resource_uri,scopes,created_at,expires_at,source_pat_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                id, owner, request.clientId(), request.redirectUri(), resource(), String.join(" ", scopes), timestamp(now), timestamp(expires),source.id());
             jdbc.update("INSERT INTO gc_oauth_code(code_hash,grant_id,challenge,expires_at) VALUES(?,?,?,?)", hash(code), id, request.challenge(), timestamp(now.plusSeconds(120)));
-            documents.event(id, "OAUTH_AUTHORIZED", Map.of("owner", owner, "clientId", request.clientId(), "scopes", scopes, "expiresAt", expires));
+            documents.event(id, "OAUTH_AUTHORIZED", Map.of("owner", owner, "clientId", request.clientId(), "scopeCeiling", scopes,"sourceTokenId",source.id(), "expiresAt", expires));
             return new Issued(code, id);
         });
     }
@@ -158,13 +174,16 @@ public class OAuthService {
         return rotation.tokens();
     }
     private Map<String,Object> mint(Grant grant, List<String> scopes) {
+        var source=source(grant);if(source==null)throw new Failure(400,"invalid_grant");
+        var effective=effectiveScopes(scopes,source);if(effective.isEmpty())throw new Failure(400,"invalid_grant");
         String access = secret("gc_oat_", random), refresh = secret("gc_ort_", random);
+        Instant refreshExpiry=source.expiresAt()!=null&&source.expiresAt().isBefore(grant.expiresAt())?source.expiresAt():grant.expiresAt();
         Instant accessExpiry = clock.instant().plusSeconds(3600);
-        if (accessExpiry.isAfter(grant.expiresAt())) accessExpiry = grant.expiresAt();
-        for (var item : List.of(new Object[]{hash(access), "ACCESS", timestamp(accessExpiry)}, new Object[]{hash(refresh), "REFRESH", timestamp(grant.expiresAt())}))
+        if (accessExpiry.isAfter(refreshExpiry)) accessExpiry = refreshExpiry;
+        for (var item : List.of(new Object[]{hash(access), "ACCESS", timestamp(accessExpiry)}, new Object[]{hash(refresh), "REFRESH", timestamp(refreshExpiry)}))
             jdbc.update("INSERT INTO gc_oauth_token(token_hash,grant_id,token_type,scopes,expires_at) VALUES(?,?,?,?,?)", item[0], grant.id(), item[1], String.join(" ", scopes), item[2]);
         return Map.of("access_token", access, "token_type", "Bearer", "expires_in", Duration.between(clock.instant(), accessExpiry).toSeconds(),
-            "refresh_token", refresh, "scope", String.join(" ", scopes));
+            "refresh_token", refresh, "scope", String.join(" ", effective));
     }
     public PersonalAccessTokens.Identity authenticate(String access) {
         if (access == null || !access.matches("gc_oat_[A-Za-z0-9_-]{43}")) throw new PersonalAccessTokens.Rejected(401, "INVALID_ACCESS_TOKEN");
@@ -172,9 +191,13 @@ public class OAuthService {
         if (rows.isEmpty()) throw new PersonalAccessTokens.Rejected(401, "INVALID_ACCESS_TOKEN");
         var row = rows.getFirst(); var grant = grant((String)row.get("grant_id"));
         if (!active(grant)) throw new PersonalAccessTokens.Rejected(401, "INVALID_ACCESS_TOKEN");
-        return new PersonalAccessTokens.Identity(grant.id(), grant.owner(), Set.of(((String)row.get("scopes")).split(" ")), 120);
+        var source=source(grant);if(source==null)throw new PersonalAccessTokens.Rejected(401,"INVALID_ACCESS_TOKEN");
+        var effective=effectiveScopes(List.of(((String)row.get("scopes")).split(" ")),source);
+        if(effective.isEmpty())throw new PersonalAccessTokens.Rejected(401,"INVALID_ACCESS_TOKEN");
+        return new PersonalAccessTokens.Identity(grant.id(), grant.owner(), Set.copyOf(effective),source.requestsPerMinute(),source.allowedTools()==null?null:Set.copyOf(source.allowedTools()),source.id());
     }
     public void used(PersonalAccessTokens.Identity identity) {
+        pats.used(new PersonalAccessTokens.Identity(identity.rateLimitId(),identity.owner(),identity.scopes(),identity.requestsPerMinute(),identity.allowedTools()));
         if (jdbc.update("UPDATE gc_oauth_grant SET last_used_at=?,use_count=use_count+1 WHERE id=? AND revoked_at IS NULL AND expires_at>? AND resource_uri=?",
             timestamp(clock.instant()), identity.id(), timestamp(clock.instant()), resource()) != 1) throw new PersonalAccessTokens.Rejected(401, "INVALID_ACCESS_TOKEN");
     }
@@ -206,10 +229,12 @@ public class OAuthService {
     private Grant grant(String id) { return jdbc.queryForObject("SELECT * FROM gc_oauth_grant WHERE id=?", (rs,n) -> stored(rs), id); }
     private Grant stored(ResultSet rs) throws SQLException {
         return new Grant(rs.getString("id"), rs.getString("owner_name"), rs.getString("client_id"), rs.getString("redirect_uri"), rs.getString("resource_uri"),
-            List.of(rs.getString("scopes").split(" ")), at(rs,"created_at"), at(rs,"expires_at"), at(rs,"revoked_at"), at(rs,"last_used_at"), rs.getLong("use_count"));
+            List.of(rs.getString("scopes").split(" ")), at(rs,"created_at"), at(rs,"expires_at"), at(rs,"revoked_at"), at(rs,"last_used_at"), rs.getLong("use_count"),rs.getString("source_pat_id"));
     }
-    private GrantView view(Grant grant, String name) { return new GrantView(grant.id(), name, grant.redirectUri(), grant.scopes(), grant.createdAt(), grant.expiresAt(), grant.revokedAt(), grant.lastUsedAt(), grant.useCount(), grant.revokedAt() != null ? "REVOKED" : active(grant) ? "ACTIVE" : "EXPIRED"); }
-    private boolean active(Grant grant) { return grant.revokedAt() == null && grant.expiresAt().isAfter(clock.instant()) && resource().equals(grant.resource()); }
+    private GrantView view(Grant g, String name) {var source=source(g);return new GrantView(g.id(),name,g.redirectUri(),source==null?List.of():effectiveScopes(g.scopes(),source),g.createdAt(),source!=null&&source.expiresAt()!=null&&source.expiresAt().isBefore(g.expiresAt())?source.expiresAt():g.expiresAt(),g.revokedAt(),g.lastUsedAt(),g.useCount(),g.revokedAt()!=null?"REVOKED":!g.expiresAt().isAfter(clock.instant())?"EXPIRED":source==null?"TOKEN_INACTIVE":"ACTIVE",g.sourcePatId(),source==null?null:source.name(),source==null?null:source.allowedTools());}
+    private PersonalAccessTokens.View source(Grant grant){if(grant.sourcePatId()==null)return null;try{return pats.active(grant.owner(),grant.sourcePatId());}catch(PersonalAccessTokens.Rejected inactive){return null;}}
+    private List<String> effectiveScopes(List<String> ceiling,PersonalAccessTokens.View source){return ceiling.stream().filter(source.scopes()::contains).toList();}
+    private boolean active(Grant grant) { return grant.revokedAt() == null && grant.expiresAt().isAfter(clock.instant()) && resource().equals(grant.resource())&&source(grant)!=null; }
     private void resource(String value) { if (!resource().equals(value)) throw new Failure(400, "invalid_target"); }
     private void requireOwner(String name) {
         try { var user = users.loadUserByUsername(name); if (!user.isEnabled() || !user.isAccountNonLocked() || !user.isAccountNonExpired()

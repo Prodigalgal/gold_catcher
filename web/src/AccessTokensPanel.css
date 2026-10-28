@@ -37,25 +37,3 @@
 .gc-access-empty { text-align: center; padding: 36px 16px; border: 1px dashed var(--gc-line); border-radius: var(--gc-radius-md); }
 @media (max-width: 1050px) { .gc-access-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 600px) { .gc-access-intro { align-items: flex-start; flex-direction: column; } .gc-access-copy { flex-wrap: wrap; } .gc-access-copy input { flex-basis: 100%; } }
-.gc-app.gc-oauth-page { display: block; min-height: 100dvh; padding: 32px 20px 64px; box-sizing: border-box; background: var(--gc-bg); color: var(--gc-text); }
-.gc-oauth-brand { display: flex; align-items: center; gap: 12px; max-width: 640px; margin: 0 auto 32px; }
-.gc-oauth-brand strong, .gc-oauth-brand span { display: block; }
-.gc-oauth-brand span { margin-top: 4px; color: var(--gc-text-secondary); font-size: 12px; }
-.gc-oauth-page .gc-oauth-card { max-width: 640px; margin: 0 auto; padding: clamp(22px, 5vw, 40px); }
-.gc-oauth-card h1 { font-size: clamp(24px, 4vw, 30px); margin: 0; line-height: 1.4; }
-.gc-oauth-client { display: grid; gap: 8px; padding: 20px; background: var(--gc-gold-fill); border: 1px solid var(--gc-line); border-radius: var(--gc-radius-sm); }
-.gc-oauth-client > strong { font-size: 21px; overflow-wrap: anywhere; }
-.gc-oauth-client > span:last-child { color: var(--gc-text-secondary); font-size: 14px; }
-.gc-oauth-callback { display: grid; gap: 6px; font-size: 14px; }
-.gc-oauth-callback > span { color: var(--gc-text-secondary); }
-.gc-oauth-callback code { overflow-wrap: anywhere; color: var(--gc-text-secondary); font-size: 12px; }
-.gc-oauth-callback p { font-size: 13px; margin: 0; }
-.gc-oauth-card .gc-access-scopes { margin: 0; border: 1px solid var(--gc-line); border-radius: var(--gc-radius-sm); }
-.gc-oauth-card .gc-access-scope { display: flex; }
-.gc-oauth-card .gc-access-scope span span { font-size: 14px; color: var(--gc-text-secondary); }
-.gc-oauth-card .gc-oauth-boundary { margin: 0; font-size: 14px; }
-.gc-oauth-actions { display: flex; gap: 12px; justify-content: flex-end; }
-.gc-oauth-actions button { flex: 1; min-height: 48px; }
-.gc-oauth-page .gc-oauth-actions .gc-live-primary { color: var(--gc-bg) !important; }
-.gc-oauth-home { justify-self: center; color: var(--gc-text-secondary); font-size: 14px; padding: 10px; }
-@media (max-width: 600px) { .gc-app.gc-oauth-page { padding: 20px 12px 40px; } .gc-oauth-brand { margin-bottom: 22px; } }

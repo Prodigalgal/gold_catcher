@@ -12,16 +12,18 @@ import static org.assertj.core.api.Assertions.*;
 class OAuthServiceTest {
     private final TestSupport t = new TestSupport();
     private final InMemoryUserDetailsManager users = new InMemoryUserDetailsManager(User.withUsername("owner").password("{noop}test-only").roles("OWNER").build());
+    private final PersonalAccessTokens pats = new PersonalAccessTokens(t.jdbc,t.clock,t.store);
     private final OAuthService oauth = service();
     private static final String ISSUER = "https://gold.example", CALLBACK = "https://chatgpt.com/connector_platform_oauth_redirect";
     private static final String VERIFIER = "v".repeat(64);
-    private OAuthService service() { return new OAuthService(t.jdbc, t.store, t.mapper, t.clock, users, ISSUER); }
+    private OAuthService service() { return new OAuthService(t.jdbc, t.store, t.mapper, t.clock, users, pats, ISSUER); }
     private String challenge() throws Exception { return Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(VERIFIER.getBytes(StandardCharsets.US_ASCII))); }
     private OAuthService.Client client() { return oauth.register("ChatGPT", List.of(CALLBACK), null); }
     private Map<String,String> request(OAuthService.Client client) throws Exception {
         return new HashMap<>(Map.of("client_id", client.id(), "redirect_uri", CALLBACK, "response_type", "code", "scope", "market:read information:read", "resource", oauth.resource(), "state", "client-state", "code_challenge", challenge(), "code_challenge_method", "S256"));
     }
-    private OAuthService.Issued issue(OAuthService.Client client) throws Exception { return oauth.approve("owner", oauth.authorize(request(client)), List.of("market:read", "information:read")); }
+    private OAuthService.Issued issue(OAuthService.Client client) throws Exception { return oauth.approve(pat(List.of("market:read", "information:read")), oauth.authorize(request(client))); }
+    private String pat(List<String> scopes){return pats.create("owner",new PersonalAccessTokens.Create("OAuth backing test",scopes,0,120)).secret();}
     private Map<String,String> exchange(OAuthService.Client client, String code) { return new HashMap<>(Map.of("grant_type", "authorization_code", "client_id", client.id(), "code", code, "code_verifier", VERIFIER, "redirect_uri", CALLBACK, "resource", oauth.resource())); }
     private Map<String,String> refresh(OAuthService.Client client, Object refresh) { return new HashMap<>(Map.of("grant_type", "refresh_token", "client_id", client.id(), "refresh_token", refresh.toString(), "resource", oauth.resource())); }
     @Test void persistentOpaqueTokensAreHashedAndCanUseOnlyConsentedScopes() throws Exception {
@@ -104,7 +106,46 @@ class OAuthServiceTest {
         request.put("code_challenge_method", "plain"); assertThatThrownBy(() -> oauth.authorize(request)).hasMessage("invalid_request");
         request.put("code_challenge_method", "S256"); request.put("redirect_uri", CALLBACK + "?unregistered=true"); assertThatThrownBy(() -> oauth.authorize(request)).hasMessage("invalid_redirect_uri");
         request.put("redirect_uri", CALLBACK); request.put("scope", "admin:write"); assertThatThrownBy(() -> oauth.authorize(request)).hasMessage("invalid_scope");
-        var valid = oauth.authorize(request(client)); assertThatThrownBy(() -> oauth.approve("owner", valid, List.of("research:read"))).hasMessage("invalid_scope");
-        t.clock.advance(601000); assertThatThrownBy(() -> oauth.approve("owner", valid, valid.scopes())).hasMessage("authorization_expired");
+        var valid = oauth.authorize(request(client)); assertThatThrownBy(() -> oauth.approve(pat(List.of("research:read")), valid)).hasMessage("personal_access_token_scope_mismatch");
+        t.clock.advance(601000); assertThatThrownBy(() -> oauth.approve(pat(valid.scopes()), valid)).hasMessage("authorization_expired");
+    }
+    @Test void patToolAndScopeUpdatesImmediatelyAffectExistingOAuthAndShareTheParentRateLimit()throws Exception{
+        var client=client();var request=request(client);request.put("scope",String.join(" ",AccessScopes.ALL));
+        var parent=pats.create("owner",new PersonalAccessTokens.Create("Dynamic parent",List.of("market:read"),0,20,List.of("get_quote")));
+        var issued=oauth.approve(parent.secret(),oauth.authorize(request));var token=oauth.exchange(exchange(client,issued.code()));String access=(String)token.get("access_token");
+        assertThat(token.get("scope")).isEqualTo("market:read");var before=oauth.authenticate(access);assertThat(before.allowedTools()).containsExactly("get_quote");
+        assertThat(before.rateLimitId()).isEqualTo(parent.token().id());assertThat(before.requestsPerMinute()).isEqualTo(20);
+        pats.grants("owner",parent.token().id(),AccessScopes.ALL,List.of("get_quote","get_simulation_account"),true);
+        var updated=service().authenticate(access);assertThat(updated.scopes()).containsAll(AccessScopes.ALL);assertThat(updated.allowedTools()).containsExactlyInAnyOrder("get_quote","get_simulation_account");
+        oauth.used(updated);assertThat(pats.list("owner").getFirst().useCount()).isEqualTo(1);
+        pats.grants("owner",parent.token().id(),AccessScopes.ALL,List.of(),true);assertThat(service().authenticate(access).allowedTools()).isEmpty();
+        pats.revoke("owner",parent.token().id());assertThatThrownBy(()->oauth.authenticate(access)).hasMessage("INVALID_ACCESS_TOKEN");
+        assertThatThrownBy(()->oauth.exchange(refresh(client,token.get("refresh_token")))).hasMessage("invalid_grant");assertThat(oauth.list("owner").getFirst().state()).isEqualTo("TOKEN_INACTIVE");
+    }
+    @Test void clientScopeCeilingCannotBeExceededAndOAuthLifetimesNeverExceedTheBackingPat()throws Exception{
+        var client=client();var parent=pats.create("owner",new PersonalAccessTokens.Create("Expiring parent",AccessScopes.ALL,1,120));t.clock.advance(86340000);
+        var request=request(client);request.put("scope","market:read");var issued=oauth.approve(parent.secret(),oauth.authorize(request));var tokens=oauth.exchange(exchange(client,issued.code()));
+        assertThat(tokens.get("expires_in")).isEqualTo(60L);assertThat(oauth.authenticate((String)tokens.get("access_token")).scopes()).containsExactly("market:read");
+        assertThat(t.jdbc.queryForList("SELECT expires_at FROM gc_oauth_token")).allSatisfy(row->assertThat(((java.time.OffsetDateTime)row.get("expires_at")).toInstant()).isEqualTo(parent.token().expiresAt()));
+        t.clock.advance(61000);assertThatThrownBy(()->oauth.exchange(refresh(client,tokens.get("refresh_token")))).hasMessage("invalid_grant");
+    }
+    @Test void tokenInspectionIsReadOnlyAndNeverReturnsOrPersistsTheSubmittedSecret()throws Exception{
+        var client=client();String secret=pat(List.of("market:read"));var authorization=oauth.authorize(request(client));
+        var preview=t.mapper.valueToTree(oauth.inspect(secret,authorization));assertThat(preview.path("tools")).hasSize(5);
+        assertThat(preview.toString()).doesNotContain(secret);assertThat(t.jdbc.queryForObject("SELECT count(*) FROM gc_oauth_grant",Integer.class)).isZero();
+        assertThatThrownBy(()->oauth.approve("owner",authorization)).hasMessage("invalid_personal_access_token");
+        var issued=oauth.approve(secret,authorization);assertThat(t.jdbc.queryForList("SELECT * FROM gc_oauth_grant").toString()+t.jdbc.queryForList("SELECT * FROM gc_event")).doesNotContain(secret);
+        assertThat(issued.code()).startsWith("gc_oac_");
+    }
+    @Test void directPatAndOAuthShareOneQuotaUsingADeterministicClock()throws Exception{
+        var parent=pats.create("owner",new PersonalAccessTokens.Create("Shared quota",List.of("market:read"),0,10));var client=client();
+        var issued=oauth.approve(parent.secret(),oauth.authorize(request(client)));var tokens=oauth.exchange(exchange(client,issued.code()));
+        var filter=new AccessTokenFilter(pats,oauth,t.clock,users);
+        for(int i=0;i<11;i++){
+            var request=new org.springframework.mock.web.MockHttpServletRequest("GET","/api/mcp");var response=new org.springframework.mock.web.MockHttpServletResponse();
+            request.addHeader("Authorization","Bearer "+(i<5?parent.secret():tokens.get("access_token")));
+            filter.doFilter(request,response,(req,res)->{});assertThat(response.getStatus()).isEqualTo(i<10?200:429);
+        }
+        assertThat(pats.active("owner",parent.token().id()).useCount()).isEqualTo(10);
     }
 }

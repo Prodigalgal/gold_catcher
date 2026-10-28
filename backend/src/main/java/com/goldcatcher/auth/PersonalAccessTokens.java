@@ -23,7 +23,8 @@ public class PersonalAccessTokens {
     public record View(String id, String name, String prefix, List<String> scopes, int requestsPerMinute,
                        Instant createdAt, Instant expiresAt, Instant revokedAt, Instant lastUsedAt, long useCount, String state,List<String> allowedTools) {}
     public record Created(View token, String secret) { @Override public String toString() { return "Created[token=" + token.id() + ",secret=REDACTED]"; } }
-    public record Identity(String id, String owner, Set<String> scopes, int requestsPerMinute,Set<String> allowedTools) implements Principal {
+    public record Identity(String id, String owner, Set<String> scopes, int requestsPerMinute,Set<String> allowedTools,String rateLimitId) implements Principal {
+        public Identity(String id,String owner,Set<String> scopes,int requestsPerMinute,Set<String> allowedTools){this(id,owner,scopes,requestsPerMinute,allowedTools,id);}
         public Identity(String id,String owner,Set<String> scopes,int requestsPerMinute){this(id,owner,scopes,requestsPerMinute,null);}
         public String getName() { return owner; }
         public void require(String scope) { if (!scopes.contains(scope)) throw new Rejected(403, "INSUFFICIENT_SCOPE", scope); }
@@ -120,6 +121,12 @@ public class PersonalAccessTokens {
         if (row == null || !MessageDigest.isEqual(hash(secret).getBytes(StandardCharsets.US_ASCII), row.hash().getBytes(StandardCharsets.US_ASCII))
             || !row.view().state().equals("ACTIVE")) throw new Rejected(401, "INVALID_ACCESS_TOKEN");
         return new Identity(id, row.owner(), Set.copyOf(row.view().scopes()), row.view().requestsPerMinute(),row.view().allowedTools()==null?null:Set.copyOf(row.view().allowedTools()));
+    }
+    /** Metadata lookup for an already authenticated delegation; never retrieves or reconstructs a secret. */
+    public View active(String owner,String id){
+        validId(id);
+        var row=jdbc.query("SELECT "+COLUMNS+" FROM gc_access_token WHERE owner_name=? AND id=?",(rs,n)->stored(rs).view(),owner,id).stream().findFirst().orElse(null);
+        if(row==null||!row.state().equals("ACTIVE"))throw new Rejected(401,"INVALID_ACCESS_TOKEN");return row;
     }
     public void used(Identity identity) {
         var now = timestamp(clock.instant());

@@ -2,35 +2,35 @@
 
 入口：运行与配置 → **PAT 令牌与 MCP**。创建令牌后，完整令牌只在本次响应中显示；页面关闭后不能恢复，可撤销并重新创建。
 
-远程 MCP 地址：`https://gold.mnnu.eu.org/api/mcp`。与 Java 服务一同部署，沿用现有 `/api` 网关、数据库、TLS 和 CI/CD，无需另开端口。0.11.0 共 57 个独立工具，覆盖查询、内部模拟交易、研究、压缩、配置与访问管理。读取不启动推理；写操作分别授权。系统没有真实交易所下单工具。
+远程 MCP 地址：`https://gold.mnnu.eu.org/api/mcp`。与 Java 服务一同部署，沿用现有 `/api` 网关、数据库、TLS 和 CI/CD，无需另开端口。0.12.0 共 57 个独立工具，覆盖查询、内部模拟交易、研究、压缩、配置与访问管理。读取不启动推理；写操作分别授权。系统没有真实交易所下单工具。
 
 ## ChatGPT 网页端：OAuth 接入
 
-在 ChatGPT 的自定义 MCP 设置中填写 `https://gold.mnnu.eu.org/api/mcp`，认证选择 **OAuth**；客户端 ID 和客户端密钥留空，由客户端通过 DCR 自动注册。随后跳转到 Gold Catcher，使用现有账号完成 PoW 登录，在独立授权页核对应用名称、回调域名与读取权限，点击允许后返回 ChatGPT。
+在 ChatGPT 的自定义 MCP 设置中填写 `https://gold.mnnu.eu.org/api/mcp`，认证选择 **OAuth**；客户端 ID 和客户端密钥留空，由客户端通过 DCR 自动注册。请先在后台创建 PAT 并设置范围。跳转到 Gold Catcher 后填写该 PAT，点击“核对 Token 权限”，检查客户端、回调地址和只读展示的工具范围，再点击“确认授权并返回”。授权页不提供账号登录或权限编辑；已登录后台也必须提供有效 PAT。
 
-已有 Bearer PAT 继续有效，适用于支持自定义 Authorization 请求头的 MCP 客户端、REST 和下文的 OpenAI API 调用。OAuth 不把 PAT 交给客户端，撤销 OAuth 连接也不会撤销 PAT。ChatGPT 网页端的连接方式与 Responses API 直接提供 Bearer 凭据属于两种接入方式。[OpenAI 自定义 MCP 文档](https://developers.openai.com/api/docs/guides/custom-mcp-server)、[OAuth 认证要求](https://developers.openai.com/plugins/build/auth)。
+已有 Bearer PAT 继续有效，适用于支持自定义 Authorization 请求头的 MCP 客户端、REST 和下文的 OpenAI API 调用。PAT 仅在本站 POST 验证，不写入 URL、浏览器存储或 OAuth 客户端。OAuth 仅保存绑定 PAT 的 ID，并向客户端签发独立凭据；撤销 OAuth 连接不会撤销 PAT，撤销 PAT 则使所有派生 OAuth 连接失效。ChatGPT 网页端的连接方式与 Responses API 直接提供 Bearer 凭据属于两种接入方式。[OpenAI 自定义 MCP 文档](https://developers.openai.com/api/docs/guides/custom-mcp-server)、[OAuth 认证要求](https://developers.openai.com/plugins/build/auth)。
 
-OAuth 连接可在 **运行与配置 → PAT 令牌与 MCP → OAuth 已授权连接** 查看和撤销。该页面显示应用、回调域名、授权范围、期限、最近使用和请求计数，不显示访问令牌、刷新令牌或授权码。
+OAuth 连接可在 **运行与配置 → PAT 令牌与 MCP → OAuth 已授权连接** 查看和撤销。该页面显示应用、绑定的 PAT、回调域名、当前有效范围、期限、最近使用和请求计数，不显示访问令牌、刷新令牌或授权码。
 
 ### OAuth 协议与边界
 
 - 资源标识：`https://gold.mnnu.eu.org/api/mcp`；授权服务器 issuer：`https://gold.mnnu.eu.org`，精确匹配，不根据 Host 或代理头生成。
 - 资源发现：`GET /.well-known/oauth-protected-resource/api/mcp`，根路径 `/.well-known/oauth-protected-resource` 也返回同一份资源文档。未认证 MCP 请求返回 401，并通过 `WWW-Authenticate: Bearer resource_metadata="..."` 指向文档。
-- 授权服务器发现：`GET /.well-known/oauth-authorization-server`，公布注册、授权、兑换、撤销地址，`S256`、授权码/刷新 grant 和 11 个 scope。发现支持的权限不等于授予权限；授权页默认不勾选写权限。
+- 授权服务器发现：`GET /.well-known/oauth-authorization-server`，公布注册、授权、兑换、撤销地址，`S256`、授权码/刷新 grant 和 11 个 scope。发现支持的权限不等于授予权限；实际范围由客户端请求上限与当前 PAT 权限共同决定，授权页不能扩权。
 - 注册：`POST /api/oauth/register`，仅支持 public client 的 `token_endpoint_auth_method=none`，无需客户端密钥。支持 DCR，当前不声明 CIMD、OIDC、client_credentials 或 private_key_jwt 能力。注册不授予数据权限，不访问客户端提供的任何 URL。
 - 回调 URI 必须与注册值逐字匹配；只接受 HTTPS 或本机回环 HTTP，不接受用户信息段、fragment、普通 HTTP 或通配符。客户端名称未经身份认证，授权页同时显示完整回调地址供用户核对。
-- 授权：`GET /api/oauth/authorize` 必须携带 `response_type=code`、`client_id`、`redirect_uri`、`resource`、`scope`、`code_challenge`、`code_challenge_method=S256`。`state` 原样返回。授权请求保存在对应浏览器 Session 中，10 分钟失效；登录轮换 Session ID 后继续保留。GET 不创建授权或令牌；Owner + CSRF 的 POST 才能批准。
-- 访问授权仅 30 天，授权码 120 秒且只能使用一次，访问令牌最长 3600 秒。刷新令牌继承授权的绝对到期时间，每次刷新都轮换；重用已消费的刷新令牌会提交整组授权撤销。刷新可缩小权限，不能扩大。
+- 授权：`GET /api/oauth/authorize` 必须携带 `response_type=code`、`client_id`、`redirect_uri`、`resource`、`scope`、`code_challenge`、`code_challenge_method=S256`。`state` 原样返回。授权请求保存在对应浏览器 Session 中，10 分钟失效；登录轮换 Session ID 后继续保留。GET 不创建授权或令牌；同一浏览器 Session 的 CSRF + 有效 PAT POST 才能批准。登录会话本身不能批准；GET 返回匿名 CSRF 数据，不提供 Owner 身份。`decision=inspect` 只核对 PAT 与只读工具范围，不创建授权；`decision=approve` 再次核验，`decision=deny` 不要求 PAT。连续五次无效 PAT 尝试会锁定该授权请求。
+- 访问授权仅 30 天，授权码 120 秒且只能使用一次，访问令牌最长 3600 秒，访问和刷新令牌的期限也不能超过绑定 PAT 的到期时间。刷新令牌继承授权的绝对到期时间，每次刷新都轮换；重用已消费的刷新令牌会提交整组授权撤销。刷新可缩小权限，不能扩大。
 - 兑换：`POST /api/oauth/token`，表单格式，`grant_type=authorization_code` 或 `refresh_token`；均须提供 `client_id` 和精确的 `resource`。授权码还须提供原始 `redirect_uri` 和 `code_verifier`。拒绝重复表单参数、错误客户端、资源、回调和校验值。
 - 协议撤销：`POST /api/oauth/revoke`，表单 `client_id` 和 `token`，接受该客户端的访问/刷新令牌，撤销对应整组授权；未知令牌不泄漏存在性。
-- 全部授权回调均带精确 `iss`，成功和拒绝均回传 `state`，支持 ChatGPT 的稳定回调模式。OAuth 令牌为 256 位随机 opaque Bearer，数据库仅保存 SHA-256 摘要；资源、Owner、范围、期限和撤销状态在服务端逐次校验。不同于 JWT，本服务没有向外提供签名公钥或 ID token。
-- Session Cookie 为 HttpOnly、SameSite=Lax，允许跨站顶层 OAuth 导航；生产仍使用 Secure。所有 Owner 状态修改与授权确认继续强制 CSRF，登录继续强制 PoW。授权页禁止 iframe 嵌入，禁止向外站发送完整 referrer。
-- OAuth 与 PAT 使用相同工具、范围检查、限流和并发控制。每个 OAuth 授权默认 120 请求/分钟、2 个同时进行的请求，所有外部请求合计 6 个并发。旧 OAuth 授权保留原范围；需要写权限时重新连接并在授权页选择对应权限。
+- 全部授权回调均带精确 `iss`，成功和拒绝均回传 `state`，支持 ChatGPT 的稳定回调模式。OAuth 令牌为 256 位随机 opaque Bearer，数据库仅保存 SHA-256 摘要；资源、Owner、当前 PAT、范围、工具白名单、期限和撤销状态在服务端逐次校验。PAT 修改权限会影响现有 OAuth 凭据，无需轮换 key；不会超过客户端最初请求及刷新时明确缩小后的范围。不同于 JWT，本服务没有向外提供签名公钥或 ID token。
+- Session Cookie 为 HttpOnly、SameSite=Lax，允许跨站顶层 OAuth 导航；生产仍使用 Secure。后台 Owner 修改与匿名 PAT 授权确认均强制 CSRF，后台登录继续强制 PoW；PAT 授权不创建后台登录会话。授权页禁止 iframe 嵌入，禁止向外站发送完整 referrer。
+- OAuth 与 PAT 使用相同工具、范围检查、限流和并发控制。派生 OAuth 连接与原 PAT 共享该 PAT 的每分钟额度和 2 个并发槽，进程总计仍为 6 个并发。修改工具范围在 PAT 管理页进行。旧版未绑定 PAT 的 OAuth 授权在升级时撤销，须重新连接并填写 PAT；现有 PAT 本身不变。
 - DCR 每进程每分钟最多 20 次，最多保留 10000 个客户端；每个 Owner 最多 100 个有效授权，后台最多列出最近 500 条。已注册客户端不会随访问令牌轮换而删除。
 
 ### OAuth 验收
 
-`scripts/verify_oauth_sdk.py` 使用官方 MCP Python SDK 2.3.0、原生请求头，执行发现 → DCR → PoW/CSRF 授权 → S256 兑换 → 新旧 MCP 协议工具调用 → 实际刷新 → 重放撤销，最后撤销全部临时授权。不执行模型推理，也不替用户在 ChatGPT 账户中创建连接。Java 合同测试另行覆盖跨 Session 请求、缺失 CSRF、拒绝授权、回调/客户端/resource 替换、权限扩大、过期和重启后的持久凭据读取。
+`scripts/verify_oauth_sdk.py` 使用官方 MCP Python SDK 2.3.0、原生请求头，执行发现 → DCR → 独立匿名浏览器的 PAT/CSRF 授权 → S256 兑换 → 新旧协议工具调用 → 动态 PAT 工具范围更新 → 实际刷新 → 重放撤销 → 撤销 PAT 后访问/刷新失效，最后撤销全部临时授权及 backing PAT。Owner PoW 会话仅用于创建/清理测试凭据，不参与 OAuth 浏览器授权。不执行模型推理，也不替用户在 ChatGPT 账户中创建连接。Java 合同测试另行覆盖跨 Session 请求、缺失 CSRF、拒绝授权、回调/客户端/resource 替换、权限扩大、过期和重启后的持久凭据读取。
 
 ## 权限与认证
 

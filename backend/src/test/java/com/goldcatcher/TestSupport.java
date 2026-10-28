@@ -34,6 +34,7 @@ public final class TestSupport {
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V7__permanent_personal_access_tokens.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V8__external_commands.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V9__personal_access_token_tools.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V10__pat_backed_oauth.sql")).execute(ds);
         jdbc=new JdbcTemplate(ds);
         store=new DocumentStore(jdbc,mapper,new TransactionTemplate(new DataSourceTransactionManager(ds)),clock);
     }
