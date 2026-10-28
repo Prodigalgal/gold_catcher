@@ -57,6 +57,30 @@ class PersonalAccessTokensTest {
         restarted.revoke("admin", created.token().id());
         assertThatThrownBy(() -> restarted.authenticate(created.secret())).hasMessage("INVALID_ACCESS_TOKEN");
     }
+    @Test void ownerCanExplicitlyChangeExistingGrantsWithoutChangingSecretOrRevivingExpiredTokens(){
+        var created=create();
+        assertThat(tokens.authenticate(created.secret()).scopes()).doesNotContain("simulation:write");
+        assertThatThrownBy(()->tokens.scopes("other",created.token().id(),AccessScopes.ALL)).hasMessage("TOKEN_NOT_FOUND");
+        tokens.scopes("admin",created.token().id(),AccessScopes.ALL);
+        assertThat(tokens.authenticate(created.secret()).scopes()).containsAll(AccessScopes.ALL);
+        tokens.scopes("admin",created.token().id(),AccessScopes.DEFAULT);
+        assertThat(tokens.authenticate(created.secret()).scopes()).containsExactlyInAnyOrderElementsOf(AccessScopes.DEFAULT);
+        tokens.revoke("admin",created.token().id());
+        assertThatThrownBy(()->tokens.scopes("admin",created.token().id(),AccessScopes.ALL)).hasMessage("TOKEN_NOT_ACTIVE");
+    }
+    @Test void toolRestrictionsCanExpandShrinkAndClearOnTheSamePublishedSecretAndSurviveRestart(){
+        var created=tokens.create("admin",new PersonalAccessTokens.Create("restricted",List.of("market:read"),0,120,List.of("get_quote")));
+        var first=tokens.authenticate(created.secret());assertThat(first.permitsTool("get_quote")).isTrue();assertThat(first.permitsTool("get_candles")).isFalse();
+        assertThatThrownBy(()->first.requireTool("get_candles")).hasMessage("TOOL_NOT_GRANTED");
+        tokens.grants("admin",created.token().id(),List.of("market:read"),List.of("get_quote","get_candles"),true);
+        var restarted=new PersonalAccessTokens(f.jdbc,f.clock,f.store);assertThat(restarted.authenticate(created.secret()).permitsTool("get_candles")).isTrue();
+        tokens.grants("admin",created.token().id(),List.of("market:read"),List.of(),true);assertThat(restarted.authenticate(created.secret()).permitsTool("get_quote")).isFalse();
+        tokens.scopes("admin",created.token().id(),AccessScopes.ALL);assertThat(restarted.authenticate(created.secret()).allowedTools()).isEmpty();
+        tokens.grants("admin",created.token().id(),AccessScopes.ALL,null,true);assertThat(restarted.authenticate(created.secret()).allowedTools()).isNull();
+        assertThatThrownBy(()->tokens.grants("admin",created.token().id(),List.of("market:read"),List.of("place_simulation_order"),true)).hasMessage("INVALID_TOKEN_TOOLS");
+        assertThatThrownBy(()->tokens.create("admin",new PersonalAccessTokens.Create("unknown",List.of("market:read"),1,120,List.of("future_tool")))).hasMessage("INVALID_TOKEN_TOOLS");
+        assertThat(tokens.authenticate(created.secret()).permitsTool("place_simulation_order")).isTrue();
+    }
     @Test void activeExistingTokensCanBecomePermanentWithoutChangingSecretOrRevivingDeadTokens() {
         var created = create();
         assertThatThrownBy(() -> tokens.permanent("other", created.token().id())).hasMessage("TOKEN_NOT_FOUND");

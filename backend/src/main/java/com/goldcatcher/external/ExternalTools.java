@@ -9,18 +9,28 @@ import tools.jackson.databind.*;
 /** One deterministic catalog and validator for both HTTP and MCP calls. */
 @Service
 public class ExternalTools {
-    public record Tool(String name, String title, String description, String scope, Map<String,Object> inputSchema) {
+    public record Tool(String name, String title, String description, String scope, Map<String,Object> inputSchema,boolean readOnly,boolean destructive,boolean openWorld) {
+        public Tool(String name,String title,String description,String scope,Map<String,Object> inputSchema){this(name,title,description,scope,inputSchema,true,false,false);}
         public Map<String,Object> definition() {
             return Map.of("name", name, "title", title, "description", description, "inputSchema", inputSchema,
-                "annotations", Map.of("readOnlyHint", true, "destructiveHint", false, "idempotentHint", true, "openWorldHint", false),
+                "annotations", Map.of("readOnlyHint", readOnly, "destructiveHint", destructive, "idempotentHint", true, "openWorldHint", openWorld),
                 "securitySchemes", List.of(Map.of("type", "oauth2", "scopes", List.of(scope))),
                 "_meta", Map.of("securitySchemes", List.of(Map.of("type", "oauth2", "scopes", List.of(scope)))));
         }
     }
     private final ExternalData data;
+    private final ExternalOperations operations;
     private final List<Tool> catalog;
     public ExternalTools(ExternalData data) {
-        this.data = data;
+        this(data,null);
+    }
+    @org.springframework.beans.factory.annotation.Autowired
+    public ExternalTools(ExternalData data,ExternalOperations operations) {
+        this.data = data;this.operations=operations;
+        catalog=operations==null?readDefinitions():definitions();
+    }
+    public static List<Tool> definitions(){var all=new ArrayList<>(readDefinitions());all.addAll(ExternalOperations.catalog());return List.copyOf(all);}
+    private static List<Tool> readDefinitions(){
         var symbol = choice("symbol", "Product; distinct settlement and trading hours", ExternalData.PRODUCTS);
         var frame = choice("frame", "1=1m,5=5m,15=15m,60=1h,240=4h,D=1d", ExternalData.FRAMES);
         var from = string("Inclusive UTC ISO-8601 time", 60, "date-time");
@@ -28,7 +38,7 @@ public class ExternalTools {
         var cursor = string("Opaque nextCursor from the same query; follow even if items is empty", 1024, null);
         var pageSize = integer("Maximum returned records (default 20)", 1, 50);
         var id = string("Record id from search/list results", 120, null);
-        catalog = List.of(
+        var readTools = List.of(
             tool("list_products", "产品目录", "Available products, candle frames and financial number conventions.", "market:read", Map.of()),
             tool("get_quote", "最新报价", "Latest locally observed quote with state, exchange/receive times and provenance. Stale/closed is not live.", "market:read", Map.of("symbol", symbol)),
             tool("get_candles", "K线", "Local collector window only (up to 200). Ascending decimal-string OHLCV. Defaults: symbol XAU_USDT, frame 5, closedOnly true, limit 100. Follow nextBefore as to for earlier candles; no remote backfill.", "market:read",
@@ -47,12 +57,13 @@ public class ExternalTools {
             tool("get_research", "研究与裁决详情", "Whitelisted research and paginated model messages; credentials, raw prompts and private account configuration excluded. Returns decision expiry and unmodified financial plans; no execution.", "research:read",
                 Map.of("id", id, "messageOffset", integer("Message offset; default 0", 0, 10000), "limit", integer("Messages per page; default 6", 1, 12)), "id")
         );
+        return readTools;
     }
-    public List<Tool> available(Identity identity) { return catalog.stream().filter(t -> identity.scopes().contains(t.scope())).toList(); }
+    public List<Tool> available(Identity identity) { return catalog.stream().filter(t -> identity.scopes().contains(t.scope())&&identity.permitsTool(t.name())).toList(); }
     public List<Tool> catalog() { return catalog; }
     public Object call(Identity identity, String name, JsonNode args) {
         var tool = catalog.stream().filter(t -> t.name().equals(name)).findFirst().orElseThrow(() -> new IllegalArgumentException("UNKNOWN_TOOL"));
-        identity.require(tool.scope()); validate(tool, args);
+        identity.require(tool.scope());identity.requireTool(tool.name()); ExternalSchemas.validate(tool.inputSchema(),args);
         String symbol = text(args, "symbol", "XAU_USDT");
         return switch (name) {
             case "list_products" -> data.products();
@@ -67,25 +78,8 @@ public class ExternalTools {
             case "get_source_status" -> data.sources();
             case "list_research" -> data.research(symbol, text(args, "horizon", null), text(args, "cursor", null), number(args, "limit", 20));
             case "get_research" -> data.researchDetail(text(args, "id", null), number(args, "messageOffset", 0), number(args, "limit", 6));
-            default -> throw new IllegalArgumentException("UNKNOWN_TOOL");
+            default -> {if(operations==null)throw new IllegalArgumentException("UNKNOWN_TOOL");yield operations.call(identity,tool,args);}
         };
-    }
-    @SuppressWarnings("unchecked")
-    private static void validate(Tool tool, JsonNode args) {
-        if (args == null || !args.isObject()) throw new IllegalArgumentException("INVALID_TOOL_ARGUMENTS");
-        var properties = (Map<String,Map<String,Object>>) tool.inputSchema().get("properties");
-        for (String field : args.propertyNames()) {
-            var spec = properties.get(field); if (spec == null) throw new IllegalArgumentException("UNKNOWN_ARGUMENT");
-            var value = args.get(field); String type = (String) spec.get("type");
-            if (type.equals("string")) {
-                if (!value.isTextual() || value.asText().length() > (int) spec.getOrDefault("maxLength", 200)) throw new IllegalArgumentException("INVALID_STRING_ARGUMENT");
-                if (spec.containsKey("enum") && !((List<String>) spec.get("enum")).contains(value.asText())) throw new IllegalArgumentException("INVALID_ENUM_ARGUMENT");
-                if ("date-time".equals(spec.get("format"))) try { Instant.parse(value.asText()); } catch (RuntimeException invalid) { throw new IllegalArgumentException("INVALID_TIME_ARGUMENT"); }
-            } else if (type.equals("integer")) {
-                if (!value.isIntegralNumber() || !value.canConvertToInt() || value.asInt() < (int) spec.get("minimum") || value.asInt() > (int) spec.get("maximum")) throw new IllegalArgumentException("INVALID_INTEGER_ARGUMENT");
-            } else if (type.equals("boolean") && !value.isBoolean()) throw new IllegalArgumentException("INVALID_BOOLEAN_ARGUMENT");
-        }
-        for (String field : (List<String>) tool.inputSchema().get("required")) if (!args.has(field)) throw new IllegalArgumentException("MISSING_REQUIRED_ARGUMENT");
     }
     private static Tool tool(String name, String title, String description, String scope, Map<String,Object> fields, String... required) {
         return new Tool(name, title, description, scope, Map.of("type", "object", "properties", new TreeMap<>(fields), "required", List.of(required), "additionalProperties", false));

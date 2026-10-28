@@ -18,7 +18,9 @@ public final class TestSupport {
         public void advance(long millis){now=now.plusMillis(millis);}
     }
     public final TestClock clock=new TestClock();public final ObjectMapper mapper=JsonMapper.builder().build();
-    public final MockEnvironment environment=new MockEnvironment();public final RuntimeSettings settings=new RuntimeSettings(environment,mapper);
+    public final MockEnvironment environment=new MockEnvironment();
+    // Historical protocol/replay fixtures contain synthetic and retired vendors; production policy is tested separately.
+    public final RuntimeSettings settings=new RuntimeSettings(environment,mapper){@Override public boolean approvedAiProvider(String provider){return true;}};
     public final DocumentStore store;
     public final JdbcTemplate jdbc;
     public TestSupport() {
@@ -30,6 +32,8 @@ public final class TestSupport {
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V5__personal_access_tokens.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V6__oauth_mcp.sql")).execute(ds);
         new ResourceDatabasePopulator(new ClassPathResource("db/migration/V7__permanent_personal_access_tokens.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V8__external_commands.sql")).execute(ds);
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration/V9__personal_access_token_tools.sql")).execute(ds);
         jdbc=new JdbcTemplate(ds);
         store=new DocumentStore(jdbc,mapper,new TransactionTemplate(new DataSourceTransactionManager(ds)),clock);
     }

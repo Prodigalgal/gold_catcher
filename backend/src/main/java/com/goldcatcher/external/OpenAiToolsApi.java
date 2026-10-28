@@ -11,7 +11,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import tools.jackson.databind.*;
 
-/** OpenAI function-calling adapter. Executes local reads only; never forwards PATs to an LLM. */
+/** OpenAI function-calling adapter with the same scoped operation contracts as MCP. */
 @RestController
 @RequestMapping("/api/external/v1/openai")
 public class OpenAiToolsApi {
@@ -52,9 +52,10 @@ public class OpenAiToolsApi {
         var result = new LinkedHashMap<String,Object>();
         result.put("message", Map.of("role", "tool", "tool_call_id", callId, "content", output));
         result.put("responseOutput", Map.of("type", "function_call_output", "call_id", callId, "output", output));
-        result.put("isError", false); return ResponseEntity.ok(result);
+        result.put("isError", data instanceof ExternalCommands.Result command&&!command.ok()); return ResponseEntity.ok(result);
     }
     private ResponseEntity<?> rejected(int status, String code) { return ResponseEntity.status(status).body(Map.of("error", code)); }
+    @ExceptionHandler(ExternalCommands.Rejected.class) public ResponseEntity<?> commandRejected(ExternalCommands.Rejected failure){return ResponseEntity.status(failure.status).body(Map.of("error",failure.getMessage(),"operationId",failure.operationId));}
     @ExceptionHandler(PersonalAccessTokens.Rejected.class) public ResponseEntity<?> rejected(PersonalAccessTokens.Rejected failure) {
         var builder = ResponseEntity.status(failure.status);
         if (failure.requiredScope != null) builder.header("WWW-Authenticate", oauth.insufficientScope(failure.requiredScope));

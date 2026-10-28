@@ -41,8 +41,9 @@ class MemoryStorage:
         self.client = value
 
 
-async def verify(base, owner):
+async def verify(base, owner, scopes=None, inspector=inspect):
     storage = MemoryStorage()
+    requested_scopes = scopes or ['market:read', 'information:read', 'research:read']
     name = 'Temporary OAuth SDK acceptance ' + secrets.token_hex(4)
     callback = None
     grants = set()
@@ -65,7 +66,9 @@ async def verify(base, owner):
         ticket = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)['request'][0]
         pending = owner.request('/api/oauth/consent?request=' + urllib.parse.quote(ticket))
         assert pending['clientName'] == name and pending['authenticated'] is True
-        result = owner.request('/api/oauth/consent', {'request': ticket, 'decision': 'approve', 'scopes': pending['scopes']})
+        # Discovery may advertise more rights than this client/user elects to grant.
+        assert set(requested_scopes) <= set(pending['scopes'])
+        result = owner.request('/api/oauth/consent', {'request': ticket, 'decision': 'approve', 'scopes': requested_scopes})
         for item in owner.request('/api/access/oauth')['authorizations']:
             if item['clientName'] == name:
                 grants.add(item['id'])
@@ -81,7 +84,7 @@ async def verify(base, owner):
     provider = OAuthClientProvider(server_url=base + '/api/mcp', storage=storage,
         client_metadata=OAuthClientMetadata(client_name=name, redirect_uris=['http://127.0.0.1:18919/callback'],
             token_endpoint_auth_method='none', grant_types=['authorization_code', 'refresh_token'], response_types=['code'],
-            scope='market:read information:read research:read'), redirect_handler=redirect, callback_handler=receive)
+            scope=' '.join(requested_scopes)), redirect_handler=redirect, callback_handler=receive)
     results = []
     try:
         # Native SDK headers are deliberately retained on all machine endpoints.
@@ -89,7 +92,7 @@ async def verify(base, owner):
             async with httpx2.AsyncClient(auth=provider, timeout=30) as http:
                 async with streamable_http_client(base + '/api/mcp', http_client=http) as (read, write):
                     async with ClientSession(read, write, read_timeout_seconds=30) as session:
-                        results.append(await inspect(session, modern))
+                        results.append(await inspector(session, modern))
         assert storage.tokens and storage.tokens.refresh_token and storage.client
         first_refresh = storage.tokens.refresh_token
         # Advance the SDK's own expiry clock, then perform a real refresh over HTTP.
@@ -97,7 +100,7 @@ async def verify(base, owner):
         async with httpx2.AsyncClient(auth=provider, timeout=30) as http:
             async with streamable_http_client(base + '/api/mcp', http_client=http) as (read, write):
                 async with ClientSession(read, write, read_timeout_seconds=30) as session:
-                    results.append({'afterRefresh': True, **await inspect(session, False)})
+                    results.append({'afterRefresh': True, **await inspector(session, False)})
         assert storage.tokens.refresh_token != first_refresh
         async with httpx2.AsyncClient(timeout=30) as http:
             # A replay must commit family revocation, including the latest access token.

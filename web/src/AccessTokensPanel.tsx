@@ -3,22 +3,21 @@ import { call } from './api';
 import type { Session } from './api';
 import './AccessTokensPanel.css';
 import OAuthConnectionsPanel from './OAuthConnectionsPanel';
+import { scopeLabels as scopeNames, defaultScopes, isWriteScope } from './OAuthConsentPage';
+import ToolGrantPicker, { scopedTools } from './ToolGrantPicker';
+import type { ToolGrant } from './ToolGrantPicker';
 
 type Token = {
   id: string; name: string; prefix: string; scopes: string[]; requestsPerMinute: number;
   createdAt: string; expiresAt: string | null; revokedAt: string | null; lastUsedAt: string | null;
-  useCount: number; state: 'ACTIVE' | 'EXPIRED' | 'REVOKED';
+  useCount: number; state: 'ACTIVE' | 'EXPIRED' | 'REVOKED'; allowedTools: string[] | null;
 };
-type Inventory = { tokens: Token[]; scopes: string[]; mcpPath: string; restPath: string; maximumActiveTokens: number };
+type Inventory = { tokens: Token[]; scopes: string[]; tools: ToolGrant[]; mcpPath: string; restPath: string; maximumActiveTokens: number };
 type Created = { token: Token; secret: string };
-const scopeNames: Record<string, [string, string]> = {
-  'market:read': ['行情与指标', '报价、K 线、市场深度和 Java 计算指标'],
-  'information:read': ['信息数据库', '新闻原文、压缩摘要、经济日历和宏观驱动'],
-  'research:read': ['AI 研究结果', '辩论观点、研究状态和裁决结果'],
-};
 const errors: Record<string, string> = {
   INVALID_TOKEN_NAME: '请输入 1–80 个字符的令牌名称。',
-  INVALID_TOKEN_SCOPES: '请至少选择一种读取权限。',
+  INVALID_TOKEN_SCOPES: '请至少选择一种权限。',
+  INVALID_TOKEN_TOOLS: '工具不在所选权限中或已被移除，请重新读取后选择。',
   INVALID_TOKEN_LIMITS: '请选择永久有效或 1–365 天，请求频率应为每分钟 10–600 次。',
   TOKEN_NOT_ACTIVE: '仅有效令牌可以调整为永久有效。',
   ACTIVE_TOKEN_LIMIT_REACHED: '有效令牌已达上限，请先撤销不再使用的令牌。',
@@ -31,7 +30,9 @@ const stateNames = { ACTIVE: '有效', EXPIRED: '已过期', REVOKED: '已撤销
 export default function AccessTokensPanel({ session }: { session: Session }) {
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [name, setName] = useState('');
-  const [scopes, setScopes] = useState(Object.keys(scopeNames));
+  const [scopes, setScopes] = useState(defaultScopes);
+  const [editing, setEditing] = useState<Token | null>(null), [editScopes, setEditScopes] = useState<string[]>([]);
+  const [allowedTools, setAllowedTools] = useState<string[] | null>(null), [editAllowedTools, setEditAllowedTools] = useState<string[] | null>(null);
   const [days, setDays] = useState(90), [rate, setRate] = useState(120);
   const [permanentExpiry, setPermanentExpiry] = useState(false);
   const [created, setCreated] = useState<Created | null>(null);
@@ -41,6 +42,7 @@ export default function AccessTokensPanel({ session }: { session: Session }) {
   const [clientKind, setClientKind] = useState<'oauth' | 'mcp' | 'responses' | 'functions'>('oauth');
   const secretInput = useRef<HTMLInputElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
+  const editHeading = useRef<HTMLHeadingElement>(null);
   const endpoint = window.location.origin + (inventory?.mcpPath ?? '/api/mcp');
   const config = JSON.stringify({ mcpServers: { 'gold-catcher': { type: 'http', url: endpoint, headers: { Authorization: 'Bearer <YOUR_PAT>' } } } }, null, 2);
   const responsesConfig = JSON.stringify({ tools: [{ type: 'mcp', server_label: 'gold_catcher', server_url: endpoint, authorization: '<YOUR_PAT>', allowed_tools: ['get_quote', 'get_candles', 'get_indicators', 'search_news', 'get_news'], require_approval: 'never' }] }, null, 2);
@@ -54,6 +56,7 @@ export default function AccessTokensPanel({ session }: { session: Session }) {
     return () => controller.abort();
   }, [session]);
   useEffect(() => { if (created) secretInput.current?.focus(); }, [created]);
+  useEffect(() => { if (editing) { editHeading.current?.focus(); editHeading.current?.scrollIntoView({ block: 'center' }); } }, [editing]);
   const refresh = async () => {
     setBusy('refresh'); setError('');
     try { setInventory(await call<Inventory>('access/tokens', session)); }
@@ -63,7 +66,7 @@ export default function AccessTokensPanel({ session }: { session: Session }) {
   const create = async () => {
     setBusy('create'); setError(''); setNotice('');
     try {
-      const value = await call<Created>('access/tokens', session, { name, scopes, expiresInDays: permanentExpiry ? 0 : days, requestsPerMinute: rate });
+      const value = await call<Created>('access/tokens', session, { name, scopes, allowedTools: scopedTools(allowedTools, scopes, inventory?.tools ?? []), expiresInDays: permanentExpiry ? 0 : days, requestsPerMinute: rate });
       setCreated(value); setName('');
       setInventory(current => current ? { ...current, tokens: [value.token, ...current.tokens] } : current);
     } catch (failure) { setError((failure as Error).message); }
@@ -92,10 +95,19 @@ export default function AccessTokensPanel({ session }: { session: Session }) {
     try { await navigator.clipboard.writeText(text); setNotice(message); }
     catch { setError('浏览器未允许剪贴板访问，请选中文本后手动复制。'); }
   };
+  const saveScopes = async () => {
+    if (!editing) return;
+    setBusy(editing.id); setError(''); setNotice('');
+    try {
+      const value = await call<Token>(`access/tokens/${editing.id}/scopes`, session, { scopes: editScopes, allowedTools: scopedTools(editAllowedTools, editScopes, inventory?.tools ?? []) });
+      setInventory(current => current ? { ...current, tokens: current.tokens.map(row => row.id === value.id ? value : row) } : current);
+      setEditing(null); setNotice(`“${value.name}”权限已保存，下一次请求生效。客户端可重新发现工具列表。`);
+    } catch (failure) { setError((failure as Error).message); } finally { setBusy(''); }
+  };
   return <div className="gc-access">
     <section className="gc-panel gc-access-intro">
-      <div><span className="gc-access-eyebrow">EXTERNAL AI ACCESS</span><h3>PAT 令牌与 MCP 接入</h3><p>让其他 AI 读取同一份黄金信息库与市场数据。按应用分别创建令牌，独立管理权限、有效期和使用情况。</p></div>
-      <span className="gc-badge gc-gold-badge">只读数据服务 · 12 项工具</span>
+      <div><span className="gc-access-eyebrow">EXTERNAL AI ACCESS</span><h3>PAT 令牌与 MCP 接入</h3><p>让其他 AI 查询信息、管理研究与内部模拟交易。按应用分别授权，独立管理权限、有效期和使用情况。</p></div>
+      <span className="gc-badge gc-gold-badge">数据查询与系统操作</span>
     </section>
     {error && <p className="gc-live-error" role="alert">{errors[error] ?? error}</p>}
     <p className="gc-access-notice" role="status" aria-live="polite">{notice}</p>
@@ -111,16 +123,18 @@ export default function AccessTokensPanel({ session }: { session: Session }) {
         <div className="gc-panel-head"><h3>创建访问令牌</h3><span className="gc-small">每个应用一枚</span></div>
         <form className="gc-control-form" onSubmit={event => { event.preventDefault(); void create(); }}>
           <label htmlFor="gc-token-name">令牌名称<input ref={nameInput} id="gc-token-name" required maxLength={80} value={name} placeholder="例如：个人 AI 研究助手" onChange={event => setName(event.target.value)} /></label>
-          <fieldset className="gc-access-scopes"><legend>读取权限</legend>{Object.entries(scopeNames).map(([scope, [title, description]]) => <label key={scope} className="gc-access-scope"><input type="checkbox" checked={scopes.includes(scope)} onChange={event => setScopes(current => event.target.checked ? [...current, scope] : current.filter(s => s !== scope))} /><span><strong>{title}</strong><span>{description}</span></span></label>)}</fieldset>
+          <div className="gc-access-client-tabs"><button type="button" className="gc-live-button" onClick={() => { setScopes(Object.keys(scopeNames)); setAllowedTools(null); }}>完整系统操作</button><button type="button" className="gc-live-button" onClick={() => { setScopes(defaultScopes); setAllowedTools(null); }}>基础数据查询</button></div>
+          <fieldset className="gc-access-scopes"><legend>访问权限 · 默认仅查询</legend>{Object.entries(scopeNames).map(([scope, [title, description]]) => <label key={scope} className="gc-access-scope"><input type="checkbox" checked={scopes.includes(scope)} onChange={event => setScopes(current => event.target.checked ? [...current, scope] : current.filter(s => s !== scope))} /><span><strong>{title}{isWriteScope(scope) ? ' · 操作' : ''}</strong><span>{description}</span></span></label>)}</fieldset>
+          <ToolGrantPicker tools={inventory?.tools ?? []} scopes={scopes} value={allowedTools} onChange={setAllowedTools} disabled={!!busy} />
           <div className="gc-form-grid"><label htmlFor="gc-token-days">有效期（天）<input id="gc-token-days" type="number" min={1} max={365} required value={days} disabled={permanentExpiry} onChange={event => setDays(Number(event.target.value))} /></label><label htmlFor="gc-token-rate">每分钟请求上限<input id="gc-token-rate" type="number" min={10} max={600} required value={rate} onChange={event => setRate(Number(event.target.value))} /></label></div>
-          <label className="gc-access-scope"><input type="checkbox" checked={permanentExpiry} onChange={event => setPermanentExpiry(event.target.checked)} /><span><strong>永久有效</strong><span>持续有效，直到手动撤销；权限和限流规则继续生效。</span></span></label><p className="gc-small">仅可查询所选数据；不授予配置修改、启动研究或订单操作权限。有限期令牌届满自动失效。</p>
+          <label className="gc-access-scope"><input type="checkbox" checked={permanentExpiry} onChange={event => setPermanentExpiry(event.target.checked)} /><span><strong>永久有效</strong><span>持续有效，直到手动撤销；权限和限流规则继续生效。</span></span></label><p className="gc-small">{scopes.some(isWriteScope) ? '已选择操作权限，AI 可修改对应状态。研究和压缩可能消耗模型额度，订单仅为内部模拟。' : '当前仅查询，不执行写操作。'}有限期令牌届满自动失效。</p>
           <button className="gc-live-button gc-live-primary" disabled={!!busy || !scopes.length || !name.trim() || !!created}>{busy === 'create' ? '创建中…' : created ? '请先保存当前令牌' : '创建 PAT 令牌'}</button>
         </form>
       </section>
       <section className="gc-panel gc-access-connect">
         <div className="gc-panel-head"><h3>连接其他 AI</h3><span className="gc-badge">Streamable HTTP</span></div>
         <div className="gc-access-client-tabs" role="group" aria-label="AI 接入方式">{([['oauth', 'ChatGPT / OAuth'], ['mcp', 'Bearer PAT'], ['responses', 'GPT / Responses'], ['functions', 'OpenAI 兼容 API']] as const).map(([key, title]) => <button key={key} type="button" className="gc-live-button" aria-pressed={clientKind === key} onClick={() => setClientKind(key)}>{title}</button>)}</div>
-        {clientKind === 'oauth' && <><ol><li>在 ChatGPT 的自定义 MCP 设置中填写下方服务地址。</li><li>认证方式选择 OAuth。客户端 ID 和密钥留空，使用自动注册。</li><li>跳转到本站后，使用现有账号登录并确认读取权限。</li></ol><label htmlFor="gc-oauth-mcp-url">MCP 服务地址</label><div className="gc-access-copy"><input id="gc-oauth-mcp-url" value={endpoint} readOnly onFocus={event => event.target.select()} /><button className="gc-live-button" onClick={() => void copy(endpoint, 'MCP 地址已复制。')}>复制地址</button></div><p className="gc-small">支持 OAuth 授权码、PKCE S256 和令牌自动刷新。此方式无需创建 PAT；已有 Bearer PAT 继续有效。</p></>}
+        {clientKind === 'oauth' && <><ol><li>在 ChatGPT 的自定义 MCP 设置中填写下方服务地址。</li><li>认证方式选择 OAuth。客户端 ID 和密钥留空，使用自动注册。</li><li>跳转到本站后，使用现有账号登录并确认所需权限。</li></ol><label htmlFor="gc-oauth-mcp-url">MCP 服务地址</label><div className="gc-access-copy"><input id="gc-oauth-mcp-url" value={endpoint} readOnly onFocus={event => event.target.select()} /><button className="gc-live-button" onClick={() => void copy(endpoint, 'MCP 地址已复制。')}>复制地址</button></div><p className="gc-small">支持 OAuth 授权码、PKCE S256 和令牌自动刷新。此方式无需创建 PAT；已有 Bearer PAT 继续有效。</p></>}
         {clientKind === 'mcp' && <>
         <ol><li>在 AI 客户端中添加远程 MCP 服务。</li><li>填写下方地址，并设置 Bearer 令牌。</li><li>连接后会自动发现该令牌有权使用的工具。</li></ol>
         <label htmlFor="gc-mcp-url">MCP 服务地址</label><div className="gc-access-copy"><input id="gc-mcp-url" value={endpoint} readOnly onFocus={event => event.target.select()} /><button className="gc-live-button" onClick={() => void copy(endpoint, 'MCP 地址已复制。')}>复制地址</button></div>
@@ -132,10 +146,18 @@ export default function AccessTokensPanel({ session }: { session: Session }) {
         <div className="gc-access-coverage"><strong>查询内容</strong><p>新闻与压缩摘要 · 官方日历 · 美元与利率等驱动 · 实时报价 · 1m / 5m / 15m / 1h / 4h / 日 K · 技术指标 · AI 辩论与裁决</p><p className="gc-small">所有查询返回实际采集时间和覆盖状态。K 线最多覆盖当前采集窗口的 200 根；原文和研究消息支持分段读取。</p></div>
       </section>
     </div>
+    {editing && <section className="gc-panel" aria-labelledby="gc-edit-scope-heading">
+      <h3 id="gc-edit-scope-heading" ref={editHeading} tabIndex={-1}>编辑“{editing.name}”的访问权限</h3>
+      <p>保存后原令牌保持有效，新权限从下一次请求生效。</p>
+      <div className="gc-access-client-tabs"><button className="gc-live-button" disabled={!!busy} onClick={() => { setEditScopes(Object.keys(scopeNames)); setEditAllowedTools(null); }}>完整系统操作</button><button className="gc-live-button" disabled={!!busy} onClick={() => { setEditScopes(defaultScopes); setEditAllowedTools(null); }}>基础数据查询</button></div>
+      <fieldset className="gc-access-scopes" disabled={!!busy}><legend>授予该令牌的权限</legend>{Object.entries(scopeNames).map(([scope, [title, description]]) => <label key={scope} className="gc-access-scope"><input type="checkbox" checked={editScopes.includes(scope)} onChange={event => setEditScopes(current => event.target.checked ? [...current, scope] : current.filter(value => value !== scope))} /><span><strong>{title}{isWriteScope(scope) ? ' · 操作' : ''}</strong><span>{description}</span></span></label>)}</fieldset>
+      <ToolGrantPicker tools={inventory?.tools ?? []} scopes={editScopes} value={editAllowedTools} onChange={setEditAllowedTools} disabled={!!busy} />
+      <div className="gc-access-client-tabs"><button className="gc-live-button gc-live-primary" disabled={!!busy || !editScopes.length} onClick={() => void saveScopes()}>{busy === editing.id ? '保存中…' : '保存权限'}</button><button className="gc-live-button" disabled={!!busy} onClick={() => setEditing(null)}>取消</button></div>
+    </section>}
     <OAuthConnectionsPanel session={session} />
     <section className="gc-panel">
       <div className="gc-panel-head"><div><h3>令牌列表</h3><span className="gc-small">{inventory ? `${inventory.tokens.filter(token => token.state === 'ACTIVE').length} 枚有效 · 最多 ${inventory.maximumActiveTokens} 枚` : '正在读取'}</span></div><button className="gc-live-button" disabled={!!busy || loading} onClick={() => void refresh()}>{busy === 'refresh' ? '刷新中…' : '刷新使用情况'}</button></div>
-      {loading ? <p role="status">正在读取访问令牌…</p> : !inventory?.tokens.length ? <div className="gc-access-empty"><strong>尚未创建访问令牌</strong><p>创建第一枚令牌，即可让其他 AI 使用已授权的数据。</p></div> : <div className="gc-live-table-wrap"><table className="gc-live-table gc-access-table"><thead><tr><th>名称 / 标识</th><th>读取权限</th><th>状态 / 到期时间</th><th>最近使用 / 请求数</th><th>操作</th></tr></thead><tbody>{inventory.tokens.map(token => <tr key={token.id}><td><strong>{token.name}</strong><code>{token.prefix}</code><span className="gc-small">创建 {stamp(token.createdAt)}</span></td><td>{token.scopes.map(scope => <span className="gc-access-scope-tag" key={scope}>{scopeNames[scope]?.[0] ?? scope}</span>)}<span className="gc-small">{token.requestsPerMinute} 次 / 分钟</span></td><td><span className={`gc-badge ${token.state === 'ACTIVE' ? 'gc-positive' : ''}`}>{stateNames[token.state]}</span><span className="gc-small">{token.expiresAt ? stamp(token.expiresAt) : '永久有效'}</span></td><td>{stamp(token.lastUsedAt)}<span className="gc-small">{token.useCount.toLocaleString()} 次已认证请求</span></td><td>{token.state === 'ACTIVE' && (confirm === token.id ? <div className="gc-access-revoke"><span>确认撤销？</span><button className="gc-live-button gc-negative" disabled={!!busy} onClick={() => void revoke(token)}>{busy === token.id ? '撤销中…' : '确认撤销'}</button><button className="gc-live-button" disabled={!!busy} onClick={() => setConfirm('')}>保留</button></div> : <div className="gc-access-revoke">{token.expiresAt && <button className="gc-live-button" disabled={!!busy} onClick={() => void makePermanent(token)}>设为永久</button>}<button className="gc-live-button" disabled={!!busy} onClick={() => setConfirm(token.id)}>撤销令牌</button></div>)}</td></tr>)}</tbody></table></div>}
+      {loading ? <p role="status">正在读取访问令牌…</p> : !inventory?.tokens.length ? <div className="gc-access-empty"><strong>尚未创建访问令牌</strong><p>创建第一枚令牌，即可让其他 AI 使用已授权的数据。</p></div> : <div className="gc-live-table-wrap"><table className="gc-live-table gc-access-table"><thead><tr><th>名称 / 标识</th><th>访问权限</th><th>状态 / 到期时间</th><th>最近使用 / 请求数</th><th>操作</th></tr></thead><tbody>{inventory.tokens.map(token => <tr key={token.id}><td><strong>{token.name}</strong><code>{token.prefix}</code><span className="gc-small">创建 {stamp(token.createdAt)}</span></td><td>{token.scopes.map(scope => <span className="gc-access-scope-tag" key={scope}>{scopeNames[scope]?.[0] ?? scope}</span>)}<span className="gc-small">{token.allowedTools == null ? "所选权限内全部工具" : `${token.allowedTools.length} 项指定工具`}</span><span className="gc-small">{token.requestsPerMinute} 次 / 分钟</span></td><td><span className={`gc-badge ${token.state === 'ACTIVE' ? 'gc-positive' : ''}`}>{stateNames[token.state]}</span><span className="gc-small">{token.expiresAt ? stamp(token.expiresAt) : '永久有效'}</span></td><td>{stamp(token.lastUsedAt)}<span className="gc-small">{token.useCount.toLocaleString()} 次已认证请求</span></td><td>{token.state === 'ACTIVE' && (confirm === token.id ? <div className="gc-access-revoke"><span>确认撤销？</span><button className="gc-live-button gc-negative" disabled={!!busy} onClick={() => void revoke(token)}>{busy === token.id ? '撤销中…' : '确认撤销'}</button><button className="gc-live-button" disabled={!!busy} onClick={() => setConfirm('')}>保留</button></div> : <div className="gc-access-revoke"><button className="gc-live-button" disabled={!!busy} onClick={() => { setEditing(token); setEditScopes([...token.scopes]); setEditAllowedTools(token.allowedTools ?? null); }}>编辑权限</button>{token.expiresAt && <button className="gc-live-button" disabled={!!busy} onClick={() => void makePermanent(token)}>设为永久</button>}<button className="gc-live-button" disabled={!!busy} onClick={() => setConfirm(token.id)}>撤销令牌</button></div>)}</td></tr>)}</tbody></table></div>}
     </section>
   </div>;
 }

@@ -95,6 +95,26 @@ class OAuthHttpContractTest {
         var callback=query(mapper.readTree(denied.body()).path("redirectUrl").asText());assertThat(callback).containsEntry("error","access_denied").containsEntry("iss","https://gold.example");assertThat(callback).doesNotContainKey("code");
         assertThat(json(browser(),"/api/oauth/register",Map.of("redirect_uris",List.of("http://evil.example/callback")),null).statusCode()).isEqualTo(400);
     }
+    @Test void existingPatToolGrantsCanChangeWithoutRotatingTheKeyAndAllTransportsEnforceThem() throws Exception {
+        var owner=browser();var csrf=login(owner);
+        var created=mapper.readTree(json(owner,"/api/access/tokens",Map.of("name","Editable tool grants","scopes",List.of("market:read"),"allowedTools",List.of("get_quote")),csrf).body());
+        String secret=created.path("secret").asText(),id=created.path("token").path("id").asText(),path="/api/access/tokens/"+id+"/scopes";
+        var headers=Map.of("Authorization","Bearer "+secret,"Accept","application/json, text/event-stream","MCP-Protocol-Version","2025-11-25");
+        assertThat(mapper.readTree(send(browser(),"GET","/api/external/v1",null,null,headers).body()).path("tools")).hasSize(1);
+        var update=Map.of("scopes",com.goldcatcher.auth.AccessScopes.ALL,"allowedTools",List.of("get_quote","get_simulation_account"));
+        assertThat(json(owner,path,update,null).statusCode()).isEqualTo(403);
+        assertThat(json(owner,path,update,csrf).statusCode()).isEqualTo(200);
+        var sameKey=mapper.readTree(send(browser(),"GET","/api/external/v1",null,null,headers).body());assertThat(sameKey.path("tools")).hasSize(2);
+        var denied=send(browser(),"POST","/api/mcp","{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"get_candles\",\"arguments\":{}}}","application/json",headers);
+        assertThat(denied.statusCode()).isEqualTo(403);assertThat(denied.body()).contains("TOOL_NOT_GRANTED");
+        assertThat(send(browser(),"GET","/api/external/v1/get_candles",null,null,headers).statusCode()).isEqualTo(403);
+        assertThat(mapper.readTree(send(browser(),"GET","/api/external/v1/openai/tools",null,null,headers).body()).path("tools")).hasSize(2);
+        var all=new HashMap<String,Object>();all.put("scopes",com.goldcatcher.auth.AccessScopes.ALL);all.put("allowedTools",null);
+        assertThat(json(owner,path,all,csrf).statusCode()).isEqualTo(200);
+        assertThat(mapper.readTree(send(browser(),"GET","/api/external/v1",null,null,headers).body()).path("tools").size()).isGreaterThan(50);
+        assertThat(json(owner,"/api/access/tokens/"+id+"/revoke",Map.of(),csrf).statusCode()).isEqualTo(200);
+        assertThat(json(owner,path,update,csrf).statusCode()).isEqualTo(409);
+    }
     @Test void permanentPatCreationAndConversionRequireOwnerSessionAndCsrf() throws Exception {
         var owner=browser();var csrf=login(owner);
         var created=json(owner,"/api/access/tokens",Map.of("name","Permanent HTTP contract","scopes",List.of("market:read"),"expiresInDays",0),csrf);

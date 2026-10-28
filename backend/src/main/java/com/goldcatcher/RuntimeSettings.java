@@ -34,8 +34,12 @@ public class RuntimeSettings {
         return List.copyOf(providers);
     }
     public boolean aiProviderEnabled(AiRoute route) {
-        return !disabledAiProviders().contains(route.provider().strip().toLowerCase(java.util.Locale.ROOT));
+        return approvedAiProvider(route.provider()) && !disabledAiProviders().contains(route.provider().strip().toLowerCase(java.util.Locale.ROOT));
     }
+    public boolean approvedAiProvider(String provider) {
+        return provider!=null && List.of("mimo","glm","longcat","minmax","grok","grok_web").contains(provider.strip().toLowerCase(java.util.Locale.ROOT));
+    }
+    public static String aiProviderFamily(String provider){return provider.equals("grok_web")?"grok":provider;}
     public BigDecimal decimal(String key, String fallback) {
         String value = text(key, fallback);
         return value == null || value.isBlank() ? null : new BigDecimal(value);
@@ -69,7 +73,7 @@ public class RuntimeSettings {
         var defaults=researchRoutes.horizons().isEmpty()?routes():List.<AiRoute>of();
         for(var group:List.of(defaults,routes("SHORT"),routes("LONG"),fallbackRoutes(),List.of(compressionRoute())))for(var route:group){var previous=routes.putIfAbsent(route.id(),route);
             if(previous!=null&&(!previous.provider().equals(route.provider())||!previous.model().equals(route.model())))throw new IllegalArgumentException("CONFLICTING_ROUTE_ID");}
-        for(var route:List.copyOf(routes.values()))if(route.fallback()!=null)routes.putIfAbsent(route.fallback().id(),route.fallback());
+        for(var route:List.copyOf(routes.values()))if(route.fallback()!=null&&aiProviderEnabled(route.fallback()))routes.putIfAbsent(route.fallback().id(),route.fallback());
         return List.copyOf(routes.values());}
     private List<AiRoute> parseRoutes(String json){
         return parseRoutes(json,false);
