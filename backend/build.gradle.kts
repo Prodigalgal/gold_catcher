@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.goldcatcher"
-version = "0.10.1"
+version = "0.11.0"
 
 springBoot { buildInfo() }
 
@@ -36,4 +36,8 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-tasks.withType<Test> { useJUnitPlatform(); jvmArgs("--enable-native-access=ALL-UNNAMED") }
+tasks.withType<Test> {
+    useJUnitPlatform()
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    inputs.files(fileTree("../config") { include("ai-routes.*.example.json") })
+}

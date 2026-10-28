@@ -133,3 +133,4 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/gold-oauth-sdk"
           "$RUNNER_TEMP/gold-oauth-sdk/bin/pip" install -r scripts/requirements-mcp-test.txt
           "$RUNNER_TEMP/gold-oauth-sdk/bin/python" scripts/verify_oauth_sdk.py
+          "$RUNNER_TEMP/gold-oauth-sdk/bin/python" scripts/verify_system_control.py --oauth

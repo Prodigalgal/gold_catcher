@@ -33,7 +33,7 @@ public class AiConfiguration {
     }
     public record Provider(String id,String label,String baseUrl,String protocol,String catalogMode,String encryptedApiKey) {}
     public record Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy,Integer schemaVersion) {
-        public Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy){this(revision,updatedAt,providers,shortRoutes,longRoutes,compressionEnabled,compression,shortPolicy,longPolicy,1);}
+        public Configuration(long revision,Instant updatedAt,List<Provider> providers,Horizon shortRoutes,Horizon longRoutes,boolean compressionEnabled,Selection compression,ResearchPolicy shortPolicy,ResearchPolicy longPolicy){this(revision,updatedAt,providers,shortRoutes,longRoutes,compressionEnabled,compression,shortPolicy,longPolicy,2);}
         public Configuration{if(shortPolicy==null)shortPolicy=ResearchPolicy.defaults("SHORT");if(longPolicy==null)longPolicy=ResearchPolicy.defaults("LONG");if(schemaVersion==null)schemaVersion=0;}
     }
     public record ModelChoice(String id,String name,Boolean available,Long contextTokens,Long inputTokens,Long outputTokens) {}
@@ -53,22 +53,28 @@ public class AiConfiguration {
                 providers.putIfAbsent(route.provider(),new Provider(route.provider(),route.provider(),route.baseUrl(),"ANY2API","DISCOVERED",null));
                 bootstrapKeys.putIfAbsent(route.provider(),settings.secret(route));
             }
-        bootstrapKeys.put("arena",settings.text("ANY2API_ARENA_API_KEY",""));
-        providers.putIfAbsent("arena",arenaProvider());
-        var defaults=new Configuration(0,null,List.copyOf(providers.values()),arenaFallbacks(horizon(settings.bootstrapRoutes("SHORT"))),arenaFallbacks(horizon(settings.bootstrapRoutes("LONG"))),settings.enabled("GOLD_COMPRESSION_ENABLED"),arenaFallback(selection(settings.compressionRoute())),ResearchPolicy.from(settings,"SHORT"),ResearchPolicy.from(settings,"LONG"));
+        for(String id:List.of("mimo","glm","longcat","minmax","grok_web")){
+            bootstrapKeys.putIfAbsent(id,settings.text("ANY2API_"+id.toUpperCase(Locale.ROOT)+"_API_KEY",""));
+            providers.putIfAbsent(id,new Provider(id,id,settings.text("GOLD_AI_"+id.toUpperCase(Locale.ROOT)+"_BASE_URL",settings.text("GOLD_ANY2API_BASE_URL","https://any2api-direct.mnnu.eu.org").replaceAll("/+$","")+"/"+id+"/v1"),"ANY2API","DISCOVERED",null));
+        }
+        var defaults=new Configuration(0,null,List.copyOf(providers.values()),clean(horizon(settings.bootstrapRoutes("SHORT"))),clean(horizon(settings.bootstrapRoutes("LONG"))),settings.enabled("GOLD_COMPRESSION_ENABLED"),clean(selection(settings.compressionRoute())),ResearchPolicy.from(settings,"SHORT"),ResearchPolicy.from(settings,"LONG"));
         current=store.find("ai-configuration","current",Configuration.class).orElse(defaults);
-        if(current.schemaVersion()==0){
-            var old=current;var upgradedProviders=new ArrayList<>(old.providers());
-            if(upgradedProviders.stream().noneMatch(p->p.id().equals("arena"))){var arena=arenaProvider();upgradedProviders.add(new Provider(arena.id(),arena.label(),arena.baseUrl(),arena.protocol(),arena.catalogMode(),encryptionConfigured()?encrypt(bootstrapKeys.getOrDefault("arena","")):null));}
-            current=new Configuration(old.revision()+1,clock.instant(),List.copyOf(upgradedProviders),arenaFallbacks(old.shortRoutes()),arenaFallbacks(old.longRoutes()),old.compressionEnabled(),arenaFallback(old.compression()),old.shortPolicy(),old.longPolicy());
+        if(current.schemaVersion()<2||current.providers().stream().anyMatch(p->!settings.approvedAiProvider(p.id()))||!approved(current.shortRoutes())||!approved(current.longRoutes())||!settings.approvedAiProvider(current.compression().provider())||!clean(current.shortRoutes()).equals(current.shortRoutes())||!clean(current.longRoutes()).equals(current.longRoutes())||!Objects.equals(clean(current.compression()),current.compression())){
+            var old=current;var upgradedProviders=new LinkedHashMap<String,Provider>();
+            old.providers().stream().filter(p->settings.approvedAiProvider(p.id())).forEach(p->upgradedProviders.put(p.id(),p));
+            providers.forEach(upgradedProviders::putIfAbsent);
+            var shortRoutes=restricted(old.shortRoutes(),defaults.shortRoutes());var longRoutes=restricted(old.longRoutes(),defaults.longRoutes());
+            current=new Configuration(old.revision()+1,clock.instant(),List.copyOf(upgradedProviders.values()),shortRoutes,longRoutes,old.compressionEnabled(),settings.approvedAiProvider(old.compression().provider())?clean(old.compression()):defaults.compression(),old.shortPolicy(),old.longPolicy());
             var upgraded=current;store.transaction(()->{store.save("ai-configuration-history",Long.toString(old.revision()),old);store.save("ai-configuration-history",Long.toString(upgraded.revision()),upgraded);store.save("ai-configuration","current",upgraded);return true;});
         }
         if(current.revision()==0)publish(current);
         if(current.revision()>0){publish(current);store.save("ai-configuration","current",current);store.save("ai-configuration-history",Long.toString(current.revision()),current);}
     }
-    private Provider arenaProvider(){return new Provider("arena","Arena Max（随机模型）",settings.text("GOLD_AI_ARENA_BASE_URL",settings.text("GOLD_ANY2API_BASE_URL","https://any2api-direct.mnnu.eu.org").replaceAll("/+$","")+"/arena/v1"),"ANY2API","DISCOVERED",null);}
-    private Horizon arenaFallbacks(Horizon h){return new Horizon(h.researchers().stream().map(this::arenaFallback).toList(),h.judges().stream().map(this::arenaFallback).toList());}
-    private Selection arenaFallback(Selection s){return s.fallback()!=null?s:new Selection(s.provider(),s.model(),s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),new Selection("arena","arena/Max",s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds()));}
+    private Horizon restricted(Horizon old,Horizon defaults){return new Horizon(restrictSeats(old.researchers(),defaults.researchers()),restrictSeats(old.judges(),defaults.judges()));}
+    private boolean approved(Horizon h){return java.util.stream.Stream.concat(h.researchers().stream(),h.judges().stream()).allMatch(s->settings.approvedAiProvider(s.provider()));}
+    private List<Selection> restrictSeats(List<Selection> seats,List<Selection> defaults){return seats.stream().anyMatch(s->!settings.approvedAiProvider(s.provider()))?defaults:seats.stream().map(this::clean).toList();}
+    private Horizon clean(Horizon h){return new Horizon(h.researchers().stream().map(this::clean).toList(),h.judges().stream().map(this::clean).toList());}
+    private Selection clean(Selection s){if(s==null)return null;var fallback=s.fallback()!=null&&settings.approvedAiProvider(s.fallback().provider())?clean(s.fallback()):null;return new Selection(s.provider(),s.model(),s.inputEstimateLimit(),s.characterLimit(),s.byteLimit(),s.messageLimit(),s.outputReserve(),s.timeoutSeconds(),fallback);}
     private Horizon horizon(List<AiRoute> routes){return new Horizon(routes.stream().filter(r->!r.judge()).map(this::selection).toList(),routes.stream().filter(AiRoute::judge).map(this::selection).toList());}
     private Selection selection(AiRoute route){return new Selection(route.provider(),route.model(),route.inputEstimateLimit(),route.characterLimit(),route.byteLimit(),route.messageLimit(),route.outputReserve(),route.timeoutSeconds(),route.fallback()==null?null:selection(route.fallback()));}
     public Map<String,Object> view(){return publicView(current);}
@@ -103,7 +109,7 @@ public class AiConfiguration {
         if(update.providers()==null||update.providers().isEmpty()||update.providers().size()>20)throw new IllegalArgumentException("INVALID_AI_PROVIDERS");
         var providers=new ArrayList<Provider>();var ids=new HashSet<String>();
         for(var input:update.providers()){
-            if(input==null||input.id()==null||!input.id().matches("[a-z][a-z0-9_-]{1,31}")||!ids.add(input.id())||settings.disabledAiProviders().contains(input.id()))throw new IllegalArgumentException("INVALID_OR_DISABLED_AI_PROVIDER");
+            if(input==null||input.id()==null||!input.id().matches("[a-z][a-z0-9_-]{1,31}")||!settings.approvedAiProvider(input.id())||!ids.add(input.id())||settings.disabledAiProviders().contains(input.id()))throw new IllegalArgumentException("INVALID_OR_DISABLED_AI_PROVIDER");
             if(input.label()==null||input.label().isBlank()||input.label().length()>60||!List.of("ANY2API","OPENAI_COMPATIBLE").contains(input.protocol())||!List.of("DISCOVERED","MANUAL").contains(input.catalogMode())
                 ||input.protocol().equals("ANY2API")&&!input.catalogMode().equals("DISCOVERED"))throw new IllegalArgumentException("INVALID_AI_PROVIDER_PROTOCOL");
             validateEndpoint(input.baseUrl());
@@ -135,7 +141,7 @@ public class AiConfiguration {
             if(s==null||!providers.contains(s.provider())||s.model()==null||!s.model().matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}"))throw new IllegalArgumentException("INVALID_AI_MODEL_SELECTION");
             String model=s.model().startsWith(s.provider()+"/")?s.model():s.provider()+"/"+s.model();
             if(!models.add(ResearchService.modelIdentity(model)))throw new IllegalArgumentException("DUPLICATE_AI_MODEL");
-            if(!vendors.add(s.provider()))throw new IllegalArgumentException("THREE_DISTINCT_AI_PROVIDERS_REQUIRED");
+            if(!vendors.add(RuntimeSettings.aiProviderFamily(s.provider())))throw new IllegalArgumentException("THREE_DISTINCT_AI_PROVIDERS_REQUIRED");
             if(s.inputEstimateLimit()<512||s.inputEstimateLimit()>200000||s.characterLimit()<1024||s.characterLimit()>200000||s.byteLimit()<1024||s.byteLimit()>800000
                 ||s.outputReserve()<128||s.outputReserve()>32000||s.messageLimit()!=2||s.timeoutSeconds()<1||s.timeoutSeconds()>900)throw new IllegalArgumentException("INVALID_AI_CONTEXT_BUDGET");
             Selection fallback=null;

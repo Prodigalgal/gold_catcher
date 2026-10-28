@@ -20,7 +20,7 @@ const errors: Record<string, string> = {
   THREE_RESEARCH_AND_JUDGE_MODELS_REQUIRED: '每个周期需要三个辩论模型和三个裁决模型。',
   DUPLICATE_AI_MODEL: '同一阶段的模型不能重复。',
   THREE_DISTINCT_AI_PROVIDERS_REQUIRED: '同一阶段需要三个不同提供商。',
-  INVALID_OR_DISABLED_AI_PROVIDER: '提供商标识重复、格式无效或已禁用。',
+  INVALID_OR_DISABLED_AI_PROVIDER: '仅允许 MIMO、GLM、LongCat、MiniMax、Grok；标识也不能重复或已禁用。',
   INVALID_AI_MODEL_SELECTION: '请填写模型并选择已配置的提供商。',
   INVALID_AI_FALLBACK: '兜底模型只能配置一层，且需要与主模型不同。',
   INVALID_AI_CONTEXT_BUDGET: '上下文预算或超时不在允许范围内。',
@@ -190,7 +190,7 @@ function ModelSlot({
       {allowFallback && <details className="gc-ai-slot-fallback" style={{ marginTop: '10px' }}>
         <summary style={{ cursor: 'pointer', fontSize: '12px' }}>失败兜底 · {selection.fallback?.model || '未启用'}</summary>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '10px 0' }}>
-          <input aria-label={`${name}启用兜底`} type="checkbox" style={{ width: 'auto' }} checked={Boolean(selection.fallback)} onChange={event => update({ ...selection, fallback: event.target.checked ? { ...selection, provider: 'arena', model: 'arena/Max', fallback: null } : null })} />启用兜底模型
+          <input aria-label={`${name}启用兜底`} type="checkbox" style={{ width: 'auto' }} checked={Boolean(selection.fallback)} onChange={event => update({ ...selection, fallback: event.target.checked ? { ...selection, provider: 'longcat', model: 'longcat/longcat-flash', fallback: null } : null })} />启用兜底模型
         </label>
         {selection.fallback && <ModelSlot selection={selection.fallback} providers={providers} catalogs={catalogs} name={`${name}兜底`} allowFallback={false} update={fallback => update({ ...selection, fallback })} />}
         <p className="gc-small">主模型不可用、超时或输出校验失败时切换。Arena Max 使用随机模型路由；每席独立请求，仍受阶段与整轮期限约束。</p>
@@ -388,7 +388,7 @@ export default function AiConfigurationPanel({
             <fieldset disabled={busy}>
               <legend>提供商与 API 端点</legend>
               <p className="gc-small" style={{ marginBottom: '14px' }}>
-                支持 any2api 聚合网关与标准 OpenAI 兼容协议。API Key
+                仅使用 MIMO、GLM、LongCat、MiniMax、Grok，支持 any2api 与 OpenAI 兼容协议。API Key
                 高强度加密保存于服务端，前端不直接回传明文。
               </p>
               <div
@@ -428,10 +428,10 @@ export default function AiConfigurationPanel({
                         标识
                         <input
                           required
-                          pattern="[a-z][a-z0-9_-]{1,31}"
+                          pattern="mimo|glm|longcat|minmax|grok|grok_web"
                           value={provider.id}
                           readOnly={provider.credentialConfigured}
-                          placeholder="如 provider_a"
+                          placeholder="mimo / glm / longcat / minmax / grok_web"
                           onChange={(e) => updateProvider(index, { id: e.target.value })}
                         />
                       </label>

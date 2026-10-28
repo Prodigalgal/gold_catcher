@@ -41,7 +41,7 @@ public class OAuthService {
     }
     public String issuer() { return issuer; }
     public String resource() { return issuer + "/api/mcp"; }
-    public String challenge() { return "Bearer resource_metadata=\"" + issuer + "/.well-known/oauth-protected-resource/api/mcp\", scope=\"" + String.join(" ", PersonalAccessTokens.SCOPES) + "\""; }
+    public String challenge() { return "Bearer resource_metadata=\"" + issuer + "/.well-known/oauth-protected-resource/api/mcp\", scope=\"" + String.join(" ", AccessScopes.ALL) + "\""; }
     public String insufficientScope(String scope) {
         if (!PersonalAccessTokens.SCOPES.contains(scope)) throw new IllegalArgumentException("INVALID_SCOPE_CHALLENGE");
         return "Bearer error=\"insufficient_scope\", resource_metadata=\"" + issuer + "/.well-known/oauth-protected-resource/api/mcp\", scope=\"" + scope + "\"";

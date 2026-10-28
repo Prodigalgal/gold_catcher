@@ -1,8 +1,8 @@
-# OAuth、Bearer PAT 与只读 MCP 服务
+# OAuth、Bearer PAT 与 MCP 系统操作
 
 入口：运行与配置 → **PAT 令牌与 MCP**。创建令牌后，完整令牌只在本次响应中显示；页面关闭后不能恢复，可撤销并重新创建。
 
-远程 MCP 地址：`https://gold.mnnu.eu.org/api/mcp`。与 Java 服务一同部署，沿用现有 `/api` 网关、数据库、TLS 和 CI/CD，无需另开端口。MCP 和配套 REST 查询均不刷新信源、不调用模型、不启动研究、不写入订单。
+远程 MCP 地址：`https://gold.mnnu.eu.org/api/mcp`。与 Java 服务一同部署，沿用现有 `/api` 网关、数据库、TLS 和 CI/CD，无需另开端口。0.11.0 共 57 个独立工具，覆盖查询、内部模拟交易、研究、压缩、配置与访问管理。读取不启动推理；写操作分别授权。系统没有真实交易所下单工具。
 
 ## ChatGPT 网页端：OAuth 接入
 
@@ -16,7 +16,7 @@ OAuth 连接可在 **运行与配置 → PAT 令牌与 MCP → OAuth 已授权�
 
 - 资源标识：`https://gold.mnnu.eu.org/api/mcp`；授权服务器 issuer：`https://gold.mnnu.eu.org`，精确匹配，不根据 Host 或代理头生成。
 - 资源发现：`GET /.well-known/oauth-protected-resource/api/mcp`，根路径 `/.well-known/oauth-protected-resource` 也返回同一份资源文档。未认证 MCP 请求返回 401，并通过 `WWW-Authenticate: Bearer resource_metadata="..."` 指向文档。
-- 授权服务器发现：`GET /.well-known/oauth-authorization-server`，公布注册、授权、兑换、撤销地址，`S256`、授权码/刷新 grant 和三个只读 scope。
+- 授权服务器发现：`GET /.well-known/oauth-authorization-server`，公布注册、授权、兑换、撤销地址，`S256`、授权码/刷新 grant 和 11 个 scope。发现支持的权限不等于授予权限；授权页默认不勾选写权限。
 - 注册：`POST /api/oauth/register`，仅支持 public client 的 `token_endpoint_auth_method=none`，无需客户端密钥。支持 DCR，当前不声明 CIMD、OIDC、client_credentials 或 private_key_jwt 能力。注册不授予数据权限，不访问客户端提供的任何 URL。
 - 回调 URI 必须与注册值逐字匹配；只接受 HTTPS 或本机回环 HTTP，不接受用户信息段、fragment、普通 HTTP 或通配符。客户端名称未经身份认证，授权页同时显示完整回调地址供用户核对。
 - 授权：`GET /api/oauth/authorize` 必须携带 `response_type=code`、`client_id`、`redirect_uri`、`resource`、`scope`、`code_challenge`、`code_challenge_method=S256`。`state` 原样返回。授权请求保存在对应浏览器 Session 中，10 分钟失效；登录轮换 Session ID 后继续保留。GET 不创建授权或令牌；Owner + CSRF 的 POST 才能批准。
@@ -25,7 +25,7 @@ OAuth 连接可在 **运行与配置 → PAT 令牌与 MCP → OAuth 已授权�
 - 协议撤销：`POST /api/oauth/revoke`，表单 `client_id` 和 `token`，接受该客户端的访问/刷新令牌，撤销对应整组授权；未知令牌不泄漏存在性。
 - 全部授权回调均带精确 `iss`，成功和拒绝均回传 `state`，支持 ChatGPT 的稳定回调模式。OAuth 令牌为 256 位随机 opaque Bearer，数据库仅保存 SHA-256 摘要；资源、Owner、范围、期限和撤销状态在服务端逐次校验。不同于 JWT，本服务没有向外提供签名公钥或 ID token。
 - Session Cookie 为 HttpOnly、SameSite=Lax，允许跨站顶层 OAuth 导航；生产仍使用 Secure。所有 Owner 状态修改与授权确认继续强制 CSRF，登录继续强制 PoW。授权页禁止 iframe 嵌入，禁止向外站发送完整 referrer。
-- OAuth 与 PAT 使用相同只读工具、权限检查、每分钟限流和并发控制。每个 OAuth 授权默认 120 请求/分钟、2 个同时进行的请求，所有外部读取合计 6 个并发；OAuth 只增加认证方式。
+- OAuth 与 PAT 使用相同工具、范围检查、限流和并发控制。每个 OAuth 授权默认 120 请求/分钟、2 个同时进行的请求，所有外部请求合计 6 个并发。旧 OAuth 授权保留原范围；需要写权限时重新连接并在授权页选择对应权限。
 - DCR 每进程每分钟最多 20 次，最多保留 10000 个客户端；每个 Owner 最多 100 个有效授权，后台最多列出最近 500 条。已注册客户端不会随访问令牌轮换而删除。
 
 ### OAuth 验收
@@ -39,6 +39,14 @@ OAuth 连接可在 **运行与配置 → PAT 令牌与 MCP → OAuth 已授权�
 | `market:read` | 产品、最新报价、K 线、Java 指标、市场深度 |
 | `information:read` | 信息库检索、原文、压缩摘要、经济日历、宏观驱动、经济数据与预期、信源状态 |
 | `research:read` | 研究历史、模型观点、三方裁决与有效期 |
+| `simulation:read` | 模拟账户、订单、事件、复盘、CSV 导出 |
+| `configuration:read` | AI / 信源配置、模型状态、产品成本配置 |
+| `system:read` | 系统、调度、代理、压缩、归档、数据流重放、完整研究和操作回执 |
+| `simulation:write` | 模拟建单、撤单、修改退出条件、减仓、平仓 |
+| `research:write` | 启动/取消研究、调整自动研究配置 |
+| `information:write` | 重新排队新闻压缩 |
+| `configuration:write` | 保存 AI / 信源配置、刷新模型目录 |
+| `access:manage` | 创建/撤销 PAT、修改 PAT 授权/有效期、查看/撤销 OAuth 授权 |
 
 每个调用方分别创建令牌，选择永久有效或填写 1–365 天有效期，并设置每分钟 10–600 次请求上限（默认 90 天、120 次）。每个账户最多 100 枚有效令牌，永久令牌也计入上限。每枚令牌最多 2 个同时进行的读取请求，进程总共最多 6 个；超限返回 `429` 和 `Retry-After`。计数窗口为进程内每个 UTC 分钟；当前单服务器副本，若扩多副本需将限流迁移到共享存储。
 
@@ -51,8 +59,44 @@ OAuth 连接可在 **运行与配置 → PAT 令牌与 MCP → OAuth 已授权�
 - `POST /api/access/tokens/{id}/revoke`：撤销，重复调用结果一致。
 - 创建时 `expiresInDays=0` 表示永久有效；省略仍默认 90 天。UI 提供“永久有效”选项。
 - `POST /api/access/tokens/{id}/permanent`：将自己现有的有效 PAT 设为永久，不改变完整令牌；不能恢复已过期或已撤销的令牌。UI 在有效的有限期令牌旁提供“设为永久”。
+- `POST /api/access/tokens/{id}/scopes`：原 key 不变，修改 `scopes` 与可选 `allowedTools`；要求 Owner + CSRF。`allowedTools=null` 表示权限内全部工具（将来同范围新增工具自动可见），数组表示仅允许这些工具，空数组表示不允许工具。省略该字段保留原工具白名单，并移除不再属于新 scope 的工具。未知工具或跨范围工具被拒绝。
+- 在令牌列表点击“编辑权限”，可选择“完整系统操作”或逐项指定工具。新范围从下一次请求生效，MCP / REST / OpenAI 三个入口共同执行；AI 客户端刷新工具列表即可发现新授权，服务无需重启。过期/撤销令牌不能借修改权限恢复。
 
-PAT 无法调用内部 Session、模型配置、调度或订单接口；Owner Cookie 也不替代外部接口的 Bearer 令牌。
+PAT 继续不能冒充 Owner Session 或直接调用内部会话接口；操作须通过已授权的外部工具。Owner Cookie 也不替代外部接口 Bearer。
+
+示例：给已经发布的 key 增加模拟交易工具，无需重新生成密钥：
+
+```json
+{
+  "scopes": ["market:read", "simulation:read", "simulation:write", "system:read"],
+  "allowedTools": ["get_quote", "get_simulation_account", "place_simulation_order", "cancel_simulation_order", "get_operation"]
+}
+```
+
+旧 PAT 升级后保持原 scope，`allowedTools` 默认为 null；不会自动获得写权限。外部 AI 创建或修改其他 PAT 时，不能授予超过自己的 scope 或工具白名单；省略工具范围时继承调用方限制。
+
+## 写操作、重试与模拟规则
+
+每个操作分别命名和声明参数，准确标注 `readOnlyHint`、`destructiveHint`、`openWorldHint`。所有写工具要求 `request_key`（8–128 位 ASCII 字母、数字、`_.:-`）；同一意图重试必须沿用同一参数和 key。同账户相同 key 只派发一次，成功或业务拒绝均保存回执；不同参数复用 key 返回 `REQUEST_KEY_CONFLICT`。回执仅存输入摘要，不存 API Key 等输入明文；创建 PAT 的 secret 只在首次响应返回，重放和查询回执均不返回。
+
+写工具结果包含 `operationId`、`ok`、`replayed`、`result`。HTTP 200 不等于操作成功：业务拒绝为 `ok=false`，MCP 同时设置 `isError=true`。执行中重复请求返回 `COMMAND_IN_PROGRESS`；进程中断或结果持久化失败后返回 `COMMAND_OUTCOME_UNKNOWN`，可查询 `get_operation` 并核对实际订单/研究状态，不会自动再次执行。
+
+`place_simulation_order` 使用十进制字符串、明确产品数量单位、有效期和风险说明，复用 Java 账本对报价、规则、成本、现金和价格步长的校验。`PENDING` 不是成交，`close_simulation_order` / `reduce_simulation_position` 仅提交退出请求，由后续有效报价决定成交与费用。修改入口只调整退出条件；修改入场价格或数量需撤销未成交部分后新建。CFD 仍保留报价情景和未核实隔夜费等限制。
+
+`start_research` 返回排队/准入回执，使用 `get_research` 查询后续进展；研究、压缩和模型目录刷新可能访问上游。AI 配置保存仍检查版本与三个独立厂商席位，仅支持 MIMO、GLM、LongCat、MiniMax、Grok。长线、短线、压缩保持独立执行槽。
+
+操作工具组：
+
+| 用途 | 工具 |
+| --- | --- |
+| 模拟交易 | `place_simulation_order`, `cancel_simulation_order`, `modify_simulation_order`, `close_simulation_order`, `reduce_simulation_position` |
+| 模拟账本 | `get_simulation_account`, `list_simulation_orders`, `get_simulation_order`, `get_simulation_order_events`, `get_strategy_review`, `export_simulation_orders` |
+| 研究与压缩 | `start_research`, `cancel_research`, `update_research_schedule`, `reprocess_news_compression` |
+| 配置 | `get_ai_configuration`, `update_ai_configuration`, `get_source_configuration`, `update_source_configuration`, `refresh_model_catalogs`, `get_model_status`, `get_market_cost_configuration` |
+| 运行与重放 | `get_system_status`, `get_api_performance`, `get_source_proxy_status`, `get_research_schedule`, `get_compression_status`, `get_compression_detail`, `get_news_compressions`, `get_market_archive`, `export_research`, `get_inference_data_flow`, `get_data_flow_stage`, `replay_inference_data_flow`, `replay_analysis`, `replay_indicators`, `replay_news`, `get_operation` |
+| 访问管理 | `list_access_tokens`, `create_access_token`, `update_access_token_scopes`, `revoke_access_token`, `make_access_token_permanent`, `list_oauth_authorizations`, `revoke_oauth_authorization` |
+
+REST 查询 GET 不执行写操作。命令入口为固定 `POST /api/external/v1`，请求体 `{"name":"工具名","arguments":{...}}`；与 MCP / OpenAI Function Calling 使用相同目录、参数检查、权限和回执。请求上限 32 KiB。长研究、压缩详情、归档、重放和 CSV 导出返回最多 16000 码点的文本页，按 `nextOffset` 拼接。
 
 ## MCP 接入
 
@@ -123,7 +167,7 @@ print(response.output_text)
 
 - `GET /api/external/v1/openai/tools?format=chat`：返回 Chat Completions `tools` 数组。
 - `GET /api/external/v1/openai/tools?format=responses`：返回 Responses 扁平 function 工具数组。
-- `POST /api/external/v1/openai/tool`：`{"tool_call": <单个完整工具调用>}`。接受 Chat 的 `id/type/function` 或 Responses 的 `call_id/type/name/arguments`；返回 `message`（`role=tool/tool_call_id/content`）与 `responseOutput`（`type=function_call_output/call_id/output`）。每次仅执行一个只读工具，权限与 MCP 完全一致。
+- `POST /api/external/v1/openai/tool`：`{"tool_call": <单个完整工具调用>}`。接受 Chat 的 `id/type/function` 或 Responses 的 `call_id/type/name/arguments`；返回 `message`（`role=tool/tool_call_id/content`）与 `responseOutput`（`type=function_call_output/call_id/output`）。每次仅执行一个已授权工具，权限与 MCP 完全一致。
 
 Chat Completions 应用循环：获取工具定义 → 发送模型请求 → 接收 `tool_calls` → 将单个调用交给上述执行接口 → 把 `message` 追加到对话 → 继续调用模型。先追加模型本身含 `tool_calls` 的 assistant 消息，再追加对应的 tool 消息。Responses 使用返回的 `responseOutput`。流式参数须先完整拼接；模型产生的非法 JSON、未知工具和越权请求会被拒绝，应由应用处理错误并告知模型。只兼容纯文本而不支持工具调用的接口不会自动获得数据访问能力。
 
@@ -145,7 +189,7 @@ curl --fail-with-body https://gold.mnnu.eu.org/api/mcp \
 
 ## 工具目录
 
-`tools/list` 只列出令牌权限内的工具；直接调用未授权工具仍返回 403。所有工具 `readOnlyHint=true`，查询结果既提供文本 JSON 也提供 `structuredContent`。
+`tools/list` 只列出令牌权限内的工具；直接调用未授权工具仍返回 403。读取工具标注 `readOnlyHint=true`，写工具标注 false。查询结果既提供文本 JSON 也提供 `structuredContent`。
 
 | 工具 | 参数与默认值 |
 | --- | --- |

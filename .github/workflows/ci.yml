@@ -58,6 +58,7 @@ jobs:
           python3 scripts/verify_external_access.py --base-url http://127.0.0.1:18084
           "$RUNNER_TEMP/gold-mcp-sdk/bin/python" scripts/verify_mcp_sdk.py --base-url http://127.0.0.1:18084 --stdio
           "$RUNNER_TEMP/gold-mcp-sdk/bin/python" scripts/verify_oauth_sdk.py --base-url http://127.0.0.1:18084
+          "$RUNNER_TEMP/gold-mcp-sdk/bin/python" scripts/verify_system_control.py --base-url http://127.0.0.1:18084 --rejection --oauth
   web:
     runs-on: ubuntu-24.04
     steps:

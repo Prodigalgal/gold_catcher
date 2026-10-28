@@ -22,21 +22,33 @@ class AiConfigurationTest {
                 assertThat(catalog.path("models").get(0).path("available").isNull()).isTrue();}
         }finally{server.stop(0);}
     }
-    @Test void upgradeAddsArenaForEverySeatOnceAndPreservesTheOldFrozenRevision(){
-        f.environment.setProperty("ANY2API_ARENA_API_KEY","arena-bootstrap-secret");service.save(update(0,"prior-secret"));
-        var old=(tools.jackson.databind.node.ObjectNode)f.mapper.valueToTree(f.store.find("ai-configuration","current",AiConfiguration.Configuration.class).orElseThrow());old.remove("schemaVersion");
-        for(String horizon:List.of("shortRoutes","longRoutes"))for(String role:List.of("researchers","judges"))for(var slot:old.path(horizon).path(role))((tools.jackson.databind.node.ObjectNode)slot).remove("fallback");
-        ((tools.jackson.databind.node.ObjectNode)old.path("compression")).remove("fallback");
-        var frozen=f.mapper.valueToTree(Map.of("revision",1,"routes",f.settings.routes("SHORT").stream().map(ResearchService::snapshotRoute).toList()));
-        for(var route:frozen.path("routes"))((tools.jackson.databind.node.ObjectNode)route).remove("fallback");
+    @Test void upgradeRemovesRetiredVendorsAndFallbacksOnceAndPreservesAuditHistory(){
+        service.save(update(0,"prior-secret"));
+        var old=(tools.jackson.databind.node.ObjectNode)f.mapper.valueToTree(f.store.find("ai-configuration","current",AiConfiguration.Configuration.class).orElseThrow());old.put("schemaVersion",1);
+        ((tools.jackson.databind.node.ArrayNode)old.path("providers")).add(f.mapper.valueToTree(new AiConfiguration.Provider("arena","retired","https://example.test/arena/v1","ANY2API","DISCOVERED",null)));
+        for(String horizon:List.of("shortRoutes","longRoutes"))for(String role:List.of("researchers","judges"))for(var slot:old.path(horizon).path(role)){
+            var backup=(tools.jackson.databind.node.ObjectNode)slot.deepCopy();backup.put("provider","arena");backup.put("model","arena/Max");backup.remove("fallback");
+            ((tools.jackson.databind.node.ObjectNode)slot).set("fallback",backup);
+        }
         f.store.save("ai-configuration","current",old);
-        var restarted=new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote);restarted.recover();
+        var strict=new RuntimeSettings(f.environment,f.mapper);
+        var restarted=new AiConfiguration(strict,f.store,f.mapper,f.clock,events,remote);restarted.recover();
         assertThat(restarted.view()).containsEntry("revision",2L);
-        assertThat(f.settings.allRoutes().stream().filter(r->r.fallback()!=null).toList()).hasSize(13);
-        for(var route:f.settings.routes("SHORT"))assertThat(route.fallback().model()).isEqualTo("arena/Max");
-        assertThat(restarted.routesForRun(frozen,"SHORT")).allSatisfy(route->{assertThat(route.fallback()).isNull();assertThat(f.settings.secret(route)).isNotBlank();});
-        new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote).recover();assertThat(f.settings.researchRouteSnapshot("SHORT").revision()).isEqualTo(2);
-        assertThat(f.mapper.writeValueAsString(restarted.view())).doesNotContain("arena-bootstrap-secret","prior-secret");
+        assertThat(strict.allRoutes()).allSatisfy(route->{assertThat(strict.aiProviderEnabled(route)).isTrue();assertThat(route.fallback()).isNull();});
+        assertThat(f.mapper.writeValueAsString(restarted.view())).doesNotContain("arena","prior-secret");
+        assertThat(f.mapper.writeValueAsString(f.store.find("ai-configuration-history","1",AiConfiguration.Configuration.class).orElseThrow())).contains("arena/Max");
+        new AiConfiguration(strict,f.store,f.mapper,f.clock,events,remote).recover();assertThat(strict.researchRouteSnapshot("SHORT").revision()).isEqualTo(2);
+    }
+    @Test void strictProductionPolicyRejectsEveryUnapprovedProviderIncludingRetiredFallbacks(){
+        var strict=new RuntimeSettings(f.environment,f.mapper);var clean=new AiConfiguration(strict,f.store,f.mapper,f.clock,events,remote);clean.recover();
+        for(String id:List.of("arena","deepseek","qwen","provider_a")){
+            assertThat(strict.approvedAiProvider(id)).isFalse();
+            var u=update(0,null);var providers=new ArrayList<>(u.providers());providers.add(new AiConfiguration.ProviderInput(id,id,"https://example.test/v1","OPENAI_COMPATIBLE","MANUAL",null));
+            assertThatThrownBy(()->clean.save(new AiConfiguration.Update(0,providers,u.shortRoutes(),u.longRoutes(),true,u.compression()))).hasMessage("INVALID_OR_DISABLED_AI_PROVIDER");
+        }
+        for(String id:List.of("mimo","glm","longcat","minmax","grok","grok_web"))assertThat(strict.approvedAiProvider(id)).isTrue();
+        assertThat(RuntimeSettings.aiProviderFamily("grok_web")).isEqualTo(RuntimeSettings.aiProviderFamily("grok"));
+        assertThat(clean.view()).containsEntry("revision",0L);
     }
     final TestSupport f=new TestSupport();final EventHub events=mock(EventHub.class);final RemoteHttp remote=mock(RemoteHttp.class);
     AiConfiguration service;
@@ -78,12 +90,12 @@ class AiConfigurationTest {
     }
     @Test void staleSaveCannotOverwriteNewerVersion(){service.save(update(0,null));assertThatThrownBy(()->service.save(update(0,"stale-test-secret"))).hasMessage("AI_CONFIG_REVISION_CONFLICT");assertThat(service.view()).containsEntry("revision",1L);}
     @Test void compressionProviderIsConfigurableAndPersistsWithoutChangingResearchOrExposingCredentials(){
-        var u=update(0,null);var selected=u.shortRoutes().researchers().stream().filter(s->s.provider().equals("deepseek")).findFirst().orElseThrow();
+        var u=update(0,null);var selected=u.shortRoutes().researchers().stream().filter(s->s.provider().equals("glm")).findFirst().orElseThrow();
         service.save(new AiConfiguration.Update(0,u.providers(),u.shortRoutes(),u.longRoutes(),true,selected));
-        assertThat(f.settings.compressionRoute().provider()).isEqualTo("deepseek");assertThat(f.settings.compressionRoute().judge()).isFalse();
+        assertThat(f.settings.compressionRoute().provider()).isEqualTo("glm");assertThat(f.settings.compressionRoute().judge()).isFalse();
         assertThat(f.settings.compressionRoute().id()).isEqualTo("compressor-mimo");
         var restarted=new AiConfiguration(f.settings,f.store,f.mapper,f.clock,events,remote);restarted.recover();
-        assertThat(f.settings.compressionRoute().provider()).isEqualTo("deepseek");assertThat(f.settings.secret(f.settings.compressionRoute())).isEqualTo("bootstrap-test-credential");
+        assertThat(f.settings.compressionRoute().provider()).isEqualTo("glm");assertThat(f.settings.secret(f.settings.compressionRoute())).isEqualTo("bootstrap-test-credential");
         assertThat(f.mapper.writeValueAsString(restarted.view())).doesNotContain("bootstrap-test-credential","encryptedApiKey");
         assertThat(f.settings.routes("SHORT")).hasSize(6);
     }

@@ -54,7 +54,7 @@ if api.get("sourceCommit") != commit or api.get("mode") != "INTERNAL_SIMULATION_
 if set(api.get('products', [])) != {'XAU_USDT', 'GATE:XAUUSD'}:
     raise SystemExit('unexpected active products')
 expected_features = {'OFFICIAL_HTML_PDF_XLSX', 'MIMO_CACHED_SOURCE_COMPRESSION', 'FOUR_STAGE_DIVERSE_RESEARCH',
-                     'THREE_MODEL_RESEARCH_AND_JUDGING', 'BLIND_THREE_JUDGE_VOTING', 'PERSISTED_AI_PROVIDER_CONFIGURATION', 'PER_MODEL_ARENA_MAX_FALLBACK',
+                     'THREE_MODEL_RESEARCH_AND_JUDGING', 'BLIND_THREE_JUDGE_VOTING', 'PERSISTED_AI_PROVIDER_CONFIGURATION', 'CONFIGURABLE_APPROVED_MODEL_FALLBACK',
                      'RESEARCH_SEAT_RETRIES', 'STALE_EVIDENCE_ANALYSIS_CONTINUES', 'RESEARCH_CHECKPOINT_RECOVERY', 'UNIFIED_RESEARCH_TEXT_PROTOCOL',
                      'PERSISTED_SHORT_LONG_SCHEDULER', 'INTERNAL_ORDER_MANAGEMENT', 'CFD_SEPARATE_ACCOUNT',
                      'CURSOR_MARKET_ARCHIVE', 'MINUTE_EQUITY_REVIEW', 'CSV_JSON_EXPORT',
@@ -126,6 +126,14 @@ assert all('apiKey' not in provider and 'encryptedApiKey' not in provider for pr
 assert all(len(configuration[key]['researchers']) == len(configuration[key]['judges']) == 3 for key in ('shortRoutes', 'longRoutes'))
 assert configuration['compression']['provider'] in {p['id'] for p in configuration['providers']}
 assert configuration['compression']['provider'] != 'qwen'
+approved_providers = {'mimo', 'glm', 'longcat', 'minmax', 'grok', 'grok_web'}
+assert {p['id'] for p in configuration['providers']} <= approved_providers
+for horizon in ('shortRoutes', 'longRoutes'):
+    for role in ('researchers', 'judges'):
+        for selection in configuration[horizon][role]:
+            assert selection['provider'] in approved_providers
+            assert not selection.get('fallback') or selection['fallback']['provider'] in approved_providers
+assert not configuration['compression'].get('fallback') or configuration['compression']['fallback']['provider'] in approved_providers
 for key in ('shortPolicy', 'longPolicy'):
     policy = configuration[key]
     assert 1 <= policy['maxAttempts'] <= 6

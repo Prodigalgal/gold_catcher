@@ -93,6 +93,7 @@ public class RuntimeApi {
         return readCache.get("news-compression",key,2000,()->compression.summaries(ids));
     }
     @GetMapping("/performance") public Map<String,Object> performance(){return Map.of("cache",readCache.status(),"http",performance.view());}
+    public Map<String,Object> costs(String symbol){product(symbol);return Map.of("symbol",symbol,"configuration",market.costConfiguration(symbol),"funding",symbol.equals("XAU_USDT")?funding.status():Map.of("state","NOT_APPLICABLE_OR_UNVERIFIED","pricingMethod","NOT_CONFIGURED"));}
     @GetMapping("/sources/configuration") public Map<String,Object> sourceConfiguration(){return sourceConfiguration.view();}
     @PostMapping("/sources/configuration") public Map<String,Object> sourceConfiguration(@RequestBody com.goldcatcher.information.SourceConfiguration.Draft draft){return sourceConfiguration.save(draft);}
     @PostMapping("/compression/news/{id}/reprocess") public EvidenceCompression.Job reprocess(@PathVariable String id){return compression.reprocess(id);}

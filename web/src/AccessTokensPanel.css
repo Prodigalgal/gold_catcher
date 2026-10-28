@@ -1,4 +1,8 @@
 .gc-access { display: grid; gap: 20px; }
+.gc-access-tool-picker { margin-block: 12px; min-width: 0; }
+.gc-access-tool-list { max-height: 26rem; overflow: auto; padding: 4px; }
+.gc-access-tool-list code { display: block; overflow-wrap: anywhere; font-size: 12px; }
+.gc-access-tool-group { display: block; margin-top: 16px; color: var(--gc-text-secondary); }
 .gc-access-intro { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .gc-access-intro h3 { margin: 8px 0; font-size: 20px; }
 .gc-access p { line-height: 1.7; color: var(--gc-text-secondary); }

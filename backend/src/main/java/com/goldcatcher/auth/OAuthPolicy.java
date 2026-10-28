@@ -31,7 +31,7 @@ public final class OAuthPolicy {
     public static List<String> scopes(String value, Collection<String> allowed) {
         if (value == null || value.isBlank() || value.length() > 200) throw new Failure(400, "invalid_scope");
         var parts = Arrays.asList(value.split(" ", -1));
-        if (parts.isEmpty() || parts.size() > 3 || new HashSet<>(parts).size() != parts.size() || !allowed.containsAll(parts)) throw new Failure(400, "invalid_scope");
+        if (parts.isEmpty() || parts.size() > AccessScopes.ALL.size() || new HashSet<>(parts).size() != parts.size() || !allowed.containsAll(parts)) throw new Failure(400, "invalid_scope");
         return PersonalAccessTokens.SCOPES.stream().filter(parts::contains).toList();
     }
     public static void challenge(String method, String value) {

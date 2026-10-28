@@ -14,11 +14,11 @@
     "judge": false
   },
   {
-    "id": "deepseek",
-    "provider": "deepseek",
-    "model": "deepseek/default",
-    "baseUrl": "https://any2api-direct.mnnu.eu.org/deepseek/v1",
-    "apiKeyEnv": "ANY2API_DEEPSEEK_API_KEY",
+    "id": "glm",
+    "provider": "glm",
+    "model": "glm/glm-5.3",
+    "baseUrl": "https://any2api-direct.mnnu.eu.org/glm/v1",
+    "apiKeyEnv": "ANY2API_GLM_API_KEY",
     "inputEstimateLimit": 10000,
     "characterLimit": 16000,
     "byteLimit": 30000,
@@ -56,11 +56,11 @@
     "judge": true
   },
   {
-    "id": "judge-deepseek",
-    "provider": "deepseek",
-    "model": "deepseek/default",
-    "baseUrl": "https://any2api-direct.mnnu.eu.org/deepseek/v1",
-    "apiKeyEnv": "ANY2API_DEEPSEEK_API_KEY",
+    "id": "judge-glm",
+    "provider": "glm",
+    "model": "glm/glm-5.3",
+    "baseUrl": "https://any2api-direct.mnnu.eu.org/glm/v1",
+    "apiKeyEnv": "ANY2API_GLM_API_KEY",
     "inputEstimateLimit": 10000,
     "characterLimit": 16000,
     "byteLimit": 30000,

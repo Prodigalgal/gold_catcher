@@ -31,7 +31,7 @@ class RuntimeSettingsTest {
             var researchers=f.settings.routes().stream().filter(route->!route.judge()).toList();
             var judges=f.settings.routes().stream().filter(RuntimeSettings.AiRoute::judge).toList();
             assertThat(researchers).hasSize(3);assertThat(judges).hasSize(3);
-            assertThat(researchers).extracting(RuntimeSettings.AiRoute::provider).containsExactly("mimo","deepseek","grok_web");
+            assertThat(researchers).extracting(RuntimeSettings.AiRoute::provider).containsExactly("mimo","glm","grok_web");
             assertThat(judges).extracting(RuntimeSettings.AiRoute::model).containsExactlyElementsOf(researchers.stream().map(RuntimeSettings.AiRoute::model).toList());
             assertThat(researchers).noneMatch(route->route.id().equals("compressor-mimo"));
         }
